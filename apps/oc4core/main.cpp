@@ -440,8 +440,8 @@ namespace
 
 	// The way the selected units would take to a plot of the window, as the original engine
 	// draws it while the right button is held: the game core's interface pathfinder (the turn
-	// each plot is reached in is its nodes' m_iData2). The window's plots are the game core's
-	// but for a mod's viewport (host::gameCorePlot and windowPlot map them).
+	// each plot is reached in is its nodes' m_iData2). Its plots are the window's: a mod's
+	// viewport callbacks look them up in GC.getMapExternal().
 	render::MapWindow::PathView findPath(host::Interface& ui, std::pair<int, int> target)
 	{
 		render::MapWindow::PathView way;
@@ -450,8 +450,8 @@ namespace
 		const CvPlot* from = head ? head->plot() : nullptr;
 		if (!from || !group || head->getOwner() != GC.getGame().getActivePlayer())
 			return way;
-		const auto [startX, startY] = host::gameCorePlot({ from->getX(), from->getY() });
-		const auto [destX, destY] = host::gameCorePlot(target);
+		const int startX = from->getX(), startY = from->getY();
+		const auto [destX, destY] = target;
 		if (destX < 0 || (startX == destX && startY == destY))
 			return way;
 		FAStar* finder = &GC.getInterfacePathFinder();
@@ -466,10 +466,7 @@ namespace
 			return way;
 		}
 		for (const FAStarNode* n = gDLL->getFAStarIFace()->GetLastNode(finder); n; n = n->m_pParent)
-		{
-			const auto [x, y] = host::windowPlot({ n->m_iX, n->m_iY });
-			way.points.push_back({ x, y, n->m_iData2 });
-		}
+			way.points.push_back({ n->m_iX, n->m_iY, n->m_iData2 });
 		std::ranges::reverse(way.points);
 		return way;
 	}
