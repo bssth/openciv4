@@ -609,6 +609,7 @@ namespace
 
 		std::vector<int> actionIds; // the action of each button the window shows
 		std::optional<std::pair<int, int>> pathShown; // where the way the window shows leads
+		std::pair<const void*, int> pathFrom{};        // (the unit it starts from and its plot: the gamepad's plot cursor shows it all the while)
 		std::tuple<const void*, const void*, int, int> coloredFor{}; // what was selected when the plots were last coloured
 		uint64_t marksShown = ~0ull; // the marks the window has
 		uint64_t globeShown = 0;      // ... and the globe's state it shows (engine.globeVersion)
@@ -664,6 +665,19 @@ namespace
 					return;
 				}
 			}
+			// The numpad's digits move the selected units a plot that way, as the original's do (its
+			// engine's own keys, no action's hotkey; the gamepad's stick flicked sends them, PadMap.h).
+			if (!k.shift && !k.ctrl && !k.alt && k.key > render::key::Numpad0 && k.key <= render::key::Numpad9 && k.key != render::key::Numpad0 + 5)
+				if (CvUnit* unit = ui.getHeadSelectedUnit())
+				{
+					const int d = int(k.key - render::key::Numpad0) - 1;
+					if (CvPlot* to = plotXY(unit->getX(), unit->getY(), d % 3 - 1, d / 3 - 1))
+					{
+						ui.unitSound(unit, true);
+						game.selectionListMove(to, false, false, false);
+					}
+					return;
+				}
 			int best = -1, bestPriority = 0;
 			utility.setModifierKeys(k.shift, k.ctrl, k.alt);
 			for (int i = 0; code >= 0 && i < GC.getNumActionInfos(); ++i)
@@ -1125,12 +1139,34 @@ namespace
 					std::fprintf(stderr, "[oc4core] world builder: %s\n", e.what());
 				}
 			}
-			for (const auto& click : clicks)
+			for (auto click : clicks)
 			{
 				CvPlot* plot = GC.getMap().plot(click.x, click.y);
 				if (!plot)
 					continue;
 				changed = true;
+				// The gamepad's B pressed: out of an interface mode, else nothing selected any more.
+				if (click.clear)
+				{
+					if (ui.getInterfaceMode() != INTERFACEMODE_SELECTION)
+						ui.setInterfaceMode(INTERFACEMODE_SELECTION);
+					else
+						ui.clearSelectionList();
+					continue;
+				}
+				// The gamepad's plot cursor: one's own units or city there are selected, as a left click;
+				// anywhere else the selected units go there, as a right one (an interface mode's plot is a left click).
+				if (click.either)
+				{
+					const CvUnit* head = ui.getHeadSelectedUnit();
+					bool own = false;
+					for (int i = 0; i < plot->getNumUnits() && !own; ++i)
+						if (const CvUnit* u = plot->getUnitByIndex(i); u && u->getOwner() == me)
+							own = true;
+					if (const CvCity* city = plot->getPlotCity(); city && city->getOwner() == me)
+						own = true;
+					click.right = ui.getInterfaceMode() == INTERFACEMODE_SELECTION && head && !own;
+				}
 				// The interface mode wants a plot: its mission there (a right click leaves it).
 				if (const InterfaceModeTypes mode = ui.getInterfaceMode(); mode != INTERFACEMODE_SELECTION)
 				{
@@ -1189,9 +1225,12 @@ namespace
 			}
 			// The right button held: the way the selected units would take there, as the original
 			// shows it (the game core's interface pathfinder, the turns each plot is reached in).
-			if (const auto target = player.isTurnActive() ? window.pathTarget() : std::nullopt; target != pathShown)
+			const CvUnit* pathHead = ui.getHeadSelectedUnit();
+			const std::pair<const void*, int> from{ pathHead, pathHead ? pathHead->getX() * 4096 + pathHead->getY() : -1 };
+			if (const auto target = player.isTurnActive() ? window.pathTarget() : std::nullopt; target != pathShown || (target && from != pathFrom))
 			{
 				pathShown = target;
+				pathFrom = from;
 				ui.setGotoPlot(target ? GC.getMap().plot(target->first, target->second) : nullptr);
 				window.setPath(target ? findPath(ui, *target) : render::MapWindow::PathView{});
 			}

@@ -3,6 +3,7 @@
 #include "render/GlobeBend.h"
 #include "render/UiScale.h"
 #include "render/WasdPan.h"
+#include "render/PadMap.h"
 
 #include "render/Leaderhead.h"
 #include "render/ModelView.h"
@@ -18,6 +19,7 @@
 #include "media/Movie.h"
 
 #include <SDL3/SDL_events.h>
+#include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_keyboard.h>
@@ -72,6 +74,9 @@ namespace oc4::render
 				SDL_SetHint("SDL_WINDOWS_DPI_AWARENESS", "unaware"); // (a hint SDL reads but does not declare)
 				if (!SDL_Init(SDL_INIT_VIDEO))
 					throw std::runtime_error(std::string("cannot start SDL: ") + SDL_GetError());
+				// (gamepads, PadMap.h: the game plays without one)
+				if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD))
+					std::fprintf(stderr, "[input] no gamepads: %s\n", SDL_GetError());
 				window = SDL_CreateWindow("openciv4", int(width), int(height), SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
 				if (!window)
 					throw std::runtime_error(std::string("cannot create the map window: ") + SDL_GetError());
@@ -130,6 +135,23 @@ namespace oc4::render
 		bool wasdPan = false;       // W A S D pan the map too (Ctrl+Shift+W, WasdPan.h)
 		std::optional<bool> wasdToggled; // (Ctrl+Shift+W since asked: the profile's to keep)
 		std::chrono::steady_clock::time_point wasdNoteUntil{}; // (the toggle's note shown till then)
+		// The gamepad (PadMap.h): its sticks and triggers as the events left them, the pointer it moves
+		// (mouseX and mouseY, kept finer here), drawn once it has been used and until the mouse or a touch is.
+		int padAxis[SDL_GAMEPAD_AXIS_COUNT] = {};
+		float padX = 0, padY = 0;
+		bool padPointer = false;
+		bool padLeftDown = false, padRightDown = false; // (the button presses passed on as the mouse's)
+		std::optional<NavDirection> padDirection;       // the D-pad's direction held, and for how long
+		float padDirectionHeld = 0, padScroll = 0;
+		PadMode padMode = PadMode::Pointer;
+		std::chrono::steady_clock::time_point padModeNoteUntil{};
+		PadFlick padUnitFlick, padTileFlick; // the sticks' flicks: the unit moved, the map stepped
+		bool padStickDown[2] = {}, padStickCombo = false; // (the sticks pressed: both together change padMode)
+		int padMenuAt = -1; // the advisors' list: the row chosen; below 0 not up
+		int padMenu = 0;    // (which of kPadMenus)
+		int padPlotX = -1, padPlotY = -1; // PadMode::Cursor: the plot the cursor is on
+		float padBHeld = -1; // B down without a pointer: for how long; below 0 not (or already the right button)
+		std::optional<PadMode> padLastBare; // (the way without a pointer last played: the right stick pressed goes back to it)
 		FrameStats frameStats;
 		std::chrono::steady_clock::time_point lastFrame{};
 		bool panning = false, orbiting = false, minimapDrag = false;
@@ -327,7 +349,13 @@ namespace oc4::render
 			return view->figureAt(unproject(0), unproject(1));
 		}
 
-		std::pair<int, int> hoveredPlot() const { return mouseX < 0 ? std::pair{ -1, -1 } : plotUnder(mouseX, mouseY); }
+		std::pair<int, int> hoveredPlot() const
+		{
+			// (the plot cursor's own plot: the mouse is put on its middle, which a hill's side may give to its neighbour)
+			if (padMode == PadMode::Cursor && mouseX >= 0 && padPlotX >= 0)
+				return { padPlotX, padPlotY };
+			return mouseX < 0 ? std::pair{ -1, -1 } : plotUnder(mouseX, mouseY);
+		}
 
 		std::pair<int, int> plotUnder(int x, int y) const
 		{
@@ -337,6 +365,43 @@ namespace oc4::render
 				if (const auto p = view->plotAt(*g))
 					return *p;
 			return { -1, -1 };
+		}
+
+		// The face buttons by the letter on them, so that A is the controller's own confirm button: an Xbox
+		// pad's A is below, a Nintendo one's on the right (a PlayStation pad's cross is A, its circle B, its
+		// square X and its triangle Y, by place on an Xbox pad); the rest by place.
+		static std::optional<PadButton> padButtonOfSdl(SDL_Gamepad* pad, int button)
+		{
+			switch (pad ? SDL_GetGamepadButtonLabel(pad, SDL_GamepadButton(button)) : SDL_GAMEPAD_BUTTON_LABEL_UNKNOWN)
+			{
+			case SDL_GAMEPAD_BUTTON_LABEL_A:
+			case SDL_GAMEPAD_BUTTON_LABEL_CROSS: return PadButton::A;
+			case SDL_GAMEPAD_BUTTON_LABEL_B:
+			case SDL_GAMEPAD_BUTTON_LABEL_CIRCLE: return PadButton::B;
+			case SDL_GAMEPAD_BUTTON_LABEL_X:
+			case SDL_GAMEPAD_BUTTON_LABEL_SQUARE: return PadButton::X;
+			case SDL_GAMEPAD_BUTTON_LABEL_Y:
+			case SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE: return PadButton::Y;
+			default: break;
+			}
+			switch (button)
+			{
+			case SDL_GAMEPAD_BUTTON_EAST: return PadButton::A;
+			case SDL_GAMEPAD_BUTTON_SOUTH: return PadButton::B;
+			case SDL_GAMEPAD_BUTTON_NORTH: return PadButton::X;
+			case SDL_GAMEPAD_BUTTON_WEST: return PadButton::Y;
+			case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return PadButton::L;
+			case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return PadButton::R;
+			case SDL_GAMEPAD_BUTTON_START: return PadButton::Plus;
+			case SDL_GAMEPAD_BUTTON_BACK: return PadButton::Minus;
+			case SDL_GAMEPAD_BUTTON_LEFT_STICK: return PadButton::StickL;
+			case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return PadButton::StickR;
+			case SDL_GAMEPAD_BUTTON_DPAD_UP: return PadButton::Up;
+			case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return PadButton::Down;
+			case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return PadButton::Left;
+			case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return PadButton::Right;
+			default: return std::nullopt;
+			}
 		}
 
 		static bool isArrow(unsigned k) { return k == key::Up || k == key::Down || k == key::Left || k == key::Right; }
@@ -377,14 +442,436 @@ namespace oc4::render
 			}();
 			if (!direction)
 				return false;
-			if (ui.moveChoice(*direction, false))
-				return true;
-			// Nothing further that way: a list may have more to scroll to; else round to the far side.
-			const bool vertical = *direction == NavDirection::Up || *direction == NavDirection::Down;
-			const auto [x, y] = ui.keyChoicePlace();
-			if (!(vertical && x >= 0 && !busy && uiWheel && uiWheel(x, y, *direction == NavDirection::Up ? 120 : -120)))
-				ui.moveChoice(*direction, true);
+			uiMove(*direction);
 			return true;
+		}
+
+		// The screen's choice moves that way (an arrow, the D-pad).
+		void uiMove(NavDirection direction)
+		{
+			if (ui.moveChoice(direction, false))
+				return;
+			// Nothing further that way: a list may have more to scroll to; else round to the far side.
+			const bool vertical = direction == NavDirection::Up || direction == NavDirection::Down;
+			const auto [x, y] = ui.keyChoicePlace();
+			if (!(vertical && x >= 0 && !busy && uiWheel && uiWheel(x, y, direction == NavDirection::Up ? 120 : -120)))
+				ui.moveChoice(direction, true);
+		}
+
+		// The gamepad (PadMap.h). Its pointer starts in the middle of the screen.
+		void padShowPointer()
+		{
+			if (padPointer)
+				return;
+			padPointer = true;
+			if (mouseX < 0)
+				onMouseMove(int(overlay->screenWidth() / 2), int(overlay->screenHeight() / 2));
+			padX = float(mouseX), padY = float(mouseY);
+		}
+
+		bool padChoice() const { return popup.active() ? popup.keyboardChoice() : ui.keyChoice(); }
+
+		// Without a pointer the mouse is the screen's middle while the map shows there, and nowhere otherwise.
+		std::pair<int, int> padCentre() const { return { int(overlay->screenWidth() / 2), int(overlay->screenHeight() / 2) }; }
+		// The plot cursor shows the way to it all the while, not only with the button held.
+		bool padShowsPath() const { return padMode == PadMode::Cursor && playing && mouseX >= 0 && padPlotX >= 0; }
+
+		// (with the plot cursor, the cursor's plot; nowhere while a popup is up or a screen covers the place)
+		std::pair<int, int> padPinTarget() const
+		{
+			std::pair<int, int> at = padCentre();
+			if (padMode == PadMode::Cursor)
+			{
+				float sx = 0, sy = 0;
+				if (padPlotX < 0 || !groundToScreen((float(padPlotX) + 0.5f) * plot(), (float(padPlotY) + 0.5f) * plot(), 0, sx, sy))
+					return { -1, -1 };
+				at = { int(sx), int(sy) };
+			}
+			if (popup.active() || (ui.active() && ui.solid(at.first, at.second)))
+				return { -1, -1 };
+			return at;
+		}
+
+		// The plot cursor: on the map, and in the map's part of the screen (the map moves a plot at a time to keep it there).
+		void padPlaceCursor(int x, int y)
+		{
+			const auto& map = view->map();
+			if (map.width <= 0 || map.height <= 0)
+				return;
+			padPlotX = map.wrapX ? (x % map.width + map.width) % map.width : std::clamp(x, 0, map.width - 1);
+			padPlotY = std::clamp(y, 0, map.height - 1);
+			for (int i = 0; i < 4; ++i)
+			{
+				float sx = 0, sy = 0;
+				if (!groundToScreen((float(padPlotX) + 0.5f) * plot(), (float(padPlotY) + 0.5f) * plot(), 0, sx, sy))
+				{
+					lookAt(padPlotX, padPlotY, camera.distance / plot());
+					return;
+				}
+				const auto [dx, dy] = padCursorScroll(sx, sy, 110, 70, overlay->screenWidth() - 110, overlay->screenHeight() - 190);
+				if (dx == 0 && dy == 0)
+					return;
+				camera.target.x += float(dx) * plot(), camera.target.y += float(dy) * plot();
+				keepOnMap();
+			}
+		}
+		// Only the main interface is up: the D-pad has the unit's (in a city, the city's) buttons to walk.
+		bool padOnMap() const { return playing && !popup.active() && !uiTakesKeys; }
+
+		void padSetMode(PadMode mode)
+		{
+			padMode = mode;
+			if (mode != PadMode::Pointer)
+				padLastBare = mode;
+			padPointer = false;
+			padBHeld = -1;
+			padUnitFlick = padTileFlick = {};
+			padModeNoteUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+			std::fprintf(stderr, "[input] pad mode %d\n", int(mode));
+		}
+
+		void padMove(NavDirection d)
+		{
+			if (popup.active())
+				popup.key(d == NavDirection::Up ? key::Up : d == NavDirection::Down ? key::Down : d == NavDirection::Left ? key::Left : key::Right);
+			else if (ui.active() && padMode != PadMode::Pointer && padOnMap())
+			{
+				// The main interface's bottom middle, between the unit's panel and the minimap's corner: the
+				// unit's actions (a city's builds), and over them the plot's units. Left and right begin
+				// among the actions, up among the units; then all four go between both.
+				const float w = overlay->screenWidth(), h = overlay->screenHeight();
+				const NavRect bar{ 296, h - 133, w - 296, h }, units{ 296, h - 175, w - 296, h - 133 }, both{ 296, h - 175, w - 296, h };
+				const NavRect& in = ui.keyChoice() ? both : d == NavDirection::Up ? units : bar;
+				if (!ui.moveChoice(d, false, &in))
+					ui.moveChoice(d, true, &in);
+			}
+			else if (ui.active())
+				uiMove(d);
+		}
+
+		// The advisors' list (Minus): the D-pad chooses, A opens, B or Minus puts it away.
+		bool padMenuButton(PadButton b)
+		{
+			if (padMenuAt < 0)
+				return false;
+			const PadMenu& menu = kPadMenus[padMenu];
+			switch (b)
+			{
+			case PadButton::Up: padMenuAt = navStep(menu.count, padMenuAt, -1); break;
+			case PadButton::Down: padMenuAt = navStep(menu.count, padMenuAt, 1); break;
+			case PadButton::A:
+				if (const PadMenuEntry& e = menu.entries[padMenuAt]; e.key)
+				{
+					padMenuAt = -1;
+					onKey(e.key);
+				}
+				else
+					padSetMode(padNextMode(padMode));
+				break;
+			case PadButton::B:
+			case PadButton::Minus:
+			case PadButton::L:
+			case PadButton::R:
+			case PadButton::Plus: padMenuAt = -1; break;
+			default: break;
+			}
+			return true;
+		}
+
+		// A stick pressed: its key when let go, unless the other was pressed with it (the next way of playing).
+		void padStickButton(PadButton b, bool down)
+		{
+			const int i = b == PadButton::StickL ? 0 : 1;
+			padStickDown[i] = down;
+			if (down)
+			{
+				if (padStickDown[1 - i])
+				{
+					padStickCombo = true;
+					padMenuAt = -1;
+					padSetMode(padNextMode(padMode));
+				}
+				return;
+			}
+			if (!padStickCombo && padMenuAt < 0)
+			{
+				// (the right stick pressed: the pointer for what the plot cursor cannot reach, and back)
+				if (const auto mode = i == 1 ? padStickRMode(padMode, padLastBare) : std::nullopt)
+				{
+					const PadMode back = padMode;
+					padSetMode(*mode);
+					if (back != PadMode::Pointer)
+						padLastBare = back;
+				}
+				else
+					onKey(padAction(b, {}).key);
+			}
+			if (!padStickDown[1 - i])
+				padStickCombo = false;
+		}
+
+		// The selected unit one plot that way (the game's numpad keys), the camera after it.
+		void padMoveUnit(int digit)
+		{
+			onKey(key::Numpad0 + unsigned(digit));
+			onKey('C');
+		}
+
+		void onPadButton(PadButton b, bool down)
+		{
+			using Kind = PadAction::Kind;
+			if (b == PadButton::StickL || b == PadButton::StickR)
+			{
+				padStickButton(b, down);
+				return;
+			}
+			if (down && padMenuButton(b))
+				return;
+			if (!down)
+			{
+				if (b == PadButton::A && std::exchange(padLeftDown, false))
+				{
+					padHeld[0] = false;
+					onButton(false, false, mouseX, mouseY);
+				}
+				if (b == PadButton::B && std::exchange(padRightDown, false))
+				{
+					padHeld[1] = false;
+					onButton(false, false, mouseX, mouseY);
+				}
+				// (B let go before it became the right button: nothing is selected any more)
+				else if (b == PadButton::B && std::exchange(padBHeld, -1.0f) >= 0 && playing && !popup.active())
+					clicks.push_back({ 0, 0, false, false, false, false, false, false, true });
+				if (const PadAction a = padAction(b, {}); a.kind == Kind::Move && padDirection == a.direction)
+					padDirection.reset();
+				return;
+			}
+			const bool pointer = padMode == PadMode::Pointer;
+			const bool overMap = pointer ? padPointer && !popup.active() && !(ui.active() && ui.solid(mouseX, mouseY)) && actionAt(mouseX, mouseY) < 0 &&
+				!onMinimap(mouseX, mouseY) : padPinTarget().first >= 0 && mouseX >= 0;
+			const PadAction a = padAction(b, { padChoice(), overMap, pointer, popup.editing(), padMode == PadMode::Cursor });
+			switch (a.kind)
+			{
+			case Kind::MouseLeft:
+			case Kind::MouseRight:
+			{
+				// (the first press after the mouse or a touch only brings the pointer back)
+				if (pointer && !padPointer)
+				{
+					padShowPointer();
+					break;
+				}
+				const bool left = a.kind == Kind::MouseLeft;
+				(left ? padLeftDown : padRightDown) = true;
+				padHeld[left ? 0 : 1] = true;
+				onButton(left, true, mouseX, mouseY);
+				break;
+			}
+			case Kind::Key: onKey(a.key); break;
+			case Kind::TapOrHold:
+				padBHeld = 0;
+				break;
+			case Kind::PlotAct:
+				if (playing && padPlotX >= 0)
+					clicks.push_back({ padPlotX, padPlotY, false, false, false, false, false, true });
+				break;
+			case Kind::Choose:
+				if (popup.active())
+					popup.key(key::Return);
+				else if (ui.keyChoice())
+					uiClicks.push_back({ ui.useKeyChoice(), false, false, false, false });
+				break;
+			case Kind::Move:
+				padDirection = a.direction;
+				padDirectionHeld = 0;
+				padMove(a.direction);
+				break;
+			case Kind::Keyboard: break; // (a platform with a software keyboard brings it up here)
+			case Kind::Menu:
+				padMenu = a.menu;
+				padMenuAt = 0;
+				break;
+			case Kind::None: break;
+			}
+		}
+
+		// The sticks and triggers, each frame: the pointer, the map's pan and zoom, lists scrolled.
+		void handlePad(float dt)
+		{
+			const PadVector left = padStick(padAxis[SDL_GAMEPAD_AXIS_LEFTX], padAxis[SDL_GAMEPAD_AXIS_LEFTY]);
+			const PadVector right = padStick(padAxis[SDL_GAMEPAD_AXIS_RIGHTX], padAxis[SDL_GAMEPAD_AXIS_RIGHTY]);
+			PadVector pan = right;
+			const bool pointer = padMode == PadMode::Pointer, onMap = padOnMap() && padMenuAt < 0;
+			// B held long enough: the right button from now (the way there shows; let go, the units go).
+			if (padBHeld >= 0 && (padBHeld += dt) >= kPadHold)
+			{
+				padBHeld = -1;
+				if (mouseX >= 0 && !popup.active())
+				{
+					padRightDown = padHeld[1] = true;
+					onButton(false, true, mouseX, mouseY);
+				}
+			}
+			if (!pointer)
+			{
+				// The mouse is the screen's middle while the map shows there (a finger down has it meanwhile).
+				if (padMode == PadMode::Cursor && !view->empty())
+				{
+					// The cursor starts at the screen's middle, steps with the stick, and is brought along
+					// when the camera leaves it behind.
+					const auto [mx, my] = padCentre();
+					float sx = 0, sy = 0;
+					if (padPlotX < 0)
+					{
+						if (const auto p = plotUnder(mx, my); p.first >= 0)
+							padPlotX = p.first, padPlotY = p.second;
+					}
+					else if (const float w = overlay->screenWidth(), h = overlay->screenHeight();
+						!groundToScreen((float(padPlotX) + 0.5f) * plot(), (float(padPlotY) + 0.5f) * plot(), 0, sx, sy) ||
+						padCursorScroll(sx, sy, 40, 40, w - 40, h - 150) != std::pair{ 0, 0 })
+					{
+						if (const auto p = plotUnder(int(std::clamp(sx, 110.0f, w - 111)), int(std::clamp(sy, 70.0f, h - 191))); p.first >= 0)
+							padPlotX = p.first, padPlotY = p.second;
+					}
+					const int way = onMap ? padEightWay(padAxis[SDL_GAMEPAD_AXIS_LEFTX], padAxis[SDL_GAMEPAD_AXIS_LEFTY]) : 0;
+					for (int i = padFlickSteps(padTileFlick, way, dt, true, 0.28f, 0.085f); i > 0 && padPlotX >= 0; --i)
+					{
+						const auto [dx, dy] = padDigitStep(padTileFlick.digit);
+						padPlaceCursor(padPlotX + dx, padPlotY + dy);
+						restingSince = clock;
+					}
+				}
+				const auto [cx, cy] = padPinTarget();
+				if (!padLeftDown && !padRightDown && (mouseX != cx || mouseY != cy))
+				{
+					onMouseMove(cx, cy);
+					if (cx < 0)
+						mouseX = -1;
+				}
+				const int leftWay = padEightWay(padAxis[SDL_GAMEPAD_AXIS_LEFTX], padAxis[SDL_GAMEPAD_AXIS_LEFTY]);
+				const int rightWay = padEightWay(padAxis[SDL_GAMEPAD_AXIS_RIGHTX], padAxis[SDL_GAMEPAD_AXIS_RIGHTY]);
+				// The unit's stick: the left one with the units alone, else the right (which then pans nothing).
+				const bool unitOnLeft = padMode == PadMode::Unit, plotCursor = padMode == PadMode::Cursor;
+				if (!plotCursor && padFlickSteps(padUnitFlick, onMap ? (unitOnLeft ? leftWay : rightWay) : 0, dt, false) > 0)
+					padMoveUnit(padUnitFlick.digit);
+				if (unitOnLeft || plotCursor)
+					pan = right;
+				else
+				{
+					pan = onMap ? PadVector{} : right;
+					if (padMode == PadMode::Reticle)
+						pan.x += left.x, pan.y += left.y;
+					else
+						for (int i = padFlickSteps(padTileFlick, leftWay, dt, true); i > 0; --i)
+						{
+							const auto [dx, dy] = padDigitStep(padTileFlick.digit);
+							const auto centred = [&](float v, int d) { return (std::floor(v / plot()) + float(d) + 0.5f) * plot(); };
+							camera.target.x = centred(camera.target.x, dx), camera.target.y = centred(camera.target.y, dy);
+							keepOnMap();
+							restingSince = clock;
+						}
+				}
+			}
+			else if (left.x != 0 || left.y != 0)
+			{
+				padShowPointer();
+				const PadCursorStep s = padCursorStep(padX, padY, left, dt, overlay->screenWidth(), overlay->screenHeight());
+				padX = s.x, padY = s.y;
+				if (int(padX) != mouseX || int(padY) != mouseY)
+					onMouseMove(int(padX), int(padY));
+				pan.x += s.edge.x, pan.y += s.edge.y;
+			}
+			// (the right stick over a popup or a screen scrolls what is under the pointer)
+			const bool scrolls = popup.active() ? popup.contains(mouseX, mouseY) : ui.active() && ui.solid(mouseX, mouseY);
+			if (scrolls && right.y != 0)
+			{
+				padScroll += -right.y * 12 * dt; // (notches)
+				if (const int notches = int(padScroll))
+				{
+					padScroll -= float(notches);
+					onWheel(notches * 120);
+				}
+				pan.x -= right.x, pan.y -= right.y;
+			}
+			else
+				padScroll = 0;
+			if (pan.x != 0 || pan.y != 0)
+			{
+				const Vec3 forward{ -std::cos(camera.yaw), -std::sin(camera.yaw), 0 }, side{ -std::sin(camera.yaw), std::cos(camera.yaw), 0 };
+				camera.target = camera.target + (forward * -pan.y + side * pan.x) * (camera.distance * 0.9f * dt);
+				keepOnMap();
+				// (the map moved under a pointer that did not: what it is over is another plot)
+				if (padPointer && mouseX >= 0)
+					restingSince = clock;
+			}
+			// The triggers zoom: ZR in, ZL out.
+			if (const int zoom = int(padTriggerHeld(padAxis[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER])) - int(padTriggerHeld(padAxis[SDL_GAMEPAD_AXIS_LEFT_TRIGGER])))
+				zoomBy(float(zoom) * 6 * dt);
+			if (padDirection)
+			{
+				const float before = padDirectionHeld;
+				padDirectionHeld += dt;
+				for (int i = padRepeats(before, padDirectionHeld); i > 0; --i)
+					padMove(*padDirection);
+			}
+		}
+
+		void drawPadPointer()
+		{
+			if (std::chrono::steady_clock::now() < padModeNoteUntil)
+			{
+				const std::wstring text = std::wstring(L"Controls: ") + padModeName(padMode) + L"  (both sticks pressed: the next)";
+				const float size = 13, width = overlay->width(text, size, true), x = (overlay->screenWidth() - width) / 2 - 7, y = 76;
+				overlay->rect(x, y, x + width + 14, y + size + 10, { 0.05f, 0.06f, 0.08f }, 0.8f, 5);
+				overlay->text(text, x + 7, y + 4, size, { 1, 1, 1 }, 1, true);
+			}
+			if (padMenuAt >= 0)
+			{
+				const PadMenu& menu = kPadMenus[padMenu];
+				const float row = 26, w = 300, h = row * float(menu.count) + 16;
+				const float x = (overlay->screenWidth() - w) / 2, y = (overlay->screenHeight() - h) / 2;
+				overlay->rect(x, y, x + w, y + h, { 0.05f, 0.06f, 0.08f }, 0.92f, 8);
+				overlay->frame(x, y, x + w, y + h, { 0.8f, 0.75f, 0.55f }, 0.9f, 8);
+				for (int i = 0; i < menu.count; ++i)
+				{
+					const float ry = y + 8 + row * float(i);
+					if (i == padMenuAt)
+						overlay->rect(x + 6, ry, x + w - 6, ry + row, { 0.8f, 0.75f, 0.55f }, 0.35f, 4);
+					std::wstring label = menu.entries[i].label;
+					if (!menu.entries[i].key)
+						label += std::wstring(L": ") + padModeName(padMode);
+					overlay->text(label, x + 18, ry + 4, 15, { 1, 1, 1 }, 1, i == padMenuAt);
+				}
+			}
+			if (padMode != PadMode::Pointer)
+			{
+				// The reticle: round the plot the screen's middle is on, and a mark at the middle itself.
+				if (padMode == PadMode::Unit || mouseX < 0 || !playing)
+					return;
+				if (const auto p = hoveredPlot(); p.first >= 0)
+				{
+					float sx[4], sy[4];
+					bool shown = true;
+					for (int i = 0; i < 4; ++i)
+						shown = shown && groundToScreen(float(p.first + (i == 1 || i == 2)) * plot(), float(p.second + (i >= 2)) * plot(), 0, sx[i], sy[i]);
+					for (int i = 0; shown && i < 4; ++i)
+						overlay->line(sx[i], sy[i], sx[(i + 1) % 4], sy[(i + 1) % 4], { 1, 0.92f, 0.5f }, 0.9f, 2);
+				}
+				if (padMode != PadMode::Cursor)
+				{
+					overlay->circle(float(mouseX), float(mouseY), 3, { 0, 0, 0 }, 0.8f);
+					overlay->circle(float(mouseX), float(mouseY), 2, { 1, 1, 1 }, 1);
+				}
+				return;
+			}
+			if (!padPointer || mouseX < 0)
+				return;
+			// An arrow, its tip at the pointer.
+			const float x = float(mouseX), y = float(mouseY);
+			const float ox[4] = { x - 2, x - 2, x + 6, x + 17 }, oy[4] = { y - 3, y + 23, y + 17, y + 17 };
+			const float ix[4] = { x, x, x + 5, x + 12 }, iy[4] = { y, y + 19, y + 15, y + 15 };
+			overlay->quad(ox, oy, { 0, 0, 0 }, 0.9f);
+			overlay->quad(ix, iy, { 1, 1, 1 }, 1);
 		}
 
 		void onKey(unsigned k)
@@ -592,8 +1079,14 @@ namespace oc4::render
 			// On the screens: what scrolls there, else nothing (the map only zooms where it shows).
 			if (!popup.active() && ui.active() && ((!busy && uiWheel && uiWheel(mouseX, mouseY, delta)) || ui.solid(mouseX, mouseY)))
 				return;
+			zoomBy(float(delta) / 120);
+		}
+
+		// The camera closer by so many notches of the wheel.
+		void zoomBy(float notches)
+		{
 			const Vec3 size = view->worldSize();
-			camera.distance = std::clamp(camera.distance * std::pow(0.85f, float(delta) / 120), 1.5f * plot(), std::max(size.x, size.y) * 1.5f + plot());
+			camera.distance = std::clamp(camera.distance * std::pow(0.85f, notches), 1.5f * plot(), std::max(size.x, size.y) * 1.5f + plot());
 			updatePitch();
 		}
 
@@ -848,6 +1341,7 @@ namespace oc4::render
 				drawFrameRate();
 			if (std::chrono::steady_clock::now() < wasdNoteUntil)
 				drawWasdNote();
+			drawPadPointer();
 			overlay->end();
 		}
 
@@ -1065,7 +1559,7 @@ namespace oc4::render
 		// where each turn's move ends and at its end; a red circle alone where they cannot go.
 		void drawPath()
 		{
-			if (!pathing || path.points.empty())
+			if ((!pathing && !padShowsPath()) || path.points.empty())
 				return;
 			const XMMATRIX vp = viewProjection();
 			const auto toScreen = [&](const MapWindow::PathView::Point& p, float& sx, float& sy) {
@@ -1391,6 +1885,7 @@ namespace oc4::render
 				frameStats.add(std::chrono::duration<double>(now - lastFrame).count());
 			lastFrame = now;
 			clock += dt;
+			handlePad(dt);
 			handleHeldKeys(dt);
 			view->update(dt);
 			for (auto& [nif, h] : heads)
@@ -1422,7 +1917,29 @@ namespace oc4::render
 					for (const wchar_t c : widen(e.text.text))
 						popup.character(c);
 				break;
-			case SDL_EVENT_MOUSE_MOTION: onMouseMove(px(e.motion.x), px(e.motion.y)); break;
+			case SDL_EVENT_MOUSE_MOTION:
+				padPointer = false; // (the mouse's own, or a finger: no drawn pointer)
+				onMouseMove(px(e.motion.x), px(e.motion.y));
+				break;
+			case SDL_EVENT_GAMEPAD_ADDED:
+			{
+				if (!SDL_OpenGamepad(e.gdevice.which))
+					std::fprintf(stderr, "[input] gamepad %u: %s\n", unsigned(e.gdevice.which), SDL_GetError());
+				break;
+			}
+			case SDL_EVENT_GAMEPAD_REMOVED:
+				if (SDL_Gamepad* pad = SDL_GetGamepadFromID(e.gdevice.which))
+					SDL_CloseGamepad(pad);
+				break;
+			case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+				if (e.gaxis.axis < SDL_GAMEPAD_AXIS_COUNT)
+					padAxis[e.gaxis.axis] = e.gaxis.value;
+				break;
+			case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+			case SDL_EVENT_GAMEPAD_BUTTON_UP:
+				if (const auto b = padButtonOfSdl(SDL_GetGamepadFromID(e.gbutton.which), e.gbutton.button))
+					onPadButton(*b, e.gbutton.down);
+				break;
 			case SDL_EVENT_MOUSE_BUTTON_DOWN:
 			case SDL_EVENT_MOUSE_BUTTON_UP:
 			{
@@ -1493,7 +2010,13 @@ namespace oc4::render
 	}
 
 	void MapWindow::lookAt(int x, int y, float distanceInPlots) { m->lookAt(x, y, distanceInPlots); }
-	void MapWindow::centerOn(int x, int y) { m->lookAt(x, y, m->camera.distance / m->plot()); }
+	void MapWindow::centerOn(int x, int y)
+	{
+		m->lookAt(x, y, m->camera.distance / m->plot());
+		// (the plot cursor goes where the game looks: the unit it selected, the city it chose)
+		if (m->padMode == PadMode::Cursor)
+			m->padPlotX = x, m->padPlotY = y;
+	}
 	void MapWindow::frame(float dt) { m->frame(dt); }
 	void MapWindow::saveScreenshot(const std::filesystem::path& png) { m->saveScreenshot(png); }
 	void MapWindow::setScreenshotFolder(const std::filesystem::path& folder) { m->screenshotFolder = folder; }
@@ -1544,7 +2067,7 @@ namespace oc4::render
 			const auto p = m->plotUnder(px, py);
 			return p.first >= 0 ? std::optional(p) : std::nullopt;
 		}
-		if (!m->pathing || m->popup.active())
+		if ((!m->pathing && !m->padShowsPath()) || m->popup.active())
 			return std::nullopt;
 		const auto p = m->hoveredPlot();
 		return p.first >= 0 ? std::optional(p) : std::nullopt;
@@ -1702,10 +2225,12 @@ namespace oc4::render
 	void MapWindow::setFrameRateShown(bool shown) { m->showFrameRate = shown; }
 	void MapWindow::setUiTakesKeys(bool takes, bool mapBehind)
 	{
+		// (the next screen starts with the arrows the map's again; with none up before either, a
+		// choice is the gamepad's among the main interface's buttons, and stays)
+		if (!takes && m->uiTakesKeys)
+			m->ui.clearKeyChoice();
 		m->uiTakesKeys = takes;
 		m->uiMapBehind = mapBehind;
-		if (!takes)
-			m->ui.clearKeyChoice(); // (the next screen starts with the arrows the map's again)
 	}
 	void MapWindow::clearKeyChoice() { m->ui.clearKeyChoice(); }
 	void MapWindow::setWasdPan(bool on) { m->wasdPan = on; }
