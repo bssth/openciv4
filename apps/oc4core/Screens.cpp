@@ -263,6 +263,14 @@ namespace oc4::host
 		host.def("set_wasd_pan", [&utility](bool on) { utility.setWasdPan(on); });
 		host.def("choose_wasd_pan", [&utility](bool on) { utility.chooseWasdPan(on); });
 		host.def("wasd_pan", [&utility] { return utility.wasdPan(); });
+		// Ending idle turns: the same.
+		host.def("set_auto_end_turn", [&utility](bool on) { utility.setAutoEndTurn(on); });
+		host.def("choose_auto_end_turn", [&utility](bool on) { utility.chooseAutoEndTurn(on); });
+		host.def("auto_end_turn", [&utility] { return utility.autoEndTurn(); });
+		// Edge scrolling: the same (on by default).
+		host.def("set_edge_scroll", [&utility](bool on) { utility.setEdgeScroll(on); });
+		host.def("choose_edge_scroll", [&utility](bool on) { utility.chooseEdgeScroll(on); });
+		host.def("edge_scroll", [&utility] { return utility.edgeScroll(); });
 		host.def("ui_size_at", [](int percent) {
 			const float scale = render::uiScaleFor(percent, g_display.density, g_display.width, g_display.height);
 			return std::pair{ render::uiUnits(g_display.width, scale), render::uiUnits(g_display.height, scale) };
@@ -850,6 +858,22 @@ if _walls:
 			}
 		}
 		window.setWasdPan(m_utility.wasdPan());
+		// (Ctrl+Shift+E: the same)
+		if (const auto toggled = window.takeAutoEndTurnToggle())
+		{
+			m_utility.chooseAutoEndTurn(*toggled);
+			try
+			{
+				py::module_::import("oc4options").attr("setAutoEndTurn")(*toggled);
+			}
+			catch (py::error_already_set& e)
+			{
+				printPythonError(e);
+			}
+		}
+		window.setAutoEndTurn(m_utility.autoEndTurn());
+		if (!m_menu) // (the main menu has no map to scroll)
+			window.setEdgeScroll(m_utility.edgeScroll());
 		g_display = window.uiDisplay();
 		window.setUiTakesKeys(menuUp(), !m_menu);
 		// (new answers in a talk: the keyboard's choice was among the old ones, and Return is the

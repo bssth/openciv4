@@ -47,7 +47,7 @@ _profile = {
 	'clock': False, 'hours24': False,
 	'graphicsLevel': 0, 'renderQuality': 0, 'globeView': 0, 'movieQuality': 0, 'mainMenu': 0, 'antiAliasing': 0, 'uiScale': 0,
 	'speakers': '', 'musicPath': '', 'voice': False,
-	'wasdPan': False,
+	'wasdPan': False, 'autoEndTurn': False, 'edgeScroll': True,
 }
 
 
@@ -79,7 +79,7 @@ def _load():
 					_profile['nosound'][parts[1]] = value == '1'
 				elif parts[0] in ('graphic', 'player'):
 					_profile[parts[0]][int(parts[1])] = value == '1'
-				elif parts[0] in ('clock', 'hours24', 'voice', 'wasdPan'):
+				elif parts[0] in ('clock', 'hours24', 'voice', 'wasdPan', 'autoEndTurn', 'edgeScroll'):
 					_profile[parts[0]] = value == '1'
 				elif parts[0] in ('graphicsLevel', 'renderQuality', 'globeView', 'movieQuality', 'mainMenu', 'antiAliasing', 'uiScale'):
 					_profile[parts[0]] = int(value)
@@ -98,7 +98,7 @@ def _save():
 	lines = []
 	for key in ('name', 'speakers', 'musicPath'):
 		lines.append('%s=%s' % (key, _profile[key]))
-	for key in ('clock', 'hours24', 'voice', 'wasdPan'):
+	for key in ('clock', 'hours24', 'voice', 'wasdPan', 'autoEndTurn', 'edgeScroll'):
 		lines.append('%s=%d' % (key, 1 if _profile[key] else 0))
 	for key in ('graphicsLevel', 'renderQuality', 'globeView', 'movieQuality', 'mainMenu', 'antiAliasing', 'uiScale'):
 		lines.append('%s=%d' % (key, _profile[key]))
@@ -124,6 +124,8 @@ def _applyGraphics():
 			oc4host.set_graphic_option(int(i), bool(on))
 		oc4host.set_ui_scale(_profile['uiScale'])
 		oc4host.set_wasd_pan(_profile['wasdPan'])
+		oc4host.set_auto_end_turn(_profile['autoEndTurn'])
+		oc4host.set_edge_scroll(_profile['edgeScroll'])
 	except Exception:
 		pass
 
@@ -158,6 +160,61 @@ def _wasdPanOn():
 		return bool(oc4host.wasd_pan())
 	except Exception:
 		return _profile['wasdPan']
+
+
+# Ending idle turns (openciv4's own option too): its check box under W A S D's; Ctrl+Shift+E in
+# the window changes it as well (the host calls setAutoEndTurn).
+AUTO_END_TURN_CHECKBOX = 'Oc4AutoEndTurnCheckBox'
+
+
+def setAutoEndTurn(on):
+	"""Ctrl+Shift+E: the player's choice, kept."""
+	_profile['autoEndTurn'] = bool(on)
+	_save()
+	ctrl = _state['ctrl']
+	if ctrl is not None:
+		ctrl.setValue(AUTO_END_TURN_CHECKBOX, bool(on))
+
+
+def handleAutoEndTurnClicked(args):
+	on = bool(args[0])
+	_profile['autoEndTurn'] = on
+	_save()
+	try:
+		oc4host.choose_auto_end_turn(on)
+	except Exception:
+		pass
+	return 1
+
+
+def _autoEndTurnOn():
+	try:
+		return bool(oc4host.auto_end_turn())
+	except Exception:
+		return _profile['autoEndTurn']
+
+
+# Edge scrolling (openciv4's own option, on by default as in the original): its check box under
+# the others on the Game tab.
+EDGE_SCROLL_CHECKBOX = 'Oc4EdgeScrollCheckBox'
+
+
+def handleEdgeScrollClicked(args):
+	on = bool(args[0])
+	_profile['edgeScroll'] = on
+	_save()
+	try:
+		oc4host.choose_edge_scroll(on)
+	except Exception:
+		pass
+	return 1
+
+
+def _edgeScrollOn():
+	try:
+		return bool(oc4host.edge_scroll())
+	except Exception:
+		return _profile['edgeScroll']
 
 
 def _graphicDefault(i):
@@ -398,6 +455,15 @@ class CyGTabCtrl(object):
 			self.setToolTip(WASD_PAN_CHECKBOX, u'Holding W, A, S or D on its own moves the map, as the arrows do. Their own hotkeys '
 				u'(S Sentry, A Automate, W next unit, D destroy) then need the unit\'s buttons; with Shift, Ctrl or Alt they are the '
 				u'game\'s as ever, and in menus and screens they are letters.')
+			self.attachCheckBox(parent, AUTO_END_TURN_CHECKBOX, u'End idle turns automatically (Ctrl+Shift+E)', 'oc4options', 'handleAutoEndTurnClicked',
+				AUTO_END_TURN_CHECKBOX, _autoEndTurnOn())
+			self.setToolTip(AUTO_END_TURN_CHECKBOX, u'When no unit needs orders and nothing is open, the turn ends after 2 seconds '
+				u'even if you did nothing in it. Press a key or click while it waits to stay on that turn. Popups, the city '
+				u'screen and other screens pause it. Pair with Automate Production and automated workers to let the game run.')
+			self.attachCheckBox(parent, EDGE_SCROLL_CHECKBOX, u'Scroll the map at the screen edge', 'oc4options', 'handleEdgeScrollClicked',
+				EDGE_SCROLL_CHECKBOX, _edgeScrollOn())
+			self.setToolTip(EDGE_SCROLL_CHECKBOX, u'Moving the mouse to the edge of the screen or window moves the map that way. '
+				u'Turn it off to pan only with the arrow keys (or W A S D) and the mouse.')
 		self._node('hbox', parent, name)
 	def attachPanel(self, parent, name): self._node('panel', parent, name)
 	def attachScrollPanel(self, parent, name): self._node('vbox', parent, name)

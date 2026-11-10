@@ -61,6 +61,11 @@ namespace oc4::render
 		void setWasdPan(bool on);
 		bool wasdPan() const;
 		std::optional<bool> takeWasdPanToggle();
+		// Idle turns end by themselves (the game's AutoEndTurn): Ctrl+Shift+E changes it, as above.
+		void setAutoEndTurn(bool on);
+		std::optional<bool> takeAutoEndTurnToggle();
+		// The player's keys and clicks so far (the window's own toggles not counted).
+		unsigned inputCount() const;
 		// The frame rate in the corner (Ctrl+Shift+F changes it).
 		void setFrameRateShown(bool shown);
 		// The interface's scale in percent, 0 for the window's density.

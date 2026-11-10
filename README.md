@@ -161,6 +161,23 @@ next unit, D destroy) need the unit's buttons; with Shift, Ctrl or Alt they are 
 there. The arrows are unchanged. The routing is `src/render/WasdPan.h`, tested by
 `tests/wasd_pan_test.cpp`.
 
+Idle turns can end by themselves, an option that is off by default. The game ends a turn alone
+only when a unit moved in it (and "Wait at End of Turn" is off); with this on, a turn waiting at
+"press Enter" also ends after 2 seconds, so with automated cities and workers the game keeps
+going until something needs you. A popup, a talk, a screen or the city screen pauses it, and a
+key or click while it waits keeps that turn; hot seat and by-email games never use it. Ctrl+Shift+E
+turns it on and off (with a note at the top), and so does "End idle turns automatically" on the
+options' Game tab; it is kept in profile.ini as `autoEndTurn`, and `--auto-end-turn` turns it on
+for one run. `OC4_PLAY_LOG=1` prints "idle, ended by itself" for each such turn. Decisions: it is
+in the engine (`apps/oc4core/AutoEndTurn.h`, called from the play loop), not the game core, so the
+game's rules, AI and saves are untouched; it sends the same end-turn control as Enter. Tested by
+`tests/auto_end_turn_test.cpp`.
+
+The mouse at the window's edge scrolls the map, as in the original; "Scroll the map at the screen
+edge" on the options' Game tab turns it off (on by default). It is kept in profile.ini as
+`edgeScroll`, and `--no-edge-scroll` turns it off for one run (scripted runs with `--view-seconds`
+never edge scroll). The rule is `src/render/EdgeScroll.h`, tested by `tests/edge_scroll_test.cpp`.
+
 The globe view's colour layers (Culture, Trade, Religion) are drawn on the globe itself.
 
 Tools for the game's files, in `build\Release\bin`:
