@@ -444,7 +444,7 @@ namespace oc4::host
 		return true;
 	}
 
-	bool Xml::LocateFirstSiblingNodeByTagName(FXml* xml, TCHAR* pszTagName)
+	bool Xml::LocateFirstSiblingNodeByTagName(FXml* xml, const TCHAR* pszTagName)
 	{
 		XmlNode* c = elementCursor(xml);
 		if (!c || !c->parent || !pszTagName)
@@ -457,7 +457,7 @@ namespace oc4::host
 		return false;
 	}
 
-	bool Xml::LocateNextSiblingNodeByTagName(FXml* xml, TCHAR* pszTagName)
+	bool Xml::LocateNextSiblingNodeByTagName(FXml* xml, const TCHAR* pszTagName)
 	{
 		XmlNode* c = elementCursor(xml);
 		if (!c || !pszTagName)
@@ -631,7 +631,7 @@ namespace oc4::host
 		return c && c->type == XmlNode::Type::Comment;
 	}
 
-	int Xml::NumOfElementsByTagName(FXml* xml, TCHAR* pszTagName)
+	int Xml::NumOfElementsByTagName(FXml* xml, const TCHAR* pszTagName)
 	{
 		if (!xml || !xml->document || !pszTagName)
 			return 0;

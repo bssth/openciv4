@@ -537,18 +537,18 @@ namespace oc4::host::stubs
 		bool LoadXml(FXml* xml, const TCHAR* pszXmlFile) override { unimplemented("CvDLLXmlIFaceBase::LoadXml"); return {}; }
 		bool Validate(FXml* xml, TCHAR* pszError) override { unimplemented("CvDLLXmlIFaceBase::Validate"); return {}; }
 		bool LocateNode(FXml* xml, const TCHAR* pszXmlNode) override { unimplemented("CvDLLXmlIFaceBase::LocateNode"); return {}; }
-		bool LocateFirstSiblingNodeByTagName(FXml* xml, TCHAR* pszTagName) override { unimplemented("CvDLLXmlIFaceBase::LocateFirstSiblingNodeByTagName"); return {}; }
-		bool LocateNextSiblingNodeByTagName(FXml* xml, TCHAR* pszTagName) override { unimplemented("CvDLLXmlIFaceBase::LocateNextSiblingNodeByTagName"); return {}; }
+		bool LocateFirstSiblingNodeByTagName(FXml* xml, const TCHAR* pszTagName) override { unimplemented("CvDLLXmlIFaceBase::LocateFirstSiblingNodeByTagName"); return {}; }
+		bool LocateNextSiblingNodeByTagName(FXml* xml, const TCHAR* pszTagName) override { unimplemented("CvDLLXmlIFaceBase::LocateNextSiblingNodeByTagName"); return {}; }
 		bool NextSibling(FXml* xml) override { unimplemented("CvDLLXmlIFaceBase::NextSibling"); return {}; }
 		bool PrevSibling(FXml* xml) override { unimplemented("CvDLLXmlIFaceBase::PrevSibling"); return {}; }
 		bool SetToChild(FXml* xml) override { unimplemented("CvDLLXmlIFaceBase::SetToChild"); return {}; }
 		bool SetToChildByTagName(FXml* xml, const TCHAR* szTagName) override { unimplemented("CvDLLXmlIFaceBase::SetToChildByTagName"); return {}; }
 		bool SetToParent(FXml* xml) override { unimplemented("CvDLLXmlIFaceBase::SetToParent"); return {}; }
-		bool AddChildNode(FXml* xml, TCHAR* pszNewNode) override { unimplemented("CvDLLXmlIFaceBase::AddChildNode"); return {}; }
-		bool AddSiblingNodeBefore(FXml* xml, TCHAR* pszNewNode) override { unimplemented("CvDLLXmlIFaceBase::AddSiblingNodeBefore"); return {}; }
-		bool AddSiblingNodeAfter(FXml* xml, TCHAR* pszNewNode) override { unimplemented("CvDLLXmlIFaceBase::AddSiblingNodeAfter"); return {}; }
-		bool WriteXml(FXml* xml, TCHAR* pszXmlFile) override { unimplemented("CvDLLXmlIFaceBase::WriteXml"); return {}; }
-		bool SetInsertedNodeAttribute(FXml* xml, TCHAR* pszAttributeName, TCHAR* pszAttributeValue) override { unimplemented("CvDLLXmlIFaceBase::SetInsertedNodeAttribute"); return {}; }
+		bool AddChildNode(FXml* xml, const TCHAR* pszNewNode) override { unimplemented("CvDLLXmlIFaceBase::AddChildNode"); return {}; }
+		bool AddSiblingNodeBefore(FXml* xml, const TCHAR* pszNewNode) override { unimplemented("CvDLLXmlIFaceBase::AddSiblingNodeBefore"); return {}; }
+		bool AddSiblingNodeAfter(FXml* xml, const TCHAR* pszNewNode) override { unimplemented("CvDLLXmlIFaceBase::AddSiblingNodeAfter"); return {}; }
+		bool WriteXml(FXml* xml, const TCHAR* pszXmlFile) override { unimplemented("CvDLLXmlIFaceBase::WriteXml"); return {}; }
+		bool SetInsertedNodeAttribute(FXml* xml, const TCHAR* pszAttributeName, const TCHAR* pszAttributeValue) override { unimplemented("CvDLLXmlIFaceBase::SetInsertedNodeAttribute"); return {}; }
 		int GetLastNodeTextSize(FXml* xml) override { unimplemented("CvDLLXmlIFaceBase::GetLastNodeTextSize"); return {}; }
 		bool GetLastNodeText(FXml* xml, TCHAR* pszText) override { unimplemented("CvDLLXmlIFaceBase::GetLastNodeText"); return {}; }
 		bool GetLastNodeValue(FXml* xml, std::string& pszText) override { unimplemented("CvDLLXmlIFaceBase::GetLastNodeValue"); return {}; }
@@ -561,11 +561,11 @@ namespace oc4::host::stubs
 		bool GetLastNodeValue(FXml* xml, unsigned int* puiVal) override { unimplemented("CvDLLXmlIFaceBase::GetLastNodeValue"); return {}; }
 		int GetInsertedNodeTextSize(FXml* xml) override { unimplemented("CvDLLXmlIFaceBase::GetInsertedNodeTextSize"); return {}; }
 		bool GetInsertedNodeText(FXml* xml, TCHAR* pszText) override { unimplemented("CvDLLXmlIFaceBase::GetInsertedNodeText"); return {}; }
-		bool SetInsertedNodeText(FXml* xml, TCHAR* pszText) override { unimplemented("CvDLLXmlIFaceBase::SetInsertedNodeText"); return {}; }
+		bool SetInsertedNodeText(FXml* xml, const TCHAR* pszText) override { unimplemented("CvDLLXmlIFaceBase::SetInsertedNodeText"); return {}; }
 		bool GetLastLocatedNodeType(FXml* xml, TCHAR* pszType) override { unimplemented("CvDLLXmlIFaceBase::GetLastLocatedNodeType"); return {}; }
 		bool GetLastInsertedNodeType(FXml* xml, TCHAR* pszType) override { unimplemented("CvDLLXmlIFaceBase::GetLastInsertedNodeType"); return {}; }
 		bool IsLastLocatedNodeCommentNode(FXml* xml) override { unimplemented("CvDLLXmlIFaceBase::IsLastLocatedNodeCommentNode"); return {}; }
-		int NumOfElementsByTagName(FXml* xml, TCHAR* pszTagName) override { unimplemented("CvDLLXmlIFaceBase::NumOfElementsByTagName"); return {}; }
+		int NumOfElementsByTagName(FXml* xml, const TCHAR* pszTagName) override { unimplemented("CvDLLXmlIFaceBase::NumOfElementsByTagName"); return {}; }
 		int NumOfChildrenByTagName(FXml* xml, const TCHAR* pszTagName) override { unimplemented("CvDLLXmlIFaceBase::NumOfChildrenByTagName"); return {}; }
 		int GetNumSiblings(FXml* xml) override { unimplemented("CvDLLXmlIFaceBase::GetNumSiblings"); return {}; }
 		int GetNumChildren(FXml* xml) override { unimplemented("CvDLLXmlIFaceBase::GetNumChildren"); return {}; }

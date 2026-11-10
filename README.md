@@ -54,7 +54,8 @@ and FreeType; the shaders are still HLSL for Direct3D 12).
 Visual Studio 2022 or 2026 with **Desktop development with C++** (CMake and Ninja come with
 it). The game core is the `gamecore` submodule
 ([openciv4-dll](https://github.com/bssth/openciv4-dll)): clone with `git clone --recursive`, or
-run `git submodule update --init`.
+run `git submodule update --init --recursive`. This also fetches the patched Python 2.7-compatible
+pybind11 fork at `gamecore/third_party/pybind11`; no separate pybind11 download is needed.
 
 Third-party packages go under `external\` (not committed; `.github/workflows/build.yml`
 fetches the same ones):
@@ -62,14 +63,13 @@ fetches the same ones):
 | Package | Folder | Used for |
 |---|---|---|
 | Python 2.7.18 x64, extracted: `msiexec /a python-2.7.18.amd64.msi /qn TARGETDIR=%CD%\external\python27` | `python27` | the game's scripts |
-| pybind11 2.9.2 (the last series for Python 2.7), source archive | `pybind11-2.9.2` | the game core's Python bindings |
 | zlib 1.3.1, source archive | `zlib-1.3.1` | saves |
 | SDL3 3.4.18, `SDL3-3.4.18.zip` | `SDL3-3.4.18` | window, input, sound, GPU |
 | `dr_mp3.h` from mackron/dr_libs | `dr_libs` | music |
 | optional: FreeType 2.13.3, source archive | `freetype-2.13.3` | text off Windows (on Windows its test only) |
 | optional: FFmpeg 8.1 LGPL shared build (BtbN's `ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip`) | `ffmpeg-8.1` | movies; without it the wonders show their model |
 
-Other locations: `-DOC4_PYTHON27_DIR=...`, `-DOC4_PYBIND11_DIR=...`, `-DOC4_ZLIB_DIR=...`,
+Other locations: `-DOC4_PYTHON27_DIR=...`, `-DOC4_ZLIB_DIR=...`,
 `-DOC4_SDL3_DIR=...`, `-DOC4_DR_LIBS_DIR=...`, `-DOC4_FREETYPE_DIR=...`, `-DOC4_FFMPEG_DIR=...`.
 
 ```bat
@@ -95,7 +95,8 @@ rendering through SDL3's Metal backend. Xcode or the Command Line Tools, and fro
 
 * Python 2.7.18 as a shared library (there is no Homebrew formula):
   `PYTHON_CONFIGURE_OPTS=--enable-shared pyenv install 2.7.18`.
-* Under `external/`, as on Windows: pybind11 2.9.2, zlib 1.3.1, SDL3 3.4.18 (source), dr_libs,
+* Initialise submodules with `git submodule update --init --recursive` (includes pybind11).
+* Under `external/`, as on Windows: zlib 1.3.1, SDL3 3.4.18 (source), dr_libs,
   FreeType 2.13.3 (the text off Windows: required here), and DirectXMath (microsoft/DirectXMath,
   header only; part of the Windows SDK on Windows) in `DirectXMath`.
 

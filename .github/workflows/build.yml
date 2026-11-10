@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
 
       - name: Cache third-party packages
         id: deps
@@ -37,9 +37,6 @@ jobs:
           Get-Archive https://www.python.org/ftp/python/2.7.18/python-2.7.18.amd64.msi python.msi
           Start-Process msiexec.exe -Wait -ArgumentList '/a', "`"$PWD\external\downloads\python.msi`"", '/qn', "TARGETDIR=`"$PWD\external\python27`""
           if (-not (Test-Path external\python27\libs\python27.lib)) { throw "Python 2.7 did not unpack" }
-
-          Get-Archive https://github.com/pybind/pybind11/archive/refs/tags/v2.9.2.zip pybind11.zip
-          Expand-Archive external\downloads\pybind11.zip external
 
           Get-Archive https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib.tar.gz
           tar -xzf external\downloads\zlib.tar.gz -C external

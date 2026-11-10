@@ -32,7 +32,8 @@ endif()
 # Settings for openciv4's own code; the game core (Firaxis SDK) has its own in gamecore/.
 add_library(oc4_options INTERFACE)
 if(MSVC)
-	target_compile_options(oc4_options INTERFACE /W4 /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor /MP)
+	target_compile_options(oc4_options INTERFACE /W4 /permissive- /utf-8 /Zc:__cplusplus
+		$<$<CXX_COMPILER_ID:MSVC>:/Zc:preprocessor> $<$<CXX_COMPILER_ID:MSVC>:/MP>)
 	target_compile_definitions(oc4_options INTERFACE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 endif()
 
@@ -128,11 +129,18 @@ elseif(EXISTS "${OC4_FFMPEG_DIR}/include/libavcodec/avcodec.h")
 	foreach(dll IN LISTS OC4_FFMPEG_DLLS)
 		get_filename_component(name "${dll}" NAME_WE)
 		set(lib "${CMAKE_BINARY_DIR}/ffmpeg/${name}.lib")
-		if(NOT EXISTS "${lib}")
-			file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/ffmpeg")
-			execute_process(COMMAND "${CMAKE_AR}" /nologo /machine:x64 "/def:${OC4_FFMPEG_DIR}/lib/${name}.def" "/name:${dll}" "/out:${lib}"
-				COMMAND_ERROR_IS_FATAL ANY)
-		endif()
+		# llvm-lib does not support lib.exe's /name option. Both tools read LIBRARY
+		# from a .def file; without it LLVM produces imports with an empty DLL name.
+		set(source_def "${OC4_FFMPEG_DIR}/lib/${name}.def")
+		set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${source_def}")
+		file(READ "${source_def}" exports)
+		string(REGEX REPLACE "(^|[\r\n])[ \t]*LIBRARY[^\r\n]*" "\\1" exports "${exports}")
+		file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/ffmpeg")
+		file(WRITE "${CMAKE_BINARY_DIR}/ffmpeg/${name}.def" "LIBRARY ${dll}\n${exports}")
+		# Regenerate on configure so changes of package/toolchain replace stale imports.
+		execute_process(COMMAND "${CMAKE_AR}" /nologo /machine:x64
+			"/def:${CMAKE_BINARY_DIR}/ffmpeg/${name}.def" "/out:${lib}"
+			COMMAND_ERROR_IS_FATAL ANY)
 		target_link_libraries(oc4_media PUBLIC "${lib}")
 		target_link_options(oc4_media INTERFACE "/DELAYLOAD:${dll}")
 	endforeach()
@@ -311,8 +319,12 @@ if(NOT MSVC)
 	target_compile_options(oc4core PRIVATE -fms-extensions -ferror-limit=0 -Wno-everything -ffp-contract=off)
 endif()
 if(MSVC)
-	target_compile_options(oc4core PRIVATE /permissive /W3 /EHsc /MP /source-charset:windows-1252 /execution-charset:windows-1252
+	target_compile_options(oc4core PRIVATE /permissive- /Zc:__cplusplus /W3 /EHsc
 		/wd4244 /wd4267 /wd4996 /wd4251 /wd4018 /wd4800)
+endif()
+# clang-cl defines MSVC too, but only cl supports these legacy charset options.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+	target_compile_options(oc4core PRIVATE /Zc:preprocessor /MP /source-charset:windows-1252 /execution-charset:windows-1252)
 endif()
 if(WIN32)
 list(TRANSFORM OC4_FFMPEG_DLLS PREPEND "${OC4_FFMPEG_DIR}/bin/" OUTPUT_VARIABLE OC4_FFMPEG_DLL_FILES)

@@ -62,8 +62,8 @@ namespace oc4::host
 		bool LoadXml(FXml* xml, const TCHAR* pszXmlFile) override;
 		bool Validate(FXml* xml, TCHAR* pszError) override;
 		bool LocateNode(FXml* xml, const TCHAR* pszXmlNode) override;
-		bool LocateFirstSiblingNodeByTagName(FXml* xml, TCHAR* pszTagName) override;
-		bool LocateNextSiblingNodeByTagName(FXml* xml, TCHAR* pszTagName) override;
+		bool LocateFirstSiblingNodeByTagName(FXml* xml, const TCHAR* pszTagName) override;
+		bool LocateNextSiblingNodeByTagName(FXml* xml, const TCHAR* pszTagName) override;
 		bool NextSibling(FXml* xml) override;
 		bool PrevSibling(FXml* xml) override;
 		bool SetToChild(FXml* xml) override;
@@ -81,7 +81,7 @@ namespace oc4::host
 		bool GetLastNodeValue(FXml* xml, unsigned int* puiVal) override;
 		bool GetLastLocatedNodeType(FXml* xml, TCHAR* pszType) override;
 		bool IsLastLocatedNodeCommentNode(FXml* xml) override;
-		int NumOfElementsByTagName(FXml* xml, TCHAR* pszTagName) override;
+		int NumOfElementsByTagName(FXml* xml, const TCHAR* pszTagName) override;
 		int NumOfChildrenByTagName(FXml* xml, const TCHAR* pszTagName) override;
 		int GetNumSiblings(FXml* xml) override;
 		int GetNumChildren(FXml* xml) override;
