@@ -115,8 +115,10 @@ float fogAt(float2 xy)
 	[unroll] for (int i = 0; i < 4; ++i)
 	{
 		int2 q = cell + int2(i & 1, i >> 1);
-		q.x = (wrap & 1) ? (q.x % size.x + size.x) % size.x : clamp(q.x, 0, size.x - 1);
-		q.y = (wrap & 2) ? (q.y % size.y + size.y) % size.y : clamp(q.y, 0, size.y - 1);
+		// (in floats: an integer modulo is slow on some GPUs, Maxwell's among them; exact for map sizes)
+		int2 m = q - int2(float2(size) * floor((float2(q) + 0.5) / float2(size)));
+		q.x = (wrap & 1) ? m.x : clamp(q.x, 0, size.x - 1);
+		q.y = (wrap & 2) ? m.y : clamp(q.y, 0, size.y - 1);
 		const uint a = uint(round(fogPlots.Load(int3(q, 0)).a * 65535.0));
 		k[i] = float2((a & 4) ? 1 : 0, (a & 8) ? 1 : 0);
 	}
