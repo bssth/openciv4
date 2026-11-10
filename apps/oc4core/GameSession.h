@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <vector>
 
 class CvDLLFAStarIFaceBase;
 
