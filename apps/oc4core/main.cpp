@@ -920,7 +920,13 @@ namespace
 					{
 						if (log)
 							std::printf("  turn %d: idle, ended by itself\n", game.getGameTurn());
-						game.doControl(CONTROL_ENDTURN);
+						// As Enter does it, through the action: CvGame::doControl is not exported.
+						for (int i = 0; i < GC.getNumActionInfos(); ++i)
+							if (GC.getActionInfo(i).getControlType() == CONTROL_ENDTURN)
+							{
+								act(i, false, false, false);
+								break;
+							}
 					}
 					changed = true;
 				}
