@@ -5,6 +5,7 @@ Used when the engine is built with OC4_SPIRV_SHADERS and run with OC4_GPU=vulkan
 Windows, and the base for Linux and other Vulkan platforms). Written to src/render/SpirvShaders.inc,
 which is checked in: building the game needs none of these tools.
 Run this after changing a shader:  python3 tools/shaders/gen_spirv.py
+With --check nothing is written: it fails when the checked-in file is not what the tools give now.
 
 SDL's Vulkan backend (SDL_gpu.h) wants combined image samplers: sampler slot n binds texture n with
 sampler n. The HLSL keeps them apart, and some textures share another slot's sampler (the leader maps
@@ -120,7 +121,7 @@ def main():
             out.append(f"const uint32_t {name}[] = {{{body}}};\n")
             table.append(f'\t{{ "{file}", "{entry}", {name}, sizeof({name}) }},\n')
         out.append("const SpirvShader kSpirvShaders[] = {\n" + "".join(table) + "};\n")
-    OUT.write_text("".join(out), encoding="utf-8")
+    gen_msl.finish(OUT, "".join(out))
 
 
 if __name__ == "__main__":
