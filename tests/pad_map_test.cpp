@@ -166,6 +166,15 @@ int main()
 
 	check(!padTriggerHeld(0) && !padTriggerHeld(16000) && padTriggerHeld(32767), "a trigger is held past half way");
 
+	// the mouse's cursor and the gamepad's pointer: one at a time
+	PadDevice device;
+	check(device.mouseCursorShown(), "no gamepad used yet: the mouse's cursor");
+	device.onPad();
+	check(!device.mouseCursorShown(), "the gamepad used: the mouse's cursor hidden");
+	device.onMouse();
+	check(device.mouseCursorShown(), "the mouse moved: its cursor back");
+	check(!padStickUsed(0) && !padStickUsed(9000) && padStickUsed(-30000) && padStickUsed(30000), "a stick is used well off its rest");
+
 	if (failures)
 		return 1;
 	std::printf("pad map: ok\n");

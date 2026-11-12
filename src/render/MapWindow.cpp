@@ -140,6 +140,8 @@ namespace oc4::render
 		int padAxis[SDL_GAMEPAD_AXIS_COUNT] = {};
 		float padX = 0, padY = 0;
 		bool padPointer = false;
+		PadDevice padDevice;            // (the mouse's cursor is hidden while the gamepad is the one in use)
+		bool mouseCursorShown = true;
 		bool padLeftDown = false, padRightDown = false; // (the button presses passed on as the mouse's)
 		std::optional<NavDirection> padDirection;       // the D-pad's direction held, and for how long
 		float padDirectionHeld = 0, padScroll = 0;
@@ -1342,6 +1344,11 @@ namespace oc4::render
 			if (std::chrono::steady_clock::now() < wasdNoteUntil)
 				drawWasdNote();
 			drawPadPointer();
+			if (const bool shown = padDevice.mouseCursorShown(); shown != mouseCursorShown)
+			{
+				mouseCursorShown = shown;
+				shown ? SDL_ShowCursor() : SDL_HideCursor();
+			}
 			overlay->end();
 		}
 
@@ -1919,6 +1926,7 @@ namespace oc4::render
 				break;
 			case SDL_EVENT_MOUSE_MOTION:
 				padPointer = false; // (the mouse's own, or a finger: no drawn pointer)
+				padDevice.onMouse();
 				onMouseMove(px(e.motion.x), px(e.motion.y));
 				break;
 			case SDL_EVENT_GAMEPAD_ADDED:
@@ -1934,11 +1942,16 @@ namespace oc4::render
 			case SDL_EVENT_GAMEPAD_AXIS_MOTION:
 				if (e.gaxis.axis < SDL_GAMEPAD_AXIS_COUNT)
 					padAxis[e.gaxis.axis] = e.gaxis.value;
+				if (e.gaxis.axis <= SDL_GAMEPAD_AXIS_RIGHTY && padStickUsed(e.gaxis.value))
+					padDevice.onPad();
 				break;
 			case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
 			case SDL_EVENT_GAMEPAD_BUTTON_UP:
 				if (const auto b = padButtonOfSdl(SDL_GetGamepadFromID(e.gbutton.which), e.gbutton.button))
+				{
+					padDevice.onPad();
 					onPadButton(*b, e.gbutton.down);
+				}
 				break;
 			case SDL_EVENT_MOUSE_BUTTON_DOWN:
 			case SDL_EVENT_MOUSE_BUTTON_UP:

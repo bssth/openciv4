@@ -277,4 +277,16 @@ namespace oc4::render
 
 	// A trigger's axis (0..32767) is held.
 	inline bool padTriggerHeld(int raw) { return raw > 32767 / 2; }
+
+	// Whose turn it is to show a pointer: the system's mouse cursor until the gamepad is used (a
+	// button, a stick well off its rest), and again as soon as the mouse moves. Without this both
+	// showed at once, the mouse's and the one drawn for the gamepad.
+	struct PadDevice
+	{
+		bool padLast = false;
+		void onPad() { padLast = true; }
+		void onMouse() { padLast = false; }
+		bool mouseCursorShown() const { return !padLast; }
+	};
+	inline bool padStickUsed(int raw) { return raw > 32767 / 2 || raw < -32767 / 2; }
 }
