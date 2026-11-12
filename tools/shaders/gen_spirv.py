@@ -82,9 +82,34 @@ def translate(tmp, file, entry, stage):
         run("spirv-opt", "--convert-to-sampled-image=" + " ".join(f"{s}:{b}" for s, b in images), "--eliminate-dead-code-aggressive", "--remove-unused-interface-variables", "--eliminate-dead-variables", "-o", spv, separate)
     else:
         spv.write_bytes(separate.read_bytes())
+    spv.write_bytes(ordered_variables(spv.read_bytes()))
     run("spirv-val", "--target-env", "vulkan1.1", spv)
     check(entry, textures, uniforms, reflect(original), reflect(spv))
     return spv.read_bytes()
+
+
+def ordered_variables(spv):
+    """Global variables declared one after another, put in the order of their ids.
+
+    spirv-opt writes the ones it converted in an order that differs between its builds (macOS and
+    Linux swap two); they do not depend on each other, so this only makes the file reproducible.
+    """
+    words = [int.from_bytes(spv[i:i + 4], "little") for i in range(0, len(spv), 4)]
+    out, at, group = words[:5], 5, []
+    OP_VARIABLE, OP_FUNCTION = 59, 54
+    while at < len(words):
+        count, op = words[at] >> 16, words[at] & 0xFFFF
+        if op == OP_FUNCTION:
+            break
+        instruction = words[at:at + count]
+        if op == OP_VARIABLE and count == 4:  # (no initializer: nothing it could depend on but its type)
+            group.append(instruction)
+        else:
+            out += [w for i in sorted(group, key=lambda i: i[2]) for w in i] + instruction
+            group = []
+        at += count
+    out += [w for i in sorted(group, key=lambda i: i[2]) for w in i] + words[at:]
+    return b"".join(w.to_bytes(4, "little") for w in out)
 
 
 def check(entry, textures, uniforms, before, after):
