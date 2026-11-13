@@ -192,6 +192,12 @@ add_library(oc4_render STATIC
 	src/render/Theme.cpp
 )
 target_link_libraries(oc4_render PUBLIC oc4_anim oc4_gfx oc4_media SDL3::SDL3-static PRIVATE oc4_options)
+# SPIR-V versions of the shaders (src/render/SpirvShaders.inc, from tools/shaders/gen_spirv.py): with them,
+# OC4_GPU=vulkan draws through SDL's Vulkan backend (MoltenVK on macOS). A start for Linux.
+option(OC4_SPIRV_SHADERS "Also build the SPIR-V shaders (OC4_GPU=vulkan selects SDL's Vulkan backend)" OFF)
+if(OC4_SPIRV_SHADERS)
+	target_compile_definitions(oc4_render PRIVATE OC4_SPIRV_SHADERS)
+endif()
 if(WIN32)
 	target_link_libraries(oc4_render PUBLIC d3dcompiler dwrite windowscodecs ole32)
 endif()
@@ -361,6 +367,11 @@ target_include_directories(auto_end_turn_test PRIVATE apps/oc4core)
 target_link_libraries(auto_end_turn_test PRIVATE oc4_options)
 add_test(NAME auto_end_turn COMMAND auto_end_turn_test)
 set_target_properties(auto_end_turn_test PROPERTIES FOLDER "tests")
+
+add_executable(pad_map_test tests/pad_map_test.cpp)
+target_include_directories(pad_map_test PRIVATE src)
+add_test(NAME pad_map COMMAND pad_map_test)
+set_target_properties(pad_map_test PROPERTIES FOLDER "tests")
 
 add_executable(globe_bend_test tests/globe_bend_test.cpp)
 target_include_directories(globe_bend_test PRIVATE src)

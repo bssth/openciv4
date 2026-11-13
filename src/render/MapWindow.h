@@ -95,6 +95,8 @@ namespace oc4::render
 			int x = -1, y = -1;
 			bool right = false, shift = false, ctrl = false, alt = false;
 			bool onFigure = false; // on a unit's figure (the plot is the unit's)
+			bool either = false;   // (the gamepad's plot cursor: `right` is the host's to say, see PadAction::Kind::PlotAct)
+			bool clear = false;    // (the gamepad's B: no plot's click, the selection let go)
 		};
 		void setPlaying(bool playing);
 		std::vector<PlotClick> takeClicks();
@@ -267,6 +269,7 @@ namespace oc4::render
 		// The globe view: the camera back over the whole map (on), where it was (off).
 		void setGlobeView(bool up);
 		void setYieldSymbols(std::array<std::string, 3> symbols);
+		void setWorldBuilder(bool on);
 
 		// The plots the game marks (in the window's coordinates): a circle on a plot, or the
 		// outline round each set of plots of one layer and colour (a city's radius, a ranged

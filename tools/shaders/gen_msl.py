@@ -4,6 +4,7 @@
 HLSL -> SPIR-V with glslang, SPIR-V -> MSL with spirv-cross, written to
 src/render/MslShaders.inc, which is checked in: building the game needs neither tool.
 Run this after changing a shader:  python3 tools/shaders/gen_msl.py
+With --check nothing is written: it fails when the checked-in file is not what the tools give now.
 
 Resources keep their register numbers, which is what SDL's Metal backend expects
 (SDL_gpu.h): [[texture(n)]]/[[sampler(n)]] pairs, [[buffer(n)]] uniforms, storage
@@ -64,6 +65,18 @@ def translate(tmp, file, entry, stage, uniforms):
     return re.sub(r"(const device \S+ \S+ )\[\[buffer\(\d+\)\]\]", lambda m: f"{m.group(1)}[[buffer({next(slot)})]]", msl)
 
 
+def finish(out_path, text):
+    """Writes the generated file, or with --check compares it with the one checked in."""
+    if "--check" not in sys.argv[1:]:
+        out_path.write_text(text, encoding="utf-8")
+        return
+    name = out_path.relative_to(ROOT).as_posix()
+    if not out_path.exists() or out_path.read_text(encoding="utf-8") != text:
+        sys.exit(f"{name} is not what the shaders in the sources translate to now: "
+                 f"run python3 tools/shaders/{Path(sys.argv[0]).name} and commit the result")
+    print(name, "is up to date")
+
+
 def main():
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
@@ -72,7 +85,7 @@ def main():
             msl = translate(tmp, file, entry, stage, uniforms)
             print(file, entry, len(msl), "bytes")
             out.append(f'{{ "{file}", "{entry}", R"msl({msl})msl" }},\n')
-    OUT.write_text("".join(out), encoding="utf-8")
+    finish(OUT, "".join(out))
 
 
 if __name__ == "__main__":

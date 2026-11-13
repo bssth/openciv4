@@ -111,7 +111,8 @@ build/macos/bin/oc4core --civ4 "<Civ4>" --menu
 or Steam download). Saves and settings go to `~/Documents/My Games` as on Windows
 (`OC4_DOCUMENTS=<folder>` puts them elsewhere). The shaders' Metal versions are generated from
 the HLSL and checked in (`src/render/MslShaders.inc`); after changing a shader, run
-`python3 tools/shaders/gen_msl.py` (needs `glslang` and `spirv-cross` from Homebrew).
+`python3 tools/shaders/gen_msl.py` (needs `glslang` and `spirv-cross` from Homebrew). CI runs
+it and `gen_spirv.py` with `--check`, which fails when a checked-in file is out of date.
 
 The macOS game core plays the same games as the Windows x64 one: AI games from the same seed
 give the same sync checksums turn by turn.

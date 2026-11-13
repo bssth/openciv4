@@ -1,4 +1,5 @@
 #include "render/UiLayer.h"
+#include <cstdio>
 
 #include <windows.h>
 
@@ -121,14 +122,18 @@ namespace oc4::render
 	{
 		std::vector<int> out;
 		for (size_t i = 0; i < m_items.size(); ++i)
-			if (const Item& it = m_items[i]; it.interactive && !it.mainInterface && std::abs(it.x1 - it.x0) >= 1 && it.y1 - it.y0 >= 1 &&
+			if (const Item& it = m_items[i]; it.interactive && std::abs(it.x1 - it.x0) >= 1 && it.y1 - it.y0 >= 1 &&
+				(m_keyWithin ? (it.x0 + it.x1) / 2 >= m_keyWithin->x0 && (it.x0 + it.x1) / 2 < m_keyWithin->x1 && (it.y0 + it.y1) / 2 >= m_keyWithin->y0 &&
+						(it.y0 + it.y1) / 2 < m_keyWithin->y1 : !it.mainInterface) &&
 				hit(int((it.x0 + it.x1) / 2), int((it.y0 + it.y1) / 2)) == int(i))
 				out.push_back(int(i));
 		return out;
 	}
 
-	bool UiLayer::moveChoice(NavDirection direction, bool wrap)
+	bool UiLayer::moveChoice(NavDirection direction, bool wrap, const NavRect* within)
 	{
+		// (what was chosen stays the start if it is in the new place too)
+		m_keyWithin = within ? std::optional(*within) : std::nullopt;
 		const std::vector<int> items = reachable();
 		std::vector<NavRect> rects;
 		int from = -1;
