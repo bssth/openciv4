@@ -1,4 +1,5 @@
 ﻿#include "Xml.h"
+#include "XmlDecode.h"
 
 #include <cstdio>
 #include <cstring>
@@ -77,17 +78,7 @@ namespace oc4::host
 			}
 
 			// Decodes one character of the document encoding.
-			wchar_t decodeChar()
-			{
-				const unsigned char c = m_data[m_pos++];
-				if (!m_utf8 || c < 0x80)
-					return c;
-				int extra = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
-				uint32_t cp = c & (0x3F >> extra);
-				while (extra-- > 0 && !atEnd())
-					cp = (cp << 6) | (m_data[m_pos++] & 0x3F);
-				return cp > 0xFFFF ? L'?' : static_cast<wchar_t>(cp);
-			}
+			wchar_t decodeChar() { return decodeXmlChar(m_data, m_size, m_pos, m_utf8); }
 
 			std::string name()
 			{
