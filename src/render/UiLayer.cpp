@@ -369,7 +369,21 @@ namespace oc4::render
 					}
 					break;
 				}
-				if (const Theme::Panel* p = themedPanel(it))
+				if (it.style.starts_with('@'))
+				{
+					// (a skin of the theme by its style and property, "@style|property": the engine's own
+					// controls the scripts do not draw, as the WorldBuilder's tool window and its tabs)
+					auto at = m_namedSkins.find(it.style);
+					if (at == m_namedSkins.end() && m_theme.loaded())
+					{
+						const size_t bar = it.style.find('|');
+						at = m_namedSkins.emplace(it.style, bar == std::string::npos ? Theme::Skin{} :
+							m_theme.skin(std::string_view(it.style).substr(1, bar - 1), std::string_view(it.style).substr(bar + 1))).first;
+					}
+					if (at != m_namedSkins.end())
+						Theme::draw(o, at->second, x0, y0, x1, y1, it.alpha);
+				}
+				else if (const Theme::Panel* p = themedPanel(it))
 				{
 					Theme::draw(o, p->inner, x0, y0, x1, y1, it.alpha);
 					Theme::draw(o, p->border, x0, y0, x1, y1, it.alpha);
