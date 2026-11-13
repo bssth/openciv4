@@ -70,6 +70,9 @@ namespace oc4
 		{
 			std::filesystem::path root;
 			std::vector<std::unique_ptr<FpkArchive>> archives;
+			// Case-sensitive file systems (Linux): asset key -> the file's real path. The game asks for
+			// paths in any case and with backslashes, as Windows and macOS allow.
+			std::unordered_map<std::string, std::filesystem::path> files;
 		};
 
 		std::optional<AssetLocation> locateKey(const std::string& key) const;
