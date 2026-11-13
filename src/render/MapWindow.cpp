@@ -3,6 +3,7 @@
 #include "render/GlobeBend.h"
 #include "render/UiScale.h"
 #include "render/WasdPan.h"
+#include "render/EdgeScroll.h"
 #include "render/PadMap.h"
 
 #include "render/Leaderhead.h"
@@ -135,6 +136,10 @@ namespace oc4::render
 		bool wasdPan = false;       // W A S D pan the map too (Ctrl+Shift+W, WasdPan.h)
 		std::optional<bool> wasdToggled; // (Ctrl+Shift+W since asked: the profile's to keep)
 		std::chrono::steady_clock::time_point wasdNoteUntil{}; // (the toggle's note shown till then)
+		bool autoEndTurn = false;   // idle turns end by themselves (Ctrl+Shift+E)
+		std::optional<bool> autoEndTurnToggled;
+		std::chrono::steady_clock::time_point autoEndTurnNoteUntil{};
+		unsigned inputs = 0;        // the player's keys and clicks
 		// The gamepad (PadMap.h): its sticks and triggers as the events left them, the pointer it moves
 		// (mouseX and mouseY, kept finer here), drawn once it has been used and until the mouse or a touch is.
 		int padAxis[SDL_GAMEPAD_AXIS_COUNT] = {};
@@ -907,6 +912,16 @@ namespace oc4::render
 				wasdNoteUntil = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 				return;
 			}
+			// (the game has no Ctrl+Shift+E)
+			if (ctrl && shift && !alt && k == 'E')
+			{
+				autoEndTurn = !autoEndTurn;
+				autoEndTurnToggled = autoEndTurn;
+				autoEndTurnNoteUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+				return;
+			}
+			if (k != key::Shift && k != key::Control && k != key::Menu)
+				++inputs;
 			if (uiTakesKeys && !ctrl && !alt && uiKey(k, shift))
 				return;
 			// (W A S D panning: the press is the map's, not the game's hotkey)
@@ -1135,19 +1150,11 @@ namespace oc4::render
 			{
 				SDL_GetMouseState(&fx, &fy);
 				const float density = SDL_GetWindowPixelDensity(window);
-				const int px = int(fx * density), py = int(fy * density), w = int(renderer->width()), h = int(renderer->height());
-				constexpr int kEdge = 3;
-				if (px >= 0 && py >= 0 && px < w && py < h)
-				{
-					if (py < kEdge)
-						move += forward;
-					else if (py >= h - kEdge)
-						move += forward * -1;
-					if (px < kEdge)
-						move += right * -1;
-					else if (px >= w - kEdge)
-						move += right;
-				}
+				const EdgeScrollMove e = edgeScrollMove(true, int(fx * density), int(fy * density), int(renderer->width()), int(renderer->height()));
+				if (e.y)
+					move += forward * float(e.y);
+				if (e.x)
+					move += right * float(e.x);
 			}
 			if (move.x != 0 || move.y != 0)
 			{
@@ -1345,6 +1352,8 @@ namespace oc4::render
 				drawFrameRate();
 			if (std::chrono::steady_clock::now() < wasdNoteUntil)
 				drawWasdNote();
+			else if (std::chrono::steady_clock::now() < autoEndTurnNoteUntil)
+				drawAutoEndTurnNote();
 			drawPadPointer();
 			if (const bool shown = padDevice.mouseCursorShown(); shown != mouseCursorShown)
 			{
@@ -1368,6 +1377,15 @@ namespace oc4::render
 		void drawWasdNote()
 		{
 			const std::wstring text = wasdPan ? L"W A S D pan the map (Ctrl+Shift+W: off)" : L"W A S D are the game's hotkeys again (the options' Game tab: pan)";
+			const float size = 13, width = overlay->width(text, size, true), x = (overlay->screenWidth() - width) / 2 - 7, y = 76;
+			overlay->rect(x, y, x + width + 14, y + 23, { 0.03f, 0.04f, 0.06f }, 0.75f, 4);
+			overlay->text(text, x + 7, y + 4, size, { 1, 1, 1 }, 1, true);
+		}
+
+		// Ctrl+Shift+E's answer, where the W A S D one goes.
+		void drawAutoEndTurnNote()
+		{
+			const std::wstring text = autoEndTurn ? L"Idle turns end by themselves: a key or click keeps the turn (Ctrl+Shift+E: off)" : L"Idle turns wait for Enter again (Ctrl+Shift+E: on)";
 			const float size = 13, width = overlay->width(text, size, true), x = (overlay->screenWidth() - width) / 2 - 7, y = 76;
 			overlay->rect(x, y, x + width + 14, y + 23, { 0.03f, 0.04f, 0.06f }, 0.75f, 4);
 			overlay->text(text, x + 7, y + 4, size, { 1, 1, 1 }, 1, true);
@@ -2267,6 +2285,9 @@ namespace oc4::render
 	void MapWindow::setWasdPan(bool on) { m->wasdPan = on; }
 	bool MapWindow::wasdPan() const { return m->wasdPan; }
 	std::optional<bool> MapWindow::takeWasdPanToggle() { return std::exchange(m->wasdToggled, std::nullopt); }
+	void MapWindow::setAutoEndTurn(bool on) { m->autoEndTurn = on; }
+	std::optional<bool> MapWindow::takeAutoEndTurnToggle() { return std::exchange(m->autoEndTurnToggled, std::nullopt); }
+	unsigned MapWindow::inputCount() const { return m->inputs; }
 	void MapWindow::pressKey(unsigned key) { m->onKey(key); }
 	MapWindow::UiDisplay MapWindow::uiDisplay() const { return { m->renderer->width(), m->renderer->height(), m->windowDensity() }; }
 	bool MapWindow::uiActive() const { return m->ui.active(); }

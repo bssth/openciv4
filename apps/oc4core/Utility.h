@@ -12,6 +12,7 @@
 #include "generated/IFaceStubs.h"
 
 #include "core/AssetResolver.h"
+#include "render/EdgeScroll.h"
 
 #include <filesystem>
 #include <fstream>
@@ -239,6 +240,18 @@ namespace oc4::host
 		void setWasdPan(bool on) { m_wasdPan = on; }
 		void forceWasdPan() { m_forcedWasdPan = true; }
 		void chooseWasdPan(bool on) { m_forcedWasdPan = false; m_wasdPan = on; }
+		// End idle turns by themselves (AutoEndTurn.h; the profile's, or --auto-end-turn's for the
+		// session until the player chooses: Ctrl+Shift+E or the options' check box).
+		bool autoEndTurn() const { return m_forcedAutoEndTurn || m_autoEndTurn; }
+		void setAutoEndTurn(bool on) { m_autoEndTurn = on; }
+		void forceAutoEndTurn() { m_forcedAutoEndTurn = true; }
+		void chooseAutoEndTurn(bool on) { m_forcedAutoEndTurn = false; m_autoEndTurn = on; }
+		// The mouse at the window's edge scrolls the map (render/EdgeScroll.h; on unless the profile
+		// says off, or --no-edge-scroll / a scripted run for the session until the player chooses).
+		bool edgeScroll() const { return m_edgeScroll.on(); }
+		void setEdgeScroll(bool on) { m_edgeScroll.set(on); }
+		void forceNoEdgeScroll() { m_edgeScroll.forceOff(); }
+		void chooseEdgeScroll(bool on) { m_edgeScroll.choose(on); }
 		void resetGraphicOptions()
 		{
 			for (auto& o : m_graphicOptions)
@@ -410,6 +423,8 @@ namespace oc4::host
 		std::vector<char> m_profileOptions; // empty: XML defaults
 		int m_uiScale = 0, m_forcedUiScale = -1;
 		bool m_wasdPan = false, m_forcedWasdPan = false;
+		bool m_autoEndTurn = false, m_forcedAutoEndTurn = false;
+		render::EdgeScrollOption m_edgeScroll;
 		std::array<std::atomic<int8_t>, 64> m_graphicOptions{}; // 0 the XML's default, 1 off, 2 on (set by the window's thread, read by the game's)
 		AudioScripts m_audio{ m_assets };
 		Sounds m_sounds{ m_assets, m_audio };

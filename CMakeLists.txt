@@ -357,6 +357,17 @@ target_link_libraries(wasd_pan_test PRIVATE oc4_options)
 add_test(NAME wasd_pan COMMAND wasd_pan_test)
 set_target_properties(wasd_pan_test PROPERTIES FOLDER "tests")
 
+add_executable(edge_scroll_test tests/edge_scroll_test.cpp)
+target_include_directories(edge_scroll_test PRIVATE src)
+add_test(NAME edge_scroll COMMAND edge_scroll_test)
+set_target_properties(edge_scroll_test PROPERTIES FOLDER "tests")
+
+add_executable(auto_end_turn_test tests/auto_end_turn_test.cpp)
+target_include_directories(auto_end_turn_test PRIVATE apps/oc4core)
+target_link_libraries(auto_end_turn_test PRIVATE oc4_options)
+add_test(NAME auto_end_turn COMMAND auto_end_turn_test)
+set_target_properties(auto_end_turn_test PROPERTIES FOLDER "tests")
+
 add_executable(pad_map_test tests/pad_map_test.cpp)
 target_include_directories(pad_map_test PRIVATE src)
 add_test(NAME pad_map COMMAND pad_map_test)

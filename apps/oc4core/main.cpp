@@ -4,7 +4,7 @@
 //           [--turns N [--map Continents] [--size SMALL] [--players N] [--seed N]]
 //           [--load <file.CivBeyondSwordSave>] [--save <file.CivBeyondSwordSave> [--save-at TURN]]
 //           [--profile] [--profile-out <stacks.folded>] [--rand-log] [--exec <script.py>] [--exec-first <script.py>]
-//           [--menu | --view | --play [--screenshot <file.png>] [--view-size WxH] [--ui-scale PERCENT] [--show-fps] [--wasd-pan] [--look X,Y[,distance in plots]] [--keys <window keys>]
+//           [--menu | --view | --play [--screenshot <file.png>] [--view-size WxH] [--ui-scale PERCENT] [--show-fps] [--wasd-pan] [--auto-end-turn] [--no-edge-scroll] [--look X,Y[,distance in plots]] [--keys <window keys>]
 //            [--view-seconds S]]
 //           [--host PORT [--humans N] | --join HOST:PORT]
 //
@@ -38,6 +38,7 @@
 // way the original engine does. With --turns it then starts a new game on a map
 // script and lets the AI play N turns.
 
+#include "AutoEndTurn.h"
 #include "CrashHandler.h"
 #include "EngineClasses.h"
 #include "GameCoreImports.h"
@@ -136,6 +137,8 @@ namespace
 		unsigned viewWidth = 1600, viewHeight = 900;
 		bool showFps = false; // the frame rate in the corner from the start
 		bool wasdPan = false; // W A S D pan the map from the start (whatever the profile says)
+		bool autoEndTurn = false; // idle turns end by themselves from the start (the same)
+		bool noEdgeScroll = false; // the mouse at the window's edge does not scroll the map (the same)
 		int uiScale = -1; // the interface's, in percent, 0 the window's density (-1: the profile's)
 		int lookX = -1, lookY = -1;
 		float lookDistance = 9;
@@ -301,6 +304,10 @@ namespace
 				o.showFps = true;
 			else if (a == L"--wasd-pan")
 				o.wasdPan = true;
+			else if (a == L"--auto-end-turn")
+				o.autoEndTurn = true;
+			else if (a == L"--no-edge-scroll")
+				o.noEdgeScroll = true;
 			else if (a == L"--ui-scale")
 				o.uiScale = std::stoi(next().wstring());
 			else if (a == L"--plot-help")
@@ -579,6 +586,12 @@ namespace
 		if (opt.wasdPan)
 			utility.forceWasdPan();
 		window.setWasdPan(utility.wasdPan());
+		if (opt.autoEndTurn)
+			utility.forceAutoEndTurn();
+		window.setAutoEndTurn(utility.autoEndTurn());
+		if (opt.noEdgeScroll || opt.viewSeconds > 0) // (scripted runs: never)
+			utility.forceNoEdgeScroll();
+		window.setEdgeScroll(utility.edgeScroll());
 		window.setUiScale(utility.uiScale());
 		if (!opt.ownInterface && !screens.start(int(window.width()), int(window.height())))
 			std::printf("  the game's interface did not start: the host's own\n");
@@ -592,6 +605,7 @@ namespace
 			return p && i >= 0 && size_t(i) < popupItems.size() ? capture.popupHelp(*p, popupItems[size_t(i)]) : std::string();
 		});
 		auto last = Clock::now(), captured = last, ticked = last, typed = last;
+		host::AutoEndTurn autoEndTurn; // (the option: idle turns end by themselves)
 		const auto start = last;
 		long long frames = 0;
 		double longestFrame = 0; // seconds between two frames, the longest (a window that stood still)
@@ -617,7 +631,6 @@ namespace
 		std::vector<render::MapWindow::PlotMarks::Mark> globeMarks;
 		uint64_t greatWallShown = 0; // the Great Wall the capture has (its cities)
 		int shownCursor = -2; // the game's cursor the window has
-		window.setEdgeScroll(opt.viewSeconds <= 0);
 		window.setActionHelp([&](int i) { return i >= 0 && size_t(i) < actionIds.size() ? capture.widgetHelp(WIDGET_ACTION, actionIds[size_t(i)], -1) : std::string(); });
 		const auto held = render::keyHeld;
 		const bool log = std::getenv("OC4_PLAY_LOG") != nullptr;
@@ -908,6 +921,27 @@ namespace
 					}
 					if (!ui.isDiploOrPopupWaiting())
 						game.updateTestEndTurn();
+					// Ending idle turns (the option): the "press Enter" lasting, nothing up over the map.
+					const host::AutoEndTurnView idle{
+						.on = utility.autoEndTurn(),
+						.turnActive = player.isTurnActive(),
+						.endTurnMessage = ui.isEndTurnMessage(),
+						.blocked = ui.isDiploOrPopupWaiting() || ui.shownPopup() || ui.isCitySelection() || screens.menuUp() || game.isHotSeat() || game.isPbem(),
+						.turn = game.getGameTurn(),
+						.inputs = window.inputCount(),
+					};
+					if (autoEndTurn.update(idle, now))
+					{
+						if (log)
+							std::printf("  turn %d: idle, ended by itself\n", game.getGameTurn());
+						// As Enter does it, through the action: CvGame::doControl is not exported.
+						for (int i = 0; i < GC.getNumActionInfos(); ++i)
+							if (GC.getActionInfo(i).getControlType() == CONTROL_ENDTURN)
+							{
+								act(i, false, false, false);
+								break;
+							}
+					}
 					changed = true;
 				}
 			}
@@ -1596,6 +1630,9 @@ namespace
 		if (opt.wasdPan)
 			utility.forceWasdPan();
 		window.setWasdPan(utility.wasdPan());
+		if (opt.autoEndTurn)
+			utility.forceAutoEndTurn();
+		window.setAutoEndTurn(utility.autoEndTurn());
 		window.setUiScale(utility.uiScale());
 		if (!screens.startMenu(int(window.width()), int(window.height()), title, mapScripts, saveFolders, mods, message, opt.menuPage))
 			throw std::runtime_error("the main menu did not start");
