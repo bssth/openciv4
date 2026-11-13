@@ -42,7 +42,8 @@ port a mod's game core: [openciv4-dll/docs/PORTING.md](https://github.com/bssth/
 * **AI autoplay**, headless or watched, deterministic per seed; saves in the original format
   that continue exactly as if never stopped.
 * **Mods**: Rise of Mankind: A New Dawn 2 and Chronicles of Mankind play with their own
-  game cores ported to x64.
+  game cores ported to x64. BUG 4.4 runs as it is; with BULL 1.2, its game core, ported
+  ([BULL-x64](https://github.com/MortenLyhr/BULL-x64), so far built and played on macOS only).
 * **Multiplayer** over the network (`--host`, `--join`), early.
 
 Not yet: the original's main menu (a simpler one stands in), the minimap's modes, the globe
