@@ -357,6 +357,11 @@ target_link_libraries(wasd_pan_test PRIVATE oc4_options)
 add_test(NAME wasd_pan COMMAND wasd_pan_test)
 set_target_properties(wasd_pan_test PROPERTIES FOLDER "tests")
 
+add_executable(pad_map_test tests/pad_map_test.cpp)
+target_include_directories(pad_map_test PRIVATE src)
+add_test(NAME pad_map COMMAND pad_map_test)
+set_target_properties(pad_map_test PROPERTIES FOLDER "tests")
+
 add_executable(globe_bend_test tests/globe_bend_test.cpp)
 target_include_directories(globe_bend_test PRIVATE src)
 target_link_libraries(globe_bend_test PRIVATE oc4_options)

@@ -41,6 +41,8 @@ namespace oc4::render
 		void draw(Overlay& overlay, const std::function<std::string(int item)>& help);
 		// The keys have chosen something (Tab started it): the arrows are the popup's, not the map's.
 		bool keyboardChoice() const { return m_keyboard; }
+		// An edit box has the focus: typing goes into it.
+		bool editing() const { return active() && m_focus >= 0; }
 
 	private:
 		struct Rect
