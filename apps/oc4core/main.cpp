@@ -1,4 +1,4 @@
-﻿// oc4core: the x64 engine for the Civ4 BtS game DLL.
+// oc4core: the x64 engine for the Civ4 BtS game DLL.
 //
 //   oc4core [--civ4 <root>] [--mod <Mods\\Name> | <mod folder>] [--python-home <dir>] [--log-dir <dir>]
 //           [--turns N [--map Continents] [--size SMALL] [--players N] [--seed N]]
@@ -1088,6 +1088,7 @@ namespace
 			// The WorldBuilder: the mouse over the map is its screen's (where it is, its buttons held,
 			// its clicks: CvScreensInterface's mouseOverPlot, leftMouseDown, rightMouseDown), and the
 			// plot its brush is on outlined (WorldBuilderGetHighlightPlot); the game's clicks wait.
+			window.setWorldBuilder(ui.worldBuilder());
 			if (ui.worldBuilder())
 			{
 				namespace py = pybind11;

@@ -262,6 +262,7 @@ namespace oc4::render
 		// The globe view: the camera back over the whole map (on), where it was (off).
 		void setGlobeView(bool up);
 		void setYieldSymbols(std::array<std::string, 3> symbols);
+		void setWorldBuilder(bool on);
 
 		// The plots the game marks (in the window's coordinates): a circle on a plot, or the
 		// outline round each set of plots of one layer and colour (a city's radius, a ranged

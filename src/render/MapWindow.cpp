@@ -221,6 +221,8 @@ namespace oc4::render
 		float minimapRect[4]{}; // where the minimap was drawn (x0, y0, x1, y1)
 		Vec3 anchor;
 		int lastX = 0, lastY = 0;
+		bool worldBuilder = false;
+		bool fogBeforeWorldBuilder = false;
 
 		float plot() const { return view->plotSize(); }
 
@@ -1621,6 +1623,22 @@ namespace oc4::render
 		for (size_t i = 0; i < 3; ++i)
 			m->yieldSymbols[i] = widen(symbols[i]);
 	}
+
+    void MapWindow::setWorldBuilder(bool on)
+    {
+		if (on == m->worldBuilder)
+			return;
+		m->worldBuilder = on;
+		if (on)
+		{
+			m->fogBeforeWorldBuilder = m->view->options.fog;
+			m->view->options.fog = false;
+		}
+		else
+		{
+			m->view->options.fog = m->fogBeforeWorldBuilder;
+		}
+    }
 
 	void MapWindow::setGameFontLayout(std::vector<ButtonArt::FontGroup> groups) { m->art.setFontLayout(std::move(groups)); }
 
