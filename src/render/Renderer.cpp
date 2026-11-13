@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -36,6 +37,24 @@ namespace oc4::render
 		const MslShader kMslShaders[] = {
 #include "MslShaders.inc"
 		};
+#endif
+#ifdef OC4_SPIRV_SHADERS
+		// Vulkan, chosen with OC4_GPU=vulkan (macOS through MoltenVK, or Windows): the same HLSL, translated
+		// ahead of time by tools/shaders/gen_spirv.py.
+		struct SpirvShader
+		{
+			const char* file;
+			const char* entry;
+			const uint32_t* code;
+			size_t size;
+		};
+#include "SpirvShaders.inc"
+
+		bool useVulkan()
+		{
+			const char* gpu = std::getenv("OC4_GPU");
+			return gpu && std::strcmp(gpu, "vulkan") == 0;
+		}
 #endif
 		constexpr char kShaderBody[] = R"hlsl(
 
@@ -409,6 +428,11 @@ float4 PSOverlay(Out p) : SV_Target
 		// (the GPU devices are the video subsystem's, with a window or without)
 		if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
 			fail("SDL_InitSubSystem");
+#ifdef OC4_SPIRV_SHADERS
+		if (useVulkan())
+			m_device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, debug, "vulkan");
+		else
+#endif
 #ifdef __APPLE__
 		m_device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_MSL, debug, nullptr);
 #else
@@ -416,6 +440,9 @@ float4 PSOverlay(Out p) : SV_Target
 #endif
 		if (!m_device)
 			fail("SDL_CreateGPUDevice");
+#ifdef OC4_SPIRV_SHADERS
+		std::printf("  GPU driver: %s\n", SDL_GetGPUDeviceDriver(m_device));
+#endif
 		if (m_window && !SDL_ClaimWindowForGPUDevice(m_device, m_window))
 			fail("SDL_ClaimWindowForGPUDevice");
 		if (!SDL_GPUTextureSupportsFormat(m_device, m_depthFormat, SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET))
@@ -490,6 +517,31 @@ float4 PSOverlay(Out p) : SV_Target
 	SDL_GPUShader* Renderer::compile(std::string_view source, const char* name, const char* entry, SDL_GPUShaderStage stage, uint32_t samplers,
 		uint32_t storageBuffers, uint32_t uniformBuffers) const
 	{
+#ifdef OC4_SPIRV_SHADERS
+		if (useVulkan())
+		{
+			(void)source;
+			const SpirvShader* spirv = nullptr;
+			for (const SpirvShader& candidate : kSpirvShaders)
+				if (std::strcmp(candidate.file, name) == 0 && std::strcmp(candidate.entry, entry) == 0)
+					spirv = &candidate;
+			if (!spirv)
+				throw std::runtime_error(std::format("{} {}: no SPIR-V translation (run tools/shaders/gen_spirv.py)", name, entry));
+			SDL_GPUShaderCreateInfo ci{};
+			ci.code = reinterpret_cast<const Uint8*>(spirv->code);
+			ci.code_size = spirv->size;
+			ci.entrypoint = entry;
+			ci.format = SDL_GPU_SHADERFORMAT_SPIRV;
+			ci.stage = stage;
+			ci.num_samplers = samplers;
+			ci.num_storage_buffers = storageBuffers;
+			ci.num_uniform_buffers = uniformBuffers;
+			SDL_GPUShader* shader = SDL_CreateGPUShader(m_device, &ci);
+			if (!shader)
+				throw std::runtime_error(std::format("{} {}: {}", name, entry, SDL_GetError()));
+			return shader;
+		}
+#endif
 #ifdef __APPLE__
 		// Metal: the same HLSL, translated ahead of time by tools/shaders/gen_msl.py.
 		(void)source;

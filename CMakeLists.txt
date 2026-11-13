@@ -192,6 +192,12 @@ add_library(oc4_render STATIC
 	src/render/Theme.cpp
 )
 target_link_libraries(oc4_render PUBLIC oc4_anim oc4_gfx oc4_media SDL3::SDL3-static PRIVATE oc4_options)
+# SPIR-V versions of the shaders (src/render/SpirvShaders.inc, from tools/shaders/gen_spirv.py): with them,
+# OC4_GPU=vulkan draws through SDL's Vulkan backend (MoltenVK on macOS). A start for Linux.
+option(OC4_SPIRV_SHADERS "Also build the SPIR-V shaders (OC4_GPU=vulkan selects SDL's Vulkan backend)" OFF)
+if(OC4_SPIRV_SHADERS)
+	target_compile_definitions(oc4_render PRIVATE OC4_SPIRV_SHADERS)
+endif()
 if(WIN32)
 	target_link_libraries(oc4_render PUBLIC d3dcompiler dwrite windowscodecs ole32)
 endif()
