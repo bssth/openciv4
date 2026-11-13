@@ -347,6 +347,7 @@ class CyGTabCtrl(object):
 		self._tab = 0
 		self._next = 1
 		self._shown = True
+		self._size = (W, H)
 		_state['ctrl'] = self
 		_schedule()
 
@@ -357,7 +358,10 @@ class CyGTabCtrl(object):
 
 	# the window
 	def setModal(self, i): pass
-	def setSize(self, w, h): pass
+	def setSize(self, w, h):
+		# (the window's size: the game's options 800 x 600, BUG's 950 x 715 for its 14 tabs)
+		self._size = (max(400, int(w)), max(300, int(h)))
+		_schedule()
 	def setControlsExpanding(self, b): pass
 	def setColumnLength(self, i): pass
 	def destroy(self):
@@ -534,9 +538,22 @@ def _height(n, w):
 	return h + 2 * pad
 
 
+def _natural(n):
+	"""A label's own width (CF_LABEL_DEFAULTSIZE, as BUG asks for its pull downs' titles)."""
+	try:
+		return oc4screens._textWidth(u'<font=2>' + n.text + u'</font>', _cpe.FontTypes.GAME_FONT) + 8
+	except Exception:
+		return 8 * len(n.text) + 8
+
+
 def _shares(n, w):
-	"""The widths of an horizontal box's children: separators and spacers narrow, the rest alike."""
+	"""The widths of an horizontal box's children: separators and spacers narrow, labels as wide
+	as their text (up to half the box), the rest alike."""
 	fixed = dict((c.id, 12) for c in n.children if c.kind in ('vsep', 'spacer'))
+	if len(n.children) > 1:
+		for c in n.children:
+			if c.kind == 'label':
+				fixed[c.id] = min(_natural(c), w / 2)
 	others = [c for c in n.children if c.id not in fixed]
 	rest = max(0, w - sum(fixed.values()) - _GAP * max(0, len(n.children) - 1))
 	each = rest / max(1, len(others))
@@ -582,7 +599,10 @@ def _place(screen, n, x, y, w, h):
 		screen.addEditBoxGFC(name, x, y, min(w, 260), 24, general, -1, -1, font)
 		screen.setEditBoxString(name, n.text)
 	elif k == 'dropdown':
-		screen.addDropDownBoxGFC(name, x, y, min(w, 260), general, -1, -1, font)
+		dw = min(w, 260)
+		if 'LAYOUT_RIGHT' in n.flags:
+			x += w - dw
+		screen.addDropDownBoxGFC(name, x, y, dw, general, -1, -1, font)
 		for i, item in enumerate(n.items):
 			screen.addPullDownString(name, item, i, i, i == int(n.value))
 	elif k in ('hslider', 'vslider'):
@@ -627,17 +647,52 @@ def relayout():
 	screen.setDimensions(0, 0, RW, RH)
 	screen.showScreen(_cpe.PopupStates.POPUPSTATE_IMMEDIATE, False)
 	screen.setCloseOnEscape(True)
-	x0, y0 = (RW - W) / 2, max(0, (RH - H) / 2)
-	screen.addPanel('OptBack', u'', u'', True, False, x0, y0, W, H, _cpe.PanelStyles.PANEL_STYLE_MAIN)
-	screen.setLabel('OptTitle', 'Background', u'<font=3b>' + ctrl._title + u'</font>', 1 << 2, x0 + W / 2, y0 + 10, 0,
+	# (the size the script asked for, setSize, kept on the display)
+	w, h = min(ctrl._size[0], RW), min(ctrl._size[1], RH)
+	x0, y0 = (RW - w) / 2, max(0, (RH - h) / 2)
+	screen.addPanel('OptBack', u'', u'', True, False, x0, y0, w, h, _cpe.PanelStyles.PANEL_STYLE_MAIN)
+	screen.setLabel('OptTitle', 'Background', u'<font=3b>' + ctrl._title + u'</font>', 1 << 2, x0 + w / 2, y0 + 10, 0,
 		_cpe.FontTypes.TITLE_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
-	# the tabs
-	tw = (W - 20) / max(1, len(ctrl._tabs))
-	for i, (form, label) in enumerate(ctrl._tabs):
-		screen.setButtonGFC('OptTab%d' % i, label, '', x0 + 10 + i * tw, y0 + 38, tw - 4, 28, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1,
-			_cpe.ButtonStyles.BUTTON_STYLE_STANDARD)
+	# the tabs: each as wide as its label, in as many rows as they need (BUG's 14 do not fit one),
+	# each row stretched across the window
+	y = _tabRows(screen, ctrl, x0 + 10, y0 + 38, w - 20)
 	form = ctrl._tabs[min(ctrl._tab, len(ctrl._tabs) - 1)][0]
-	_place(screen, form, x0 + 14, y0 + 76, W - 28, H - 90)
+	_place(screen, form, x0 + 14, y + 10, w - 28, h - (y - y0) - 24)
+
+
+_TAB_HEIGHT = 28
+
+
+def _tabWidth(label):
+	try:
+		return oc4screens._textWidth(label, _cpe.FontTypes.GAME_FONT) + 24
+	except Exception:
+		return 9 * len(label) + 24
+
+
+def _tabRows(screen, ctrl, x, y, width):
+	"""Lays the tab buttons out in rows; returns where the row under the last one would start."""
+	rows, row, used = [], [], 0
+	for i, (form, label) in enumerate(ctrl._tabs):
+		tw = _tabWidth(label)
+		if row and used + tw > width:
+			rows.append(row)
+			row, used = [], 0
+		row.append((i, label, tw))
+		used += tw + 4
+	if row:
+		rows.append(row)
+	for r in rows:
+		natural = sum(tw for i, label, tw in r) + 4 * (len(r) - 1)
+		extra = (width - natural) / max(1, len(r)) if len(rows) == 1 or r is not rows[-1] else 0
+		cx = x
+		for i, label, tw in r:
+			bw = tw + extra
+			screen.setButtonGFC('OptTab%d' % i, label, '', cx, y, bw, _TAB_HEIGHT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1,
+				_cpe.ButtonStyles.BUTTON_STYLE_STANDARD)
+			cx += bw + 4
+		y += _TAB_HEIGHT + 4
+	return y
 
 
 def handleInput(args):
