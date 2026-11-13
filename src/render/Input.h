@@ -22,6 +22,7 @@ namespace oc4::render
 	Modifiers heldModifiers();
 	bool keyHeld(unsigned key);
 	bool mouseHeld(bool left);
+	extern bool padHeld[2]; // (a gamepad's buttons held as the mouse's: left, right; PadMap.h)
 
 	// The key's code above of an SDL keycode; 0 none.
 	unsigned keyOfSdl(uint32_t keycode);

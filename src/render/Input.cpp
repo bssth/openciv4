@@ -104,8 +104,12 @@ namespace oc4::render
 		return sc != SDL_SCANCODE_UNKNOWN && int(sc) < count && state[sc];
 	}
 
+	bool padHeld[2] = {}; // (MapWindow's onPadButton)
+
 	bool mouseHeld(bool left)
 	{
+		if (padHeld[left ? 0 : 1])
+			return true;
 		return (SDL_GetMouseState(nullptr, nullptr) & (left ? SDL_BUTTON_LMASK : SDL_BUTTON_RMASK)) != 0;
 	}
 }
