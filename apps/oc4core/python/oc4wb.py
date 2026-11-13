@@ -318,6 +318,21 @@ def _shown():
 	return None
 
 
+def _top(screen):
+	"""Where the palette starts: under the script's own side menu (setSideMenu: its buttons, then
+	the bottom panel of the player's or the map's pull downs, 45 or 85 high), as the original
+	places its tab control; not over those pull downs."""
+	top = 86
+	try:
+		for name in ('WorldBuilderBackgroundPanel', 'WorldBuilderBackgroundBottomPanel'):
+			w = screen._s.get(name)
+			if w is not None and w.shown and w.mode == 'abs':
+				top = max(top, w.y + w.h + 2)
+	except Exception:
+		pass
+	return top
+
+
 def _draw():
 	try:
 		if not oc4host.ui_world_builder():
@@ -332,7 +347,7 @@ def _draw():
 		width = _wb().iScreenWidth
 	except Exception:
 		width = 228
-	x0, y0 = W - width, 86
+	x0, y0 = W - width, _top(screen)
 	if ctrl is not None:
 		screen.addPanel(_add('OC4WBPalette'), u'', u'', True, False, x0, y0, width, H - y0 - 4, _cpe.PanelStyles.PANEL_STYLE_MAIN)
 		y = y0 + 6

@@ -1664,8 +1664,12 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 				_display_widget(s, cw, left, top, inner, childFlow, out)
 		if scrolls:
 			held = [i for i in out[first:] if i[1] != 'scrollbar']
-			w.extent = max([i[5] for i in held] + [childFlow[1]]) + 4 - top
-			w.hextent = max([i[4] for i in held] + [left]) + 4 - left
+			# (the margin below and right of what it holds only once that overflows: a strip of
+			# buttons as big as its panel, the WorldBuilder's load/save one, has no scroll bars)
+			extent = max([i[5] for i in held] + [childFlow[1]]) - top
+			hextent = max([i[4] for i in held] + [left]) - left
+			w.extent = extent + 4 if extent > height else extent
+			w.hextent = hextent + 4 if hextent > width else hextent
 			_scrolls(w, x, y, x + width, y + height, s.id, _LIST_ROW, out, True)
 
 
