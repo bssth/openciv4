@@ -547,12 +547,12 @@ def _natural(n):
 
 
 def _shares(n, w):
-	"""The widths of an horizontal box's children: separators and spacers narrow, labels as wide
-	as their text (up to half the box), the rest alike."""
+	"""The widths of an horizontal box's children: separators and spacers narrow, labels of their
+	default size (CF_LABEL_DEFAULTSIZE) as wide as their text (up to half the box), the rest alike."""
 	fixed = dict((c.id, 12) for c in n.children if c.kind in ('vsep', 'spacer'))
 	if len(n.children) > 1:
 		for c in n.children:
-			if c.kind == 'label':
+			if c.kind == 'label' and 'CF_LABEL_DEFAULTSIZE' in c.flags:
 				fixed[c.id] = min(_natural(c), w / 2)
 	others = [c for c in n.children if c.id not in fixed]
 	rest = max(0, w - sum(fixed.values()) - _GAP * max(0, len(n.children) - 1))
@@ -657,7 +657,7 @@ def relayout():
 	# each row stretched across the window
 	y = _tabRows(screen, ctrl, x0 + 10, y0 + 38, w - 20)
 	form = ctrl._tabs[min(ctrl._tab, len(ctrl._tabs) - 1)][0]
-	_place(screen, form, x0 + 14, y + 10, w - 28, h - (y - y0) - 24)
+	_place(screen, form, x0 + 14, y + 6, w - 28, h - (y + 6 - y0) - 14)
 
 
 _TAB_HEIGHT = 28
@@ -672,6 +672,14 @@ def _tabWidth(label):
 
 def _tabRows(screen, ctrl, x, y, width):
 	"""Lays the tab buttons out in rows; returns where the row under the last one would start."""
+	n = len(ctrl._tabs)
+	tw = width / max(1, n)
+	if all(_tabWidth(label) <= tw - 4 for form, label in ctrl._tabs):
+		# (all fit alike in one row: one row of equal tabs, the game's own options screen)
+		for i, (form, label) in enumerate(ctrl._tabs):
+			screen.setButtonGFC('OptTab%d' % i, label, '', x + i * tw, y, tw - 4, _TAB_HEIGHT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1,
+				_cpe.ButtonStyles.BUTTON_STYLE_STANDARD)
+		return y + _TAB_HEIGHT + 4
 	rows, row, used = [], [], 0
 	for i, (form, label) in enumerate(ctrl._tabs):
 		tw = _tabWidth(label)
