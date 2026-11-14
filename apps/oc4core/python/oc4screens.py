@@ -88,7 +88,7 @@ class _Widget(object):
 	__slots__ = ('name', 'kind', 'parent', 'mode', 'x', 'y', 'z', 'w', 'h', 'style', 'pstyle', 'text', 'help', 'tex', 'tex2',
 		'wt', 'd1', 'd2', 'opt', 'flags', 'font', 'shown', 'enabled', 'state', 'hittest', 'seq', 'vertical', 'scroll', 'children',
 		'bars', 'lists', 'columns', 'rows', 'headers', 'iconw', 'iconh', 'items', 'selected', 'color', 'size', 'defw', 'defh', 'points',
-		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset')
+		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed')
 
 	def __init__(self, name, kind):
 		self.name = name
@@ -113,6 +113,8 @@ class _Widget(object):
 		self.vertical = True
 		self.scroll = False
 		self.children = []
+		self.maxChars = 0      # an edit box's: at most this many characters (0: any)
+		self.allowed = None    # ... and only these (None: any)
 		self.bars = None       # stacked bars: [[percent, (r, g, b, a)], ...]
 		self.lists = None      # multi lists: [[(texture, wt, d1, d2, option, disabledTexture), ...], ...]
 		self.columns = None    # tables: [[header, width, right], ...]
@@ -1246,7 +1248,17 @@ class CyGInterfaceScreen(object):
 		w = self._s.get(szName)
 		return w.text if w is not None else u''
 
-	def setEditBoxMaxCharCount(self, *args): pass
+	def setEditBoxMaxCharCount(self, szName, iMaxCharCount=0, *args):
+		w = self._s.get(szName)
+		if w is not None:
+			w.maxChars = max(0, _int(iMaxCharCount, 0))
+
+	def setEditBoxCharacters(self, szName, szAllowed):
+		"""openciv4's own: the characters typing puts in the edit box (u'0123456789': digits only)."""
+		w = self._s.get(szName)
+		if w is not None:
+			w.allowed = _text(szAllowed) if szAllowed else None
+
 	def setEditBoxTextColor(self, *args): pass
 
 	def addSlider(self, szName, iX, iY, iWidth, iHeight, iDefault, iMin, iMax, eWidgetType=-1, iData1=-1, iData2=-1, bIsVertical=False):
@@ -1869,7 +1881,7 @@ def typeIntoEdit(text):
 			value = value[:-1]
 		elif c in (u'\r', u'\x1b'):
 			_editFocus[0] = None
-		elif c >= u' ':
+		elif c >= u' ' and (w.allowed is None or c in w.allowed) and (not w.maxChars or len(value) < w.maxChars):
 			value += c
 	_set(w, 'text', value)
 	_changed()

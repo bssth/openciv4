@@ -604,7 +604,7 @@ def _customPage(screen, W, H):
 	perColumn = (len(options) + 1) / 2
 	below = 80 + perColumn * (box + 1) + 16
 	rowH = max(26, min(36, (y + h - 72 - 12 - ptop - below) / shown))
-	parts = [0.21, 0.14, 0.36, 0.145, 0.145] # status, team, civilization, leader, difficulty
+	parts = [0.21, 0.14, 0.36, 0.145, 0.145] # status, team, leader, civilization, difficulty
 	gap = 8
 	inner = pw - 16 - gap * (len(parts) - 1)
 	widths = [int(inner * f) for f in parts]
@@ -632,17 +632,14 @@ def _customPage(screen, W, H):
 		teams = [(u'Team %d' % (t + 1), t) for t in range(len(slots))]
 		_pullDown(screen, 'CGTeam%d' % p, cols[1], dy, widths[1], teams, slot['team'])
 		items['CGTeam%d' % p] = [d for t, d in teams]
-		civs = [(random, '')] + (p == 0 and human or ai)
-		_pullDown(screen, 'CGCiv%d' % p, cols[2], dy, widths[2], civs, slot['civ'])
-		items['CGCiv%d' % p] = [d for t, d in civs]
-		leaders = [(random, '')]
-		if slot['civ'] or anyCiv:
-			leaders += _civLeaders(slot['civ'], anyCiv)
-		else:
-			# (a leader first: all the slot's civilizations' leaders, and choosing one chooses its civilization)
-			leaders += _leadersOf([t for n, t in (p == 0 and human or ai)])
-		_pullDown(screen, 'CGLeader%d' % p, cols[3], dy, widths[3], leaders, slot['leader'])
+		# (every leader the slot can have: choosing one chooses its civilization, unless any
+		# leader may lead any civilization)
+		leaders = [(random, '')] + (anyCiv and _civLeaders('', True) or _leadersOf([t for n, t in (p == 0 and human or ai)]))
+		_pullDown(screen, 'CGLeader%d' % p, cols[2], dy, widths[2], leaders, slot['leader'])
 		items['CGLeader%d' % p] = [d for t, d in leaders]
+		civs = [(random, '')] + (p == 0 and human or ai)
+		_pullDown(screen, 'CGCiv%d' % p, cols[3], dy, widths[3], civs, slot['civ'])
+		items['CGCiv%d' % p] = [d for t, d in civs]
 		if p == 0:
 			handicaps = [(gc.getHandicapInfo(i).getDescription(), gc.getHandicapInfo(i).getType()) for i in range(gc.getNumHandicapInfos())]
 			_pullDown(screen, 'CGhandicap', cols[4], dy, widths[4], handicaps, c['handicap'])
@@ -702,6 +699,8 @@ def _customPage(screen, W, H):
 	_label(screen, 'CGStartPointsLabel', advancedStart and pointsLabel or grey(pointsLabel), bx[1] + bwidths[1] - 100, ctop + 3, 2, 1 << 1)
 	screen.addEditBoxGFC('CGStartPoints', bx[1] + bwidths[1] - 90, ctop, 70, 26, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1, _cpe.FontTypes.GAME_FONT)
 	screen.setEditBoxString('CGStartPoints', u'%d' % c.get('startPoints', 600))
+	screen.setEditBoxMaxCharCount('CGStartPoints', 6, 6)
+	screen.setEditBoxCharacters('CGStartPoints', u'0123456789')
 	screen.enable('CGStartPoints', advancedStart)
 	otop = ctop + 40
 	avail = bbottom - otop - 8
@@ -770,7 +769,8 @@ def _keepCustom():
 	c['victories'] = [gc.getVictoryInfo(v).getType() for v in range(gc.getNumVictoryInfos())
 		if (screen.getCheckBoxState('CGVictory%d' % v) if v in shownVictories else gc.getVictoryInfo(v).getType() in c['victories'])]
 	try:
-		c['startPoints'] = max(0, int(_u(screen.getEditBoxString('CGStartPoints')).strip()))
+		points = _u(screen.getEditBoxString('CGStartPoints')).strip()
+		c['startPoints'] = min(999999, max(0, int(points or u'0')))
 	except (ValueError, TypeError, AttributeError):
 		pass
 	shown = set(_gameOptions())
@@ -782,6 +782,7 @@ def _customChanged(function, id):
 	"""A pull down or check box of the custom page changed: what follows from it, then the page again."""
 	c = _custom()
 	size = c['size']
+	anyBefore = _leadAnyCiv(c)
 	if function in ('CGVictoryLabel', 'CGOptionLabel'):
 		# (a click on the text turns its box)
 		name = (function == 'CGVictoryLabel' and 'CGVictory%d' or 'CGOption%d') % id
@@ -792,11 +793,19 @@ def _customChanged(function, id):
 		c['touched'] = True
 	if c['size'] != size and not c['touched']:
 		_openSlots(c, _defaultPlayers(c['size']))
-	if function == 'CGLeader' and not _leadAnyCiv(c):
-		# (a leader chosen with the civilization at random: the leader's civilization)
+	anyCiv = _leadAnyCiv(c)
+	if function == 'CGLeader' and not anyCiv:
+		# (a leader chosen: the leader's civilization)
 		slot = c['slots'][id]
-		if slot['leader'] and not slot['civ']:
+		if slot['leader']:
 			slot['civ'] = _civOfLeader(slot['leader'], [t for n, t in _civs(id == 0)])
+	elif function == 'CGCiv':
+		# (a civilization chosen: its leader at random)
+		c['slots'][id]['leader'] = ''
+	if anyCiv and not anyBefore:
+		# (Unrestricted Leaders turned on: every leader at random, the civilizations kept)
+		for slot in c['slots']:
+			slot['leader'] = ''
 	# (a leader the civilization cannot have, now: at random)
 	anyCiv = _leadAnyCiv(c)
 	for slot in c['slots']:
