@@ -70,7 +70,7 @@ cbuffer Object : register(b1, UNIFORMS)
 	uint flags;         // bit0 base map, bit1 alpha test, bits2-3 vertex color mode, bit4 lit, bit5 decal, bit6 team colour base, bit7 skinned, bit8 on the ground, bit11 a leader's shading
 	uint alphaFunc;
 	float alphaRef;
-	float objectPad;
+	uint treesCut;      // a forest piece (its vertices' red: the tree, 1-based): trees 1..32 by bit not drawn
 };
 
 cbuffer Bones : register(b2, UNIFORMS)
@@ -145,6 +145,7 @@ struct PSIn
 	float2 uv  : TEXCOORD0;
 	float4 col : COLOR0;
 	float3 world : TEXCOORD1;
+	float2 flat : TEXCOORD2; // the world position before the globe bends it
 };
 
 float3 xformPoint(float4 r0, float4 r1, float4 r2, float3 p) { float4 h = float4(p, 1); return float3(dot(r0, h), dot(r1, h), dot(r2, h)); }
@@ -172,12 +173,19 @@ PSIn VSMain(VSIn i)
 	if (flags & 256) // laid on the terrain (roads): heights are over it
 		p.z += groundAt(p.xy);
 	PSIn o;
+	o.flat = p.xy;
 	p = globeBend(p);
 	o.pos = mul(float4(p, 1), viewProj);
 	o.nrm = n;
 	o.uv = i.uv;
 	o.col = i.col;
 	o.world = p;
+	if (treesCut != 0)
+	{
+		const uint tree = uint(round(i.col.r * 255));
+		if (tree >= 1 && tree <= 32 && ((treesCut >> (tree - 1)) & 1))
+			o.pos = float4(0, 0, -1, 1); // (all its vertices to one point behind the near plane: nothing)
+	}
 	return o;
 }
 
@@ -198,6 +206,16 @@ bool passes(uint func, float a, float ref)
 
 float4 PSMain(PSIn i, bool front : SV_IsFrontFace) : SV_Target
 {
+	// A piece laid on the terrain (a river at the map's edge, its delta) ends where the map does.
+	// (the map: the terrain's heights grid; around the globe it wraps, and across the poles where
+	// the fog of war says so)
+	if ((flags & 256) && groundGrid.y > 0)
+	{
+		const float2 size = (groundGrid.yz - 1) / groundGrid.x;
+		const bool wrapY = fogGrid.x > 0 && (uint(fogGrid.w) & 2);
+		if ((groundGrid.w <= 0 && (i.flat.x < 0 || i.flat.x > size.x)) || (!wrapY && (i.flat.y < 0 || i.flat.y > size.y)))
+			discard;
+	}
 	float3 n = normalize(i.nrm);
 	if (!front)
 		n = -n;
@@ -336,7 +354,7 @@ float4 PSOverlay(Out p) : SV_Target
 			uint32_t flags;
 			uint32_t alphaFunc;
 			float alphaRef;
-			float pad;
+			uint32_t treesCut;
 		};
 
 		struct OverlayConstants
@@ -1014,6 +1032,7 @@ float4 PSOverlay(Out p) : SV_Target
 			(m_inView && m_viewOnNothing && !m.alphaBlend ? 1024u : 0u) | (mesh.leader[0] ? 2048u : 0u);
 		oc.alphaFunc = static_cast<uint32_t>(m.alphaFunc);
 		oc.alphaRef = m.alphaRef;
+		oc.treesCut = m.treesCut;
 		SDL_PushGPUVertexUniformData(m_cmd, 1, &oc, sizeof(oc));
 		SDL_PushGPUFragmentUniformData(m_cmd, 1, &oc, sizeof(oc));
 		if (mesh.skinned)

@@ -296,11 +296,20 @@ namespace oc4::render
 			const Vec3 size = view->worldSize();
 			if (size.x <= 0)
 				return;
+			// (until the team's map is centred: within some plots of what it has seen, past the map's
+			// edge into the black too, so that where the map ends does not show; then on the map)
+			constexpr float kRoam = 10;
+			const auto seen = view->seenBounds();
+			const float lx = seen ? (float(seen->at(0)) - kRoam) * plot() : 0, hx = seen ? (float(seen->at(2)) + 1 + kRoam) * plot() : size.x;
+			const float ly = seen ? (float(seen->at(1)) - kRoam) * plot() : 0, hy = seen ? (float(seen->at(3)) + 1 + kRoam) * plot() : size.y;
 			if (view->map().wrapX)
 				camera.target.x = std::fmod(std::fmod(camera.target.x, size.x) + size.x, size.x);
 			else
-				camera.target.x = std::clamp(camera.target.x, 0.0f, size.x);
-			camera.target.y = std::clamp(camera.target.y, 0.0f, size.y);
+				camera.target.x = std::clamp(camera.target.x, lx, hx);
+			if (view->map().wrapY)
+				camera.target.y = std::fmod(std::fmod(camera.target.y, size.y) + size.y, size.y);
+			else
+				camera.target.y = std::clamp(camera.target.y, ly, hy);
 			// A fixed focus plane: following the ground under the centre made the view rise and
 			// fall while panning over hills and peaks. Land sits near 0 and peaks stay well below
 			// the eye even at the closest zoom.
@@ -1305,7 +1314,8 @@ namespace oc4::render
 		{
 			const GlobeShape g = globeShape();
 			renderer->setGlobe(g.x, g.y, g.radius, g.wrapWidth);
-			renderer->beginFrame(camera, { 0.05f, 0.07f, 0.10f });
+			// (beyond the map: black as the ground not seen, until the team's map is centred)
+			renderer->beginFrame(camera, view->seenBounds() ? Vec3{ 0, 0, 0 } : Vec3{ 0.05f, 0.07f, 0.10f });
 			view->draw();
 			renderer->endFrame();
 			syncHeads();
@@ -1831,7 +1841,14 @@ namespace oc4::render
 			overlay->image(pixels, uint32_t(map.width), uint32_t(map.height), version, x0, y0, x1, y1);
 			// The ground under the screen's corners.
 			const Vec3 size = view->worldSize();
-			const auto toMini = [&](Vec3 p) { return std::pair{ x0 + p.x / size.x * w, y1 - p.y / size.y * h }; };
+			// (on a minimap moved so that what the team has seen is in its middle: the camera's ground
+			// where it is shown, the screen's corners kept around it)
+			const auto [shiftX, shiftY] = view->minimapShift();
+			const float offX = float(shiftX) / float(map.width) * size.x, offY = float(shiftY) / float(map.height) * size.y;
+			const auto turned = [](float v, float n) { return n > 0 ? v - n * std::floor(v / n) : v; };
+			const float tx = map.wrapX ? turned(camera.target.x - offX, size.x) - camera.target.x : -offX;
+			const float ty = map.wrapY ? turned(camera.target.y - offY, size.y) - camera.target.y : -offY;
+			const auto toMini = [&](Vec3 p) { return std::pair{ x0 + (p.x + tx) / size.x * w, y1 - (p.y + ty) / size.y * h }; };
 			const int sw = int(overlay->screenWidth()), sh = int(overlay->screenHeight());
 			const int sx[4] = { 0, sw - 1, sw - 1, 0 }, sy[4] = { 0, 0, sh - 1, sh - 1 };
 			std::pair<float, float> c[4];
@@ -1840,9 +1857,11 @@ namespace oc4::render
 				const auto g = groundAt(sx[i], sy[i], camera.target.z);
 				c[i] = toMini(g ? *g : camera.target);
 			}
+			// (kept to the box only: kept to the map, moved, it would show where the map ends)
+			const float cx0 = x0, cx1 = x1, cy0 = y0, cy1 = y1;
 			for (int i = 0; i < 4; ++i)
-				overlay->line(std::clamp(c[i].first, x0, x1), std::clamp(c[i].second, y0, y1), std::clamp(c[(i + 1) % 4].first, x0, x1),
-					std::clamp(c[(i + 1) % 4].second, y0, y1), { 1, 1, 1 }, 0.9f, 1.2f);
+				overlay->line(std::clamp(c[i].first, cx0, cx1), std::clamp(c[i].second, cy0, cy1), std::clamp(c[(i + 1) % 4].first, cx0, cx1),
+					std::clamp(c[(i + 1) % 4].second, cy0, cy1), { 1, 1, 1 }, 0.9f, 1.2f);
 		}
 
 		// A screen's minimap, filling its place (its own map's proportions are the screen's).
@@ -1899,8 +1918,18 @@ namespace oc4::render
 		void jumpFromMinimap(int x, int y)
 		{
 			const Vec3 size = view->worldSize();
+			const auto [shiftX, shiftY] = view->minimapShift();
+			const auto& map = view->map();
 			camera.target.x = (float(x) - minimapRect[0]) / (minimapRect[2] - minimapRect[0]) * size.x;
 			camera.target.y = (minimapRect[3] - float(y)) / (minimapRect[3] - minimapRect[1]) * size.y;
+			if (shiftX && map.width > 0)
+				camera.target.x += float(shiftX) / float(map.width) * size.x;
+			if (shiftX && map.wrapX)
+				camera.target.x = std::fmod(camera.target.x, size.x);
+			if (shiftY && map.height > 0)
+				camera.target.y += float(shiftY) / float(map.height) * size.y;
+			if (shiftY && map.wrapY)
+				camera.target.y = std::fmod(camera.target.y, size.y);
 			keepOnMap();
 		}
 

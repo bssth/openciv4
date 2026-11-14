@@ -433,6 +433,7 @@ namespace oc4::host
 		s.height = map.getGridHeight();
 		s.wrapX = map.isWrapX();
 		s.wrapY = map.isWrapY();
+		s.minimapCentered = game.getActivePlayer() == NO_PLAYER || game.shouldCenterMinimap();
 		s.plotSize = GC.getPLOT_SIZE();
 		const int landscape = GC.getActiveLandscapeID();
 		if (landscape >= 0 && landscape < GC.getNumLandscapeInfos())

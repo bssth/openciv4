@@ -290,11 +290,11 @@ namespace oc4::host
 
 		std::string narrow(const std::wstring& w)
 		{
-			// The DLL's narrow strings are Windows-1252; Civ4 text is Latin-1 compatible.
+			// The DLL's narrow strings are Windows-1252.
 			std::string s;
 			s.reserve(w.size());
 			for (wchar_t c : w)
-				s.push_back(c < 256 ? static_cast<char>(c) : '?');
+				s.push_back(wideToWindows1252(c));
 			return s;
 		}
 
