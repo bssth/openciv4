@@ -2,11 +2,21 @@
 //
 //   oc4core [--civ4 <root>] [--mod <Mods\\Name> | <mod folder>] [--python-home <dir>] [--log-dir <dir>]
 //           [--turns N [--map Continents] [--size SMALL] [--players N] [--seed N]]
+//           [--option GAMEOPTION_X[=0|1]]... [--victories VICTORY_A,VICTORY_B | none] [--map-option N=V]...
+//           [--slot N=human|ai|closed[:CIV[:LEADER[:TEAM]]]]... [--advanced-start-points N]
 //           [--load <file.CivBeyondSwordSave>] [--save <file.CivBeyondSwordSave> [--save-at TURN]]
 //           [--profile] [--profile-out <stacks.folded>] [--rand-log] [--exec <script.py>] [--exec-first <script.py>]
 //           [--menu | --view | --play [--screenshot <file.png>] [--view-size WxH] [--ui-scale PERCENT] [--show-fps] [--wasd-pan] [--auto-end-turn] [--no-edge-scroll] [--look X,Y[,distance in plots]] [--keys <window keys>]
 //            [--view-seconds S]]
 //           [--host PORT [--humans N] | --join HOST:PORT]
+//
+// A new game's setup beyond the world: --option turns a game option on (=0: off; else the
+// XML's default), --victories the only victory conditions (else all), --map-option sets the
+// map script's option N to its value V (both from 0), --slot changes a player slot (0 the
+// human's, the others AI; an empty part is random, the team its own), --advanced-start-points
+// the points of Advanced Start (when it is on; else 600, as the original's). The prefixes
+// GAMEOPTION_, VICTORY_, CIVILIZATION_ and LEADER_ may be left out. The menu's new game
+// takes those the menu does not choose.
 //
 // --log-dir enables the DLL's logs (xml.log, ...), like LoggingEnabled = 1 in CivilizationIV.ini;
 // --rand-log adds every synchronised random number to MessageControl.log there.
@@ -21,7 +31,7 @@
 // opens it, Esc closes it), or with --own-interface the window's simple one.
 // --keys are typed in on your turns then (letters and Space as keys, '^', '@' and '+' before
 // one hold Ctrl, Alt and Shift, '>' ends the turn, '~' is Esc, "(x,y)" right clicks that plot,
-// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e" and "%t" type an arrow, Return or Tab into the window, "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
+// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e", "%t" and "%b" type an arrow, Return, Tab or Backspace into the window, "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
 // popup nothing answers gets its first, 'text' goes into its next edit box, "{Name}" or
 // "{Name/part}" clicks the interface's widget so named, "^{Name}" with Ctrl held, "?{Name}" rests
 // the mouse on it); with
@@ -32,7 +42,8 @@
 // --menu (and no options at all) opens the window on a temporary main menu: a new game, with
 // the leader, map script, world and difficulty to choose, or a saved one, played as with
 // --play then (its leading "{Name}" --keys click the menu's widgets: MenuNew, MenuLaunch, ...;
-// "{MenuLeader}{MenuLeader/3}" opens a pull down and picks its 4th item).
+// "{MenuLeader}{MenuLeader/3}" opens a pull down and picks its 4th item; "<x,y>" clicks that
+// pixel, 'text' types into the edit box clicked).
 //
 // Starts Python, publishes the DLL to it, initialises CvGlobals and loads all XML the
 // way the original engine does. With --turns it then starts a new game on a map
@@ -251,6 +262,22 @@ namespace
 				o.game.worldSize = "WORLDSIZE_" + next().string();
 			else if (a == L"--players")
 				o.game.players = std::stoi(next().wstring());
+			else if (a == L"--option")
+				o.game.options.push_back(host::setup::parseOption(next().string()));
+			else if (a == L"--advanced-start-points")
+				o.game.advancedStartPoints = host::setup::number(next().string(), "--advanced-start-points");
+			else if (a == L"--victories")
+				o.game.victories = host::setup::parseVictories(next().string());
+			else if (a == L"--map-option")
+			{
+				const auto [option, value] = host::setup::parseMapOption(next().string());
+				o.game.mapOptions.insert_or_assign(option, value);
+			}
+			else if (a == L"--slot")
+			{
+				auto [slot, set] = host::setup::parseSlot(next().string());
+				o.game.slots.insert_or_assign(slot, std::move(set));
+			}
 			else if (a == L"--load")
 				o.load = next();
 			else if (a == L"--host")
@@ -360,6 +387,7 @@ namespace
 		case 'r': return render::key::Right;
 		case 'e': return render::key::Return;
 		case 't': return render::key::Tab;
+		case 'b': return render::key::Back;
 		default: return 0;
 		}
 	}
@@ -1660,6 +1688,21 @@ namespace
 				keys.erase(0, 2);
 				typed = now;
 			}
+			// (a scripted menu: "<x,y>" clicks that pixel as the mouse does; 'text' is typed)
+			if (int px = 0, py = 0; keys.starts_with('<') && now - typed > std::chrono::milliseconds(400) &&
+				keys.find('>') != std::string::npos && std::sscanf(keys.c_str() + 1, "%d,%d", &px, &py) == 2)
+			{
+				window.mouseClick(px, py);
+				keys.erase(0, keys.find('>') + 1);
+				typed = now;
+			}
+			if (keys.starts_with('\'') && now - typed > std::chrono::milliseconds(400))
+				if (const size_t end = keys.find('\'', 1); end != std::string::npos)
+				{
+					window.typeText(keys.substr(1, end - 1));
+					keys.erase(0, end + 1);
+					typed = now;
+				}
 			// (a scripted menu: "{Name}" clicks that widget)
 			if (keys.starts_with('{') && now - typed > std::chrono::milliseconds(400))
 				if (const size_t end = keys.find('}'); end != std::string::npos)
@@ -2032,7 +2075,21 @@ int wmain(int argc, wchar_t** argv)
 					}
 					if (choice->kind == host::MenuChoice::Kind::NewGame)
 					{
+						// (what the command line chose and the menu does not: as chosen there)
+						const host::NewGameSettings asked = played.game;
 						played.game = choice->game;
+						if (played.game.players == 0)
+							played.game.players = asked.players;
+						if (played.game.options.empty())
+							played.game.options = asked.options;
+						if (played.game.victories.empty())
+							played.game.victories = asked.victories;
+						if (played.game.mapOptions.empty() && played.game.mapScript == asked.mapScript)
+							played.game.mapOptions = asked.mapOptions;
+						if (played.game.slots.empty())
+							played.game.slots = asked.slots;
+						if (played.game.advancedStartPoints < 0)
+							played.game.advancedStartPoints = asked.advancedStartPoints;
 						break;
 					}
 					if (choice->kind == host::MenuChoice::Kind::Mod)

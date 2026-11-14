@@ -77,6 +77,7 @@ namespace oc4::render
 		{
 			std::array<Skin, size_t(State::Count)> skin;    // its background
 			std::array<Bitmap, size_t(State::Count)> image; // its picture (an image button's)
+			std::array<Skin, size_t(State::Count)> mark;    // a check box's or radio button's mark, over it
 			// Its label's colour and shadow in each state (a stone button's are dark on light).
 			bool coloured = false;
 			std::array<Color, size_t(State::Count)> text{}, shadow{};

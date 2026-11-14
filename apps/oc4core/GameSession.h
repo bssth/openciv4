@@ -11,6 +11,8 @@
 #include <functional>
 #include <string>
 
+#include "NewGameSettings.h"
+
 class CvDLLFAStarIFaceBase;
 
 namespace oc4::host
@@ -18,20 +20,6 @@ namespace oc4::host
 	class PythonHost;
 	struct SaveFile;
 	class Utility;
-
-	struct NewGameSettings
-	{
-		std::string mapScript = "Continents"; // module name of a PublicMaps script
-		std::string worldSize = "WORLDSIZE_SMALL";
-		std::string climate = "CLIMATE_TEMPERATE";
-		std::string seaLevel = "SEALEVEL_MEDIUM";
-		std::string era = "ERA_ANCIENT";
-		std::string gameSpeed = "GAMESPEED_NORMAL";
-		std::string handicap = "HANDICAP_NOBLE";
-		std::string civilization, leader; // the human's (CIVILIZATION_..., LEADER_...); empty: as the others, at random
-		int players = 0; // 0: the world size's default
-		unsigned int seed = 1;
-	};
 
 	class GameSession
 	{

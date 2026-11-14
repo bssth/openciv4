@@ -794,6 +794,41 @@ if _walls:
 				text("leader", choice.game.leader);
 				if (d.contains("seed"))
 					choice.game.seed = d["seed"].cast<unsigned>();
+				if (d.contains("players"))
+					choice.game.players = d["players"].cast<int>();
+				if (d.contains("advancedStartPoints"))
+					choice.game.advancedStartPoints = d["advancedStartPoints"].cast<int>();
+				// {GAMEOPTION_...: on}, [VICTORY_...], {option: value}, {slot: {status, civ, leader, team}}
+				if (d.contains("options"))
+					for (const auto& [name, on] : d["options"].cast<py::dict>())
+						choice.game.options.emplace_back(name.cast<std::string>(), on.cast<bool>());
+				if (d.contains("victories"))
+				{
+					for (const py::handle v : d["victories"])
+						choice.game.victories.push_back(v.cast<std::string>());
+					if (choice.game.victories.empty())
+						choice.game.victories.push_back("NONE");
+				}
+				if (d.contains("mapOptions"))
+					for (const auto& [option, value] : d["mapOptions"].cast<py::dict>())
+						choice.game.mapOptions[option.cast<int>()] = value.cast<int>();
+				if (d.contains("slots"))
+					for (const auto& [slot, value] : d["slots"].cast<py::dict>())
+					{
+						const py::dict v = value.cast<py::dict>();
+						SlotSetting set;
+						const std::string status = v.contains("status") ? v["status"].cast<std::string>() : "ai";
+						set.status = status == "human" ? SlotSetting::Status::Human
+							: status == "closed"       ? SlotSetting::Status::Closed
+													   : SlotSetting::Status::AI;
+						if (v.contains("civ"))
+							set.civilization = v["civ"].cast<std::string>();
+						if (v.contains("leader"))
+							set.leader = v["leader"].cast<std::string>();
+						if (v.contains("team"))
+							set.team = v["team"].cast<int>();
+						choice.game.slots[slot.cast<int>()] = std::move(set);
+					}
 				if (d.contains("host"))
 					choice.host = d["host"].cast<int>();
 			}
@@ -1208,7 +1243,8 @@ if _walls:
 				item.text.clear();
 			}
 			const bool buttonLike = item.kind == Kind::ImageButton || item.kind == Kind::Button || item.kind == Kind::CheckBox ||
-				item.kind == Kind::Dropdown || item.kind == Kind::EndTurnButton || item.kind == Kind::Cell || item.kind == Kind::Scrollbar;
+				item.kind == Kind::Dropdown || item.kind == Kind::EndTurnButton || item.kind == Kind::Cell || item.kind == Kind::Scrollbar ||
+				item.kind == Kind::Edit;
 			// (a text, setText, is clicked as a button is: the scripts' "EXIT"s are texts)
 			item.mainInterface = !m_menu && info.screen == m_mainId;
 			item.interactive = hitTest != HITTEST_NOHIT && (buttonLike || item.kind == Kind::Text || item.kind == Kind::Movie || (info.widget >= 0 && info.widget != WIDGET_GENERAL) ||
@@ -1230,11 +1266,36 @@ if _walls:
 		m_mouse = window.mousePosition();
 		// A movie at its end: its screen hears NOTIFY_MOVIE_DONE.
 		constexpr int kMovieDone = 17;
+		// Keys typed into an edit box, and whether one takes them.
+		try
+		{
+			py::module_ screens = py::module_::import("oc4screens");
+			if (const std::wstring typed = window.takeUiTyped(); !typed.empty())
+				screens.attr("typeIntoEdit")(typed);
+			window.setUiTextFocus(screens.attr("editFocused")().cast<bool>());
+		}
+		catch (py::error_already_set& e)
+		{
+			printPythonError(e);
+		}
 		for (const std::string& file : window.takeMoviesDone())
 			if (const auto it = std::ranges::find(m_items, file, &Item::movie); it != m_items.end())
 				scriptInput(*it, kMovieDone, 0, 0, false, false, false, false);
 		for (const auto& click : window.takeUiClicks())
-			if (click.item >= 0 && size_t(click.item) < m_items.size())
+			if (click.item < 0)
+			{
+				// (a click on none of the widgets closes an open pull down's list, ends typing)
+				try
+				{
+					py::module_::import("oc4screens").attr("closeDropdown")();
+					py::module_::import("oc4screens").attr("focusEdit")(-1, "");
+				}
+				catch (py::error_already_set& e)
+				{
+					printPythonError(e);
+				}
+			}
+			else if (size_t(click.item) < m_items.size())
 			{
 				if (std::getenv("OC4_PLAY_LOG"))
 					std::printf("  mouse on %d/%s/%d\n", m_items[size_t(click.item)].screen, m_items[size_t(click.item)].name.c_str(), m_items[size_t(click.item)].part);
@@ -1278,6 +1339,8 @@ if _walls:
 			// (a button's click is heard, as the original's interface plays it)
 			if (it.kind == "button" || it.kind == "imagebutton" || it.kind == "checkbox" || it.kind == "endbutton" || it.kind == "dropdown" || it.kind == "option")
 				m_utility.sounds().play(it.kind == "checkbox" ? "AS2D_IF_CHECKBOX" : "AS2D_IF_SELECT");
+			// (a click on an edit box types into it; on anything else, into none)
+			screens.attr("focusEdit")(it.kind == "edit" && !right ? it.screen : -1, it.name);
 			if (it.kind == "header")
 			{
 				// A sorting table's header: its rows by that column (the engine's own; the script hears nothing).

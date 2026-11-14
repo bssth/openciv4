@@ -53,6 +53,12 @@ namespace oc4::render
 		// arrows choose instead of moving the map and Return and Space use what they chose. With
 		// no map behind it (the main menu) the arrows choose at once.
 		void setUiTakesKeys(bool takes, bool mapBehind = true);
+		// An edit box of the screens has the keys: what is typed (Backspace '\b', Enter '\r',
+		// Esc '\x1b') waits for takeUiTyped, and the game's hotkeys are left alone.
+		void setUiTextFocus(bool focus);
+		std::wstring takeUiTyped();
+		// Text typed as the keyboard types it (a scripted menu's 'text').
+		void typeText(const std::string& utf8);
 		// The keyboard's choice ends (a talk's answers changed: Return is the talk's again).
 		void clearKeyChoice();
 		void pressKey(unsigned key); // (as if typed)
@@ -315,7 +321,7 @@ namespace oc4::render
 		bool uiActive() const;
 		struct UiClick
 		{
-			int item = -1;
+			int item = -1; // -1: on the screens but on none of their widgets
 			bool right = false, shift = false, ctrl = false, alt = false;
 		};
 		std::vector<UiClick> takeUiClicks();

@@ -286,6 +286,8 @@ namespace oc4::render
 			const float ix = std::round(it.x0 + (w - iw) / 2), iy = std::round(it.y0 + (h - ih) / 2);
 			Theme::draw(o, image, ix, iy, ix + iw, iy + ih, it.alpha);
 		}
+		if (const Theme::Skin& mark = !b->mark[size_t(state)].empty() ? b->mark[size_t(state)] : b->mark[size_t(base)]; !mark.empty())
+			Theme::draw(o, mark, it.x0, it.y0, it.x1, it.y1, it.alpha);
 		return true;
 	}
 
@@ -300,6 +302,8 @@ namespace oc4::render
 	std::optional<MapWindow::UiClick> UiLayer::release(int x, int y, bool shift, bool ctrl, bool alt)
 	{
 		const int pressed = std::exchange(m_pressed, -1);
+		if (pressed < 0 && hit(x, y) < 0)
+			return MapWindow::UiClick{ -1, m_pressedRight, shift, ctrl, alt }; // (on no widget: an open list closes)
 		if (pressed < 0 || hit(x, y) != pressed || !m_items[size_t(pressed)].enabled)
 			return std::nullopt;
 		return MapWindow::UiClick{ pressed, m_pressedRight, shift, ctrl, alt };
@@ -428,8 +432,10 @@ namespace oc4::render
 				}
 				else if (!themed)
 				{
-					o.rect(x0, y0, x1, y1, hot ? Color{ 0.22f, 0.27f, 0.36f } : Color{ 0.12f, 0.14f, 0.2f }, 0.9f * alpha, 4);
-					o.frame(x0, y0, x1, y1, hot ? kHot : kEdge, 0.8f * alpha, 4, 1);
+					// (a disabled edit box greyed: its box and text fainter)
+					const float dim = it.kind == Kind::Edit && !it.enabled ? 0.45f : 1.0f;
+					o.rect(x0, y0, x1, y1, hot ? Color{ 0.22f, 0.27f, 0.36f } : Color{ 0.12f, 0.14f, 0.2f }, 0.9f * alpha * dim, 4);
+					o.frame(x0, y0, x1, y1, hot ? kHot : kEdge, 0.8f * alpha * dim, 4, 1);
 				}
 				float tx = x0 + 6;
 				if (!it.texture.empty() && icon(it.texture, x0 + 2, y0 + 2, x0 + h - 2, y1 - 2, alpha))
@@ -440,7 +446,7 @@ namespace oc4::render
 				const Theme::Button* look = themed && m_theme.loaded() ? m_theme.button(it.style) : nullptr;
 				const size_t st = !it.enabled ? 3 : hot ? 1 : 0;
 				Color colour = it.interactive && hot && !look ? kHot : kText;
-				float a = alpha;
+				float a = it.kind == Kind::Edit && !it.enabled ? 0.45f * alpha : alpha;
 				if (look && look->coloured)
 				{
 					colour = look->text[st];
