@@ -83,3 +83,8 @@ Next War starts, saves and reloads with both mod-path slash styles. Real two-cli
 BtS and Next War PitBoss runs pass, including timer expiry, reconnects, authentication
 and command rejection, pause and crash recovery. These are local integration checks
 using an owned installation; no game files are included in CI.
+
+The native Windows build and all 14 CTests pass in
+[fork CI](https://github.com/foofly/openciv4/actions/runs/43641935265). Path tests
+compare filesystem identity, so case-insensitive lookups can retain their requested
+spelling. The Ubuntu job installs the XTest headers needed to build SDL's X11 backend.
