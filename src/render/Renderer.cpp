@@ -1121,6 +1121,10 @@ float4 PSOverlay(Out p) : SV_Target
 			return !m.bones.empty() && size_t(m.bones[0]) < world.size() ? world[size_t(m.bones[0])].translation : m.bindCenter;
 		};
 		size_t deferredWorld = SIZE_MAX;
+		// A piece laid on the ground (a river's water and its rapids over it, a road) is drawn in
+		// its own order, all at one distance: by each mesh's own centre a river's rapids came
+		// before its water whenever they lay beyond it, and the water hid them.
+		float groundDistance = -1;
 		for (size_t i = 0; i < model.m_meshes.size(); ++i)
 		{
 			const GpuModel::Mesh& mesh = model.m_meshes[i];
@@ -1139,7 +1143,9 @@ float4 PSOverlay(Out p) : SV_Target
 				deferredWorld = m_deferredWorlds.size();
 				m_deferredWorlds.emplace_back(world.begin(), world.end());
 			}
-			m_deferred.push_back({ length(centerOf(mesh) - eye), &mesh, deferredWorld, m_deferredMaterials.size(), teamColor, onGround });
+			if (onGround && groundDistance < 0)
+				groundDistance = length(centerOf(mesh) - eye);
+			m_deferred.push_back({ onGround ? groundDistance : length(centerOf(mesh) - eye), &mesh, deferredWorld, m_deferredMaterials.size(), teamColor, onGround });
 			m_deferredMaterials.push_back(material);
 		}
 	}
@@ -1168,7 +1174,7 @@ float4 PSOverlay(Out p) : SV_Target
 				m_particleVb = createBuffer(SDL_GPU_BUFFERUSAGE_VERTEX, nullptr, std::max(bytes * 2, 256u * 1024));
 			upload(m_particleVb->buffer, 0, particles.data(), bytes);
 		}
-		std::ranges::sort(m_deferred, std::greater<>(), &Deferred::distance);
+		std::ranges::stable_sort(m_deferred, std::greater<>(), &Deferred::distance);
 		for (const auto& d : m_deferred)
 			drawMesh(*d.mesh, m_deferredMaterials[d.material], m_deferredWorlds[d.world], d.teamColor, d.onGround);
 		m_deferred.clear();

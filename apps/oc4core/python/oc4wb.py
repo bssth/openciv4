@@ -10,9 +10,9 @@ import CvPythonExtensions as _cpe
 import oc4host
 
 _gc = _cpe.CyGlobalContext()
-_PAGE = 48          # items a page of a palette shows
-_COLUMNS = 6
-_CELL = 36
+_COLUMNS = 7         # items to a row of a palette
+_CELL = 35           # from one to the next
+_ICON = 31
 _widgets = []       # the widgets drawn (deleted and drawn again each time)
 _choices = {}       # a widget's name: what its click does
 
@@ -58,7 +58,6 @@ class _TabCtrl(object):
 		self.controls = []
 		self.active = 0
 		self.enabled = False
-		self.page = 0
 		self.dead = False
 
 	def setNumColumns(self, n): pass
@@ -73,7 +72,6 @@ class _TabCtrl(object):
 
 	def setActiveTab(self, i):
 		self.active = int(i)
-		self.page = 0
 		_draw()
 
 	def enable(self, bOn):
@@ -318,19 +316,33 @@ def _shown():
 	return None
 
 
-def _top(screen):
-	"""Where the palette starts: under the script's own side menu (setSideMenu: its buttons, then
-	the bottom panel of the player's or the map's pull downs, 45 or 85 high), as the original
-	places its tab control; not over those pull downs."""
-	top = 86
+# The tool window, as the original's (measured on it at 1920 x 1080): at the top left, the
+# theme's tool window frame and title bar, the tab control's tabs, under them the items in a
+# scroll panel, seven to a row.
+_WINDOW_INNER = '@GFC_Control_DefaultWindow_Style|GFC_CtrlTheme_Bitmap_Control_Window_Skin_Inner_Default'
+_WINDOW_TITLE = '@|SF_CtrlTheme_Civ4_Control_Window_Skin_Tool_TitleBar_Full_Default'
+_WINDOW_FRAME = '@SF_CtrlTheme_Civ4_Control_Window_Tool_InFrameBorder_Normal_Style|GFC_CtrlTheme_Bitmap_Control_Border_Skin_Full_Default'
+_TITLE_H = 20
+_TAB_SKIN = '@GFC_CtrlTheme_Bitmap_Control_Tab_SkinStyle_Top_Begin_BaseLevel_Single|GFC_CtrlTheme_Bitmap_Control_Tab_Skin_Full_'
+_TITLES = {'player': 'TXT_KEY_WB_PLAYER_MODE', 'map': 'TXT_KEY_WB_MAP_MODE', 'edit': 'TXT_KEY_WB_WORLD_BUILDER_EDIT_CONTROL'}
+_WX, _WY, _WW = 0, 0, 318
+_TAB_Y, _TAB_H = 31, 28
+_BODY_X, _BODY_Y = 12, 59
+_GRID_H = 162       # four rows and a half show, as the original's
+_ROW_TEXT = (40, 28, 16)  # (the colour of the title and the tabs' words: the theme's dark brown)
+
+
+def _text(key):
 	try:
-		for name in ('WorldBuilderBackgroundPanel', 'WorldBuilderBackgroundBottomPanel'):
-			w = screen._s.get(name)
-			if w is not None and w.shown and w.mode == 'abs':
-				top = max(top, w.y + w.h + 2)
+		return _u(_cpe.CyTranslator().getText(key, ()))
 	except Exception:
-		pass
-	return top
+		return u''
+
+
+def _style(screen, name, style):
+	w = screen._s.get(name)
+	if w is not None:
+		w.style = style
 
 
 def _draw():
@@ -342,58 +354,71 @@ def _draw():
 		return
 	_clear(screen)
 	ctrl = _shown()
-	W, H = screen.getXResolution(), screen.getYResolution()
-	try:
-		width = _wb().iScreenWidth
-	except Exception:
-		width = 228
-	x0, y0 = W - width, _top(screen)
+	general = _cpe.WidgetTypes.WIDGET_GENERAL
 	if ctrl is not None:
-		screen.addPanel(_add('OC4WBPalette'), u'', u'', True, False, x0, y0, width, H - y0 - 4, _cpe.PanelStyles.PANEL_STYLE_MAIN)
-		y = y0 + 6
-		# the sections' tabs
-		x = x0 + 6
+		dark = u'<color=%d,%d,%d>' % _ROW_TEXT
+		tabs = []
 		for i, name in enumerate(ctrl.sections):
 			if not name and ctrl.kind == 'edit' and i == 0:
 				name = u'Data'
-			label = (u'<color=255,255,0>%s</color>' % name) if i == ctrl.active else name
-			screen.setText(_add('OC4WBTab%d' % i, ('tab', ctrl, i)), 'Background', label, 0, x, y, -0.3, _cpe.FontTypes.SMALL_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
 			try:
-				w = _cpe.CyInterface().determineWidth(name)
+				w = int(oc4screens._textWidth(name, 3))
 			except Exception:
 				w = 9 * len(name)
-			x += 12 + max(int(w), 9 * len(name))
-			if i + 1 < len(ctrl.sections) and x + 9 * len(ctrl.sections[i + 1]) > x0 + width - 6:
-				x = x0 + 6
-				y += 18
-		y += 24
-		if ctrl.kind == 'edit' and ctrl.active < len(ctrl.controls) and ctrl.controls[ctrl.active]:
-			y = _drawControls(screen, ctrl, x0 + 8, y, width - 16)
+			tabs.append((name, w + 20))
+		# (as wide as its tabs need: the map mode's four do not fit the player mode's width)
+		width = max(_WW, 15 + sum(tw + 1 for name, tw in tabs) + 14)
+		body_w = width - 2 * _BODY_X
+		# what the edit panel's section holds (a unit's or a city's data) goes over its items
+		controls = ctrl.kind == 'edit' and ctrl.active < len(ctrl.controls) and ctrl.controls[ctrl.active]
 		items = _items(ctrl)
+		body_h = (_GRID_H if items else 0) + (_controlsHeight(ctrl.controls[ctrl.active]) if controls else 0) + 6
+		height = _BODY_Y + body_h + 8
+		# (the window: its inside and its frame under the title bar, the title on the bar)
+		for name, y, h, style in (('OC4WBWindow', _TITLE_H, height - _TITLE_H, _WINDOW_INNER), ('OC4WBFrame', _TITLE_H, height - _TITLE_H, _WINDOW_FRAME),
+				('OC4WBTitleBar', 0, _TITLE_H, _WINDOW_TITLE)):
+			screen.addPanel(_add(name), u'', u'', True, False, _WX, _WY + y, width, h, _cpe.PanelStyles.PANEL_STYLE_MAIN)
+			_style(screen, name, style)
+		title = _text(_TITLES.get(ctrl.kind, ''))
+		if title:
+			screen.setLabel(_add('OC4WBTitle'), 'Background', u'<font=3b>' + dark + title + u'</color></font>', 1 << 0, _WX + 6, _WY + 1, -0.3,
+				_cpe.FontTypes.TITLE_FONT, general, -1, -1)
+		# the tabs, each as wide as its word
+		x = _WX + 15
+		for i, (name, tw) in enumerate(tabs):
+			tab = _add('OC4WBTabBack%d' % i)
+			screen.addPanel(tab, u'', u'', True, False, x, _WY + _TAB_Y, tw, _TAB_H, _cpe.PanelStyles.PANEL_STYLE_MAIN)
+			_style(screen, tab, _TAB_SKIN + ('Select' if i == ctrl.active else 'Default'))
+			screen.setText(_add('OC4WBTab%d' % i, ('tab', ctrl, i)), 'Background', dark + name + u'</color>', 1 << 2, x + tw / 2, _WY + _TAB_Y + 4, -0.3,
+				_cpe.FontTypes.GAME_FONT, general, -1, -1)
+			x += tw + 1
+		body = _add('OC4WBBody')
+		screen.addPanel(body, u'', u'', True, False, _WX + _BODY_X, _WY + _BODY_Y, body_w, body_h, _cpe.PanelStyles.PANEL_STYLE_IN)
+		y = _WY + _BODY_Y + 4
+		if controls:
+			y = _drawControls(screen, ctrl, _WX + _BODY_X + 8, y, body_w - 16)
 		if items:
-			pages = (len(items) + _PAGE - 1) // _PAGE
-			ctrl.page = max(0, min(ctrl.page, pages - 1))
-			shown = items[ctrl.page * _PAGE:(ctrl.page + 1) * _PAGE]
-			for k, item in enumerate(shown):
-				cx = x0 + 8 + (k % _COLUMNS) * _CELL
-				cy = y + (k // _COLUMNS) * _CELL
-				name = 'OC4WBItem%d' % k
+			grid = _add('OC4WBGrid')
+			screen.addScrollPanel(grid, u'', _WX + _BODY_X + 2, y - 2, body_w - 4, _GRID_H, _cpe.PanelStyles.PANEL_STYLE_EXTERNAL)
+			for k, item in enumerate(items):
+				cx, cy = (k % _COLUMNS) * _CELL, (k // _COLUMNS) * _CELL
 				if item[4]:
-					screen.addPanel(_add('OC4WBSel%d' % k), u'', u'', False, False, cx - 2, cy - 2, _CELL, _CELL, _cpe.PanelStyles.PANEL_STYLE_HUD_HELP)
+					screen.attachPanelAt(grid, _add('OC4WBSel%d' % k), u'', u'', False, False, _cpe.PanelStyles.PANEL_STYLE_HUD_HELP, cx - 2, cy - 2, _CELL - 1, _CELL - 1,
+						general, -1, -1)
+				name = 'OC4WBItem%d' % k
 				if item[2]:
-					screen.setImageButton(_add(name, ('item', ctrl, item)), item[2], cx, cy, _CELL - 4, _CELL - 4, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
+					screen.setImageButtonAt(_add(name, ('item', ctrl, item)), grid, item[2], cx, cy, _ICON, _ICON, general, -1, -1)
 				else:
-					screen.setText(_add(name, ('item', ctrl, item)), 'Background', item[3][:6], 0, cx, cy + 8, -0.3, _cpe.FontTypes.SMALL_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
-			y += ((len(shown) + _COLUMNS - 1) // _COLUMNS) * _CELL + 6
-			if pages > 1:
-				screen.setText(_add('OC4WBPrev', ('page', ctrl, -1)), 'Background', u'<<', 0, x0 + 10, y, -0.3, _cpe.FontTypes.GAME_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
-				screen.setText(_add('OC4WBPage'), 'Background', u'%d / %d' % (ctrl.page + 1, pages), 0, x0 + width / 2 - 20, y, -0.3, _cpe.FontTypes.GAME_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
-				screen.setText(_add('OC4WBNext', ('page', ctrl, 1)), 'Background', u'>>', 0, x0 + width - 34, y, -0.3, _cpe.FontTypes.GAME_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
+					screen.setTextAt(_add(name, ('item', ctrl, item)), grid, item[3][:6], 0, cx, cy + 8, -0.3, _cpe.FontTypes.SMALL_FONT, general, -1, -1)
 	if _flyout is not None and _flyout.items:
 		mx, my = 300, 200
 		screen.addPanel(_add('OC4WBFlyout'), u'', u'', True, False, mx, my, 240, 24 * len(_flyout.items) + 12, _cpe.PanelStyles.PANEL_STYLE_MAIN)
 		for k, item in enumerate(_flyout.items):
-			screen.setText(_add('OC4WBFly%d' % k, ('fly', item)), 'Background', item[0], 0, mx + 10, my + 8 + 24 * k, -0.3, _cpe.FontTypes.GAME_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
+			screen.setText(_add('OC4WBFly%d' % k, ('fly', item)), 'Background', item[0], 0, mx + 10, my + 8 + 24 * k, -0.3, _cpe.FontTypes.GAME_FONT, general, -1, -1)
+
+
+def _controlsHeight(controls):
+	return sum({'label': 18, 'edit': 22, 'button': 28, 'dropdown': 28, 'spinner': 24}.get(c[0], 0) for c in controls) + 6
 
 
 def _drawControls(screen, ctrl, x, y, width):
@@ -437,9 +462,6 @@ def handleInput(argsList):
 	what = choice[0]
 	if what == 'tab':
 		choice[1].active = choice[2]
-		choice[1].page = 0
-	elif what == 'page':
-		choice[1].page += choice[2]
 	elif what == 'item':
 		_chosen(choice[1], choice[2])
 	elif what == 'fly':
