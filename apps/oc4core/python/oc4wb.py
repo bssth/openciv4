@@ -198,8 +198,15 @@ def _items(ctrl):
 			for i in range(gc.getNumUnitInfos()):
 				out.append((0, i, gc.getUnitInfo(i).getButton(), gc.getUnitInfo(i).getDescription(), i == current))
 		elif tab == 1:
+			# (as the original's list: a city first, then the buildings, one on: the script
+			# places a city for 0 and building i - 1 for i)
+			try:
+				found = gc.getMissionInfo(_cpe.MissionTypes.MISSION_FOUND).getButton()
+			except Exception:
+				found = ''
+			out.append((0, 0, found, u'City', current == 0))
 			for i in range(gc.getNumBuildingInfos()):
-				out.append((0, i, gc.getBuildingInfo(i).getButton(), gc.getBuildingInfo(i).getDescription(), i == current))
+				out.append((0, i + 1, gc.getBuildingInfo(i).getButton(), gc.getBuildingInfo(i).getDescription(), i + 1 == current))
 		elif tab == 2:
 			try:
 				team = gc.getTeam(gc.getPlayer(wb.m_iCurrentPlayer).getTeam())
@@ -214,8 +221,14 @@ def _items(ctrl):
 			current, currentList = -1, -1
 		sel = lambda l, i: l == currentList and i == current
 		if tab == 0:
+			# (as the original's list: without the graphical only ones, which the script skips
+			# when it counts its way to the improvement placed)
+			k = 0
 			for i in range(gc.getNumImprovementInfos()):
-				out.append((0, i, gc.getImprovementInfo(i).getButton(), gc.getImprovementInfo(i).getDescription(), sel(0, i)))
+				info = gc.getImprovementInfo(i)
+				if not info.isGraphicalOnly():
+					out.append((0, k, info.getButton(), info.getDescription(), sel(0, k)))
+					k += 1
 		elif tab == 1:
 			for i in range(gc.getNumBonusInfos()):
 				out.append((0, i, gc.getBonusInfo(i).getButton(), gc.getBonusInfo(i).getDescription(), sel(0, i)))
