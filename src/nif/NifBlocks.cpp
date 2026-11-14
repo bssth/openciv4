@@ -50,8 +50,8 @@ namespace oc4::nif
 				k.value = readValue<T>(r);
 				if (g.interpolation == KeyType::Quadratic)
 				{
-					k.forward = readValue<T>(r);
-					k.backward = readValue<T>(r);
+					k.inTangent = readValue<T>(r);
+					k.outTangent = readValue<T>(r);
 				}
 				else if (g.interpolation == KeyType::TBC)
 					k.tbc = r.read<std::array<float, 3>>();

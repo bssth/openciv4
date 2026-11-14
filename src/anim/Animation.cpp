@@ -65,8 +65,9 @@ namespace oc4::anim
 				T outA, inB;
 				if (g.interpolation == KeyType::Quadratic)
 				{
-					outA = a.forward;
-					inB = b.backward;
+					// Leave a along its outgoing tangent, arrive at b along its incoming one.
+					outA = a.outTangent;
+					inB = b.inTangent;
 				}
 				else
 				{
