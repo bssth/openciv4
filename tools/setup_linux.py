@@ -19,7 +19,7 @@ EXTERNAL = ROOT / "external"
 PACKAGES = [
     ("Python-2.7.18.tgz", "https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz", "da3080e3b488f648a3d7a4560ddee895284c3380b11d6de75edb986526b9a814", "Python-2.7.18"),
     ("pybind11-2.9.2.tar.gz", "https://codeload.github.com/pybind/pybind11/tar.gz/refs/tags/v2.9.2", "6bd528c4dbe2276635dc787b6b1f2e5316cf6b49ee3e150264e455a0d68d19c1", "pybind11-2.9.2"),
-    ("zlib-1.3.1.tar.gz", "https://zlib.net/fossils/zlib-1.3.1.tar.gz", "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23", "zlib-1.3.1"),
+    ("zlib-1.3.1.tar.gz", "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz", "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23", "zlib-1.3.1"),
     ("SDL3-3.4.18.tar.gz", "https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz", "9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3", "SDL3-3.4.18"),
     ("freetype-2.13.3.tar.gz", "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.gz", "5c3a8e78f7b24c20b25b54ee575d6daa40007a5f4eea2845861c3409b3021747", "freetype-2.13.3"),
     ("DirectXMath.tar.gz", "https://codeload.github.com/microsoft/DirectXMath/tar.gz/refs/tags/oct2024", "69af50e165e8458b0422068cff24dbdaf7d649c3174f140acbb71c39f3c93716", "DirectXMath-oct2024"),
