@@ -19,7 +19,7 @@ int main()
 	const auto temporary = fs::temp_directory_path() / ("oc4-save-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
 	fs::create_directories(temporary);
 	const struct Cleanup { fs::path path; ~Cleanup() { fs::remove_all(path); } } cleanup{ temporary };
-	const auto file = temporary / fs::u8path("Synthetic caf\u00e9.CivBeyondSwordSave");
+	const auto file = temporary / fs::path(u8"Synthetic caf\u00e9.CivBeyondSwordSave");
 	SaveFile original;
 	original.modFolder = "Mods\\Synthetic\\";
 	original.initCore = { std::byte{0}, std::byte{255}, std::byte{42} };
