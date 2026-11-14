@@ -10,6 +10,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -56,7 +57,7 @@ Texture2D plots : register(t0, space2);          // 16-bit unorm: terrain, overl
 Texture2DArray atlas : register(t1, space2);     // 32 tiles per terrain
 Texture2DArray decals : register(t2, space2);    // features painted on the ground (flood plains)
 Texture2DArray details : register(t3, space2);   // the terrains' detail textures (grey around one half)
-ByteAddressBuffer table : register(t4, space2);  // layer orders, per terrain and mask (offset << 8 | count), (slot | rotation << 8)
+Texture2D cells : register(t4, space2);          // 16-bit unorm, two texels a tile: its layers lowest first (atlas slice | rotation << 14), 0xFFFF none
 SamplerState atlasSampler : register(s1, space2);
 SamplerState decalSampler : register(s2, space2);
 SamplerState detailSampler : register(s3, space2);
@@ -85,35 +86,19 @@ PSIn VSTerrain(VSIn i)
 
 int2 wrapPlot(int2 p)
 {
-	p.x = wrapX ? (p.x % mapSize.x + mapSize.x) % mapSize.x : clamp(p.x, 0, mapSize.x - 1);
-	p.y = wrapY ? (p.y % mapSize.y + mapSize.y) % mapSize.y : clamp(p.y, 0, mapSize.y - 1);
+	// (in floats: an integer modulo is slow on some GPUs, Maxwell's among them; exact for map sizes)
+	float2 size = float2(mapSize);
+	int2 w = p - int2(size * floor((float2(p) + 0.5) / size));
+	p.x = wrapX ? w.x : clamp(p.x, 0, mapSize.x - 1);
+	p.y = wrapY ? w.y : clamp(p.y, 0, mapSize.y - 1);
 	return p;
 }
 
 uint4 plotAt(int2 p) { return uint4(round(plots.Load(int3(wrapPlot(p), 0)) * 65535.0)); }
 
-uint hash(int2 c, uint salt)
+// An atlas slice turned by quarter turns clockwise.
+float4 tile(uint slice, uint rotation, float2 uv, float2 dx, float2 dy)
 {
-	uint h = uint(c.x) * 0x9E3779B1u ^ (uint(c.y) + salt * 0x632BE5ABu) * 0x85EBCA77u;
-	h ^= h >> 15;
-	h *= 0x2C1B3C6Du;
-	h ^= h >> 12;
-	h *= 0x297A2D39u;
-	h ^= h >> 15;
-	return h;
-}
-
-int layerOf(uint terrain) { return asint(table.Load(terrain * 4)); }
-
-// The atlas tile of a terrain for the corners it covers; a mask can have several to pick from.
-float4 tile(uint terrain, uint mask, int2 cell, float2 uv, float2 dx, float2 dy)
-{
-	uint head = table.Load((terrainCount + terrain * 16 + mask) * 4);
-	uint count = head & 255;
-	if (count == 0)
-		return float4(0, 0, 0, 0);
-	uint e = table.Load(((head >> 8) + hash(wrapPlot(cell), terrain) % count) * 4);
-	uint rotation = (e >> 8) & 3; // quarter turns clockwise
 	if (rotation == 1)
 	{
 		uv = float2(uv.y, 1 - uv.x);
@@ -132,11 +117,10 @@ float4 tile(uint terrain, uint mask, int2 cell, float2 uv, float2 dx, float2 dy)
 		dx = float2(-dx.y, dx.x);
 		dy = float2(-dy.y, dy.x);
 	}
-	return atlas.SampleGrad(atlasSampler, float3(uv, terrain * 32 + (e & 255)), dx, dy);
+	return atlas.SampleGrad(atlasSampler, float3(uv, slice), dx, dy);
 }
 
 static const int2 kCorner[4] = { int2(0, 1), int2(1, 1), int2(1, 0), int2(0, 0) }; // top left, top right, bottom right, bottom left
-static const int kNone = -1000000;
 
 float4 PSTerrain(PSIn i) : SV_Target
 {
@@ -149,71 +133,39 @@ float4 PSTerrain(PSIn i) : SV_Target
 	float2 dcx = ddx(c), dcy = ddy(c);
 	float2 dx = float2(dcx.x, -dcx.y), dy = float2(dcy.x, -dcy.y);
 
-	uint terrain[4], overlay[4];
-	int layer[4], overlayLayer[4];
 	float2 known[4]; // revealed, visible
 	uint decal[4];   // 1-based decal of the plot's feature, 0 none
 	[unroll] for (int k = 0; k < 4; ++k)
 	{
 		uint4 d = plotAt(cell + kCorner[k]);
-		terrain[k] = d.r;
-		overlay[k] = d.g;
 		known[k] = float2((d.a & 4) ? 1 : 0, (d.a & 8) ? 1 : 0);
 		decal[k] = d.a >> 8;
-		layer[k] = layerOf(d.r);
-		overlayLayer[k] = d.g != 0xFFFF ? layerOf(d.g) : kNone;
 	}
 
-	// Lowest layer first, as a whole tile; every higher one over it from the tile for the
-	// corners at or above its layer.
+	// Nothing to blend where the team has been to none of the four plots: black, as the fog
+	// below would make it.
+	if (showFog && known[0].x + known[1].x + known[2].x + known[3].x == 0)
+		return float4(0, 0, 0, 1);
+
+	// The tile's layers, worked out when the plots change (updateCells): the lowest as a whole
+	// tile, every higher one over it by its alpha, then the hills and peaks.
+	int2 at = int2(clamp(cell.x + 1, 0, mapSize.x) * 2, clamp(cell.y + 1, 0, mapSize.y));
+	uint4 lo = uint4(round(cells.Load(int3(at, 0)) * 65535.0));
+	uint4 hi = uint4(round(cells.Load(int3(at + int2(1, 0), 0)) * 65535.0));
+	uint entry[6] = { lo.r, lo.g, lo.b, lo.a, hi.r, hi.g };
 	float3 color = 0;
 	float3 detail = 0.5; // blended as the colours are
 	float2 dp = p * 3.0; // detail repeats
-	int previous = kNone;
-	[loop] for (int step = 0; step < 4; ++step)
+	[loop] for (int step = 0; step < 6; ++step)
 	{
-		int best = -kNone;
-		uint t = 0;
-		[unroll] for (int k = 0; k < 4; ++k)
-			if (layer[k] > previous && layer[k] < best)
-			{
-				best = layer[k];
-				t = terrain[k];
-			}
-		if (best == -kNone)
+		uint e = entry[step];
+		if (e == 0xFFFF)
 			break;
-		uint mask = 0;
-		[unroll] for (int k2 = 0; k2 < 4; ++k2)
-			if (layer[k2] >= best)
-				mask |= 1u << k2;
-		float4 s = tile(t, step == 0 ? 15 : mask, cell, uv, dx, dy);
-		float3 ds = details.Sample(detailSampler, float3(dp, t)).rgb;
+		uint slice = e & 0x3FFF;
+		float4 s = tile(slice, e >> 14, uv, dx, dy);
+		float3 ds = details.Sample(detailSampler, float3(dp, slice >> 5)).rgb;
 		color = step == 0 ? s.rgb : lerp(color, s.rgb, s.a);
 		detail = step == 0 ? ds : lerp(detail, ds, s.a);
-		previous = best;
-	}
-	// Hills and peaks: their art over the terrain, by the same rule.
-	previous = kNone;
-	[loop] for (int step2 = 0; step2 < 2; ++step2)
-	{
-		int best = -kNone;
-		uint t = 0;
-		[unroll] for (int k = 0; k < 4; ++k)
-			if (overlayLayer[k] > previous && overlayLayer[k] < best)
-			{
-				best = overlayLayer[k];
-				t = overlay[k];
-			}
-		if (best == -kNone)
-			break;
-		uint mask = 0;
-		[unroll] for (int k2 = 0; k2 < 4; ++k2)
-			if (overlayLayer[k2] >= best)
-				mask |= 1u << k2;
-		float4 s = tile(t, mask, cell, uv, dx, dy);
-		color = lerp(color, s.rgb, s.a);
-		detail = lerp(detail, details.Sample(detailSampler, float3(dp, t)).rgb, s.a);
-		previous = best;
 	}
 
 	// The detail textures sharpen the ground up close (their mips fade to grey far away).
@@ -513,9 +465,9 @@ float4 PSTerrain(PSIn i) : SV_Target
 		std::vector<uint8_t> shape;     // per plot: water | hills << 1 | peak << 2
 		std::vector<int32_t> featureKey; // per plot: feature and variety
 		std::vector<uint64_t> decorKey;  // per plot: improvement, bonus, route
-		std::shared_ptr<GpuBuffer> vb, ib, layerTable;
+		std::shared_ptr<GpuBuffer> vb, ib;
 		uint32_t indexCount = 0;
-		std::shared_ptr<GpuImage> plotTex, atlasTex, groundTex, decalTex, detailTex;
+		std::shared_ptr<GpuImage> plotTex, cellTex, atlasTex, groundTex, decalTex, detailTex;
 		std::vector<uint32_t> terrainColors; // BGRA: the average of each terrain's plain tile
 		std::vector<uint8_t> minimapPixels;
 		uint64_t minimapVersion = 0;
@@ -674,7 +626,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			SDL_GPUDevice* dev = renderer.device();
 			const std::string source = std::string(kFrameConstantsHlsl) + kTerrainHlsl;
 			terrainVS = renderer.compile(source, "terrain.hlsl", "VSTerrain", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
-			terrainPS = renderer.compile(source, "terrain.hlsl", "PSTerrain", SDL_GPU_SHADERSTAGE_FRAGMENT, 4, 1, 2);
+			terrainPS = renderer.compile(source, "terrain.hlsl", "PSTerrain", SDL_GPU_SHADERSTAGE_FRAGMENT, 5, 0, 2);
 			SDL_GPUGraphicsPipelineCreateInfo ci{};
 			ci.vertex_shader = terrainVS;
 			ci.fragment_shader = terrainPS;
@@ -720,7 +672,6 @@ float4 PSTerrain(PSIn i) : SV_Target
 		{
 			const size_t count = map.terrains.size();
 			atlasTex.reset();
-			layerTable.reset();
 			if (count == 0)
 				return;
 			std::vector<std::vector<uint8_t>> levels(count * kSlots * kTileMips);
@@ -805,21 +756,6 @@ float4 PSTerrain(PSIn i) : SV_Target
 			atlasTex = renderer.createTexture(kTile, kTile, uint32_t(count * kSlots), kTileMips, TextureFormat::BGRA8, subresources);
 			buildDetails();
 
-			// Layer orders, then per terrain and mask (offset << 8 | count), then the slot entries.
-			std::vector<uint32_t> table(count * 17);
-			for (size_t t = 0; t < count; ++t)
-			{
-				table[t] = uint32_t(map.terrains[t].layerOrder);
-				for (int mask = 1; mask < 16; ++mask)
-				{
-					const auto& slots = map.terrains[t].slots[size_t(mask)];
-					const uint32_t n = uint32_t(std::min<size_t>(slots.size(), 255));
-					table[count + t * 16 + size_t(mask)] = uint32_t(table.size()) << 8 | n;
-					for (uint32_t i = 0; i < n; ++i)
-						table.push_back(uint32_t(std::clamp(slots[i].first - 1, 0, int(kSlots) - 1)) | uint32_t((slots[i].second / 90 % 4 + 4) % 4) << 8);
-				}
-			}
-			layerTable = renderer.createBuffer(SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, table.data(), uint32_t(table.size() * 4));
 		}
 
 		// The terrains' detail textures, one array slice of 256 pixels each (grey without one).
@@ -1318,6 +1254,90 @@ float4 PSTerrain(PSIn i) : SV_Target
 			}
 			else
 				renderer.updateTexture(*plotTex, 0, 0, 0, 0, uint32_t(W), uint32_t(H), data.data());
+			updateCells(data);
+		}
+
+		// The terrain shader's tile variant hash, the same bits.
+		static uint32_t tileHash(int x, int y, uint32_t salt)
+		{
+			uint32_t h = uint32_t(x) * 0x9E3779B1u ^ (uint32_t(y) + salt * 0x632BE5ABu) * 0x85EBCA77u;
+			h ^= h >> 15;
+			h *= 0x2C1B3C6Du;
+			h ^= h >> 12;
+			h *= 0x297A2D39u;
+			h ^= h >> 15;
+			return h;
+		}
+
+		// The ground's tiles, each spanning four plot centres (tile -1 is before the first plot):
+		// the terrain layers to blend, lowest first as a whole tile, every higher one from the
+		// atlas tile for the corners at or above its layer, then the hills and peaks by the same
+		// rule, as the terrain shader chose them per pixel before. Two texels a tile, six entries:
+		// atlas slice | quarter turns << 14, 0xFFFF none. (Worked out here when the plots change:
+		// that sorting, hashing and table reading were most of the ground's cost on slower GPUs.)
+		void updateCells(const std::vector<uint16_t>& plotData)
+		{
+			const int W = map.width, H = map.height;
+			const int count = int(map.terrains.size());
+			const uint32_t CW = uint32_t(W + 1) * 2, CH = uint32_t(H + 1);
+			std::vector<uint16_t> data(size_t(CW) * CH * 4, 0xFFFF);
+			static const int kCorner[4][2] = { { 0, 1 }, { 1, 1 }, { 1, 0 }, { 0, 0 } }; // top left, top right, bottom right, bottom left
+			constexpr int kNone = -1000000;
+			const auto wrap = [](int v, int n, bool wraps) { return wraps ? (v % n + n) % n : std::clamp(v, 0, n - 1); };
+			for (int cy = -1; cy < H; ++cy)
+				for (int cx = -1; cx < W; ++cx)
+				{
+					int terrain[4], overlay[4], layer[4], overlayLayer[4];
+					for (int k = 0; k < 4; ++k)
+					{
+						const size_t i = size_t(wrap(cy + kCorner[k][1], H, map.wrapY)) * size_t(W) + size_t(wrap(cx + kCorner[k][0], W, map.wrapX));
+						terrain[k] = plotData[i * 4];
+						overlay[k] = plotData[i * 4 + 1];
+						layer[k] = terrain[k] < count ? map.terrains[size_t(terrain[k])].layerOrder : kNone;
+						overlayLayer[k] = overlay[k] != kNoOverlay && overlay[k] < count ? map.terrains[size_t(overlay[k])].layerOrder : kNone;
+					}
+					uint16_t* out = &data[(size_t(cy + 1) * CW + size_t(cx + 1) * 2) * 4];
+					int used = 0;
+					const int hx = wrap(cx, W, map.wrapX), hy = wrap(cy, H, map.wrapY);
+					const auto blend = [&](const int* ids, const int* layers, int steps, bool wholeFirst) {
+						int previous = kNone;
+						for (int step = 0; step < steps; ++step)
+						{
+							int best = -kNone, t = 0;
+							for (int k = 0; k < 4; ++k)
+								if (layers[k] > previous && layers[k] < best)
+								{
+									best = layers[k];
+									t = ids[k];
+								}
+							if (best == -kNone)
+								break;
+							uint32_t mask = 0;
+							for (int k = 0; k < 4; ++k)
+								if (layers[k] >= best)
+									mask |= 1u << k;
+							if (wholeFirst && step == 0)
+								mask = 15;
+							previous = best;
+							const auto& slots = map.terrains[size_t(t)].slots[mask];
+							if (slots.empty())
+								continue;
+							const size_t n = std::min<size_t>(slots.size(), 255);
+							const auto& [slot, degrees] = slots[tileHash(hx, hy, uint32_t(t)) % n];
+							const uint32_t slice = uint32_t(t) * kSlots + uint32_t(std::clamp(slot - 1, 0, int(kSlots) - 1));
+							out[used++] = uint16_t(slice | uint32_t((degrees / 90 % 4 + 4) % 4) << 14);
+						}
+					};
+					blend(terrain, layer, 4, true);
+					blend(overlay, overlayLayer, 2, false);
+				}
+			if (!cellTex || cellTex->width != CW || cellTex->height != CH)
+			{
+				const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data.data()), data.size() * 2);
+				cellTex = renderer.createTexture(CW, CH, 1, 1, TextureFormat::RGBA16, std::span(&bytes, 1));
+			}
+			else
+				renderer.updateTexture(*cellTex, 0, 0, 0, 0, CW, CH, data.data());
 		}
 
 		float ground(float x, float y) const
@@ -1502,11 +1522,39 @@ float4 PSTerrain(PSIn i) : SV_Target
 						for (const int degrees : r.rotations.empty() ? std::vector<int>{ 0 } : r.rotations)
 							if (turned(r.connections, degrees) == mask)
 								(r.delta == RiverArt::Delta::None ? fits : deltas).push_back({ &r, degrees });
-					// A river ending at the coast flows out through a delta (the straight one).
-					if (end && coast && !deltas.empty())
+					// A river reaching the coast flows out through a delta: the one whose rapids fan
+					// out over the plots around the corner that are water. Those plots are the
+					// corner's diagonals (DirectionTypes bits, turned as the connections are).
+					// Unturned, a delta's river comes from the north: the straight one fans out
+					// over both plots ahead, the clockwise one over the south-west one (to the
+					// river's right), the counter-clockwise one over the south-east one; one at a
+					// bend (two connections) over the plot outside the bend.
+					if (coast && !deltas.empty())
 					{
-						const auto straight = std::ranges::find_if(deltas, [](const auto& d) { return d.first->delta == RiverArt::Delta::Straight; });
-						fits = { straight != deltas.end() ? *straight : deltas.front() };
+						const int sea = (water(cx, cy) ? 1 << 1 : 0) | (water(cx, cy - 1) ? 1 << 3 : 0) | (water(cx - 1, cy - 1) ? 1 << 5 : 0) |
+							(water(cx - 1, cy) ? 1 << 7 : 0);
+						const auto fansOver = [&](const RiverArt& r) {
+							if (r.connections == (1 << 0))
+								return r.delta == RiverArt::Delta::Clockwise ? 1 << 5 : r.delta == RiverArt::Delta::CounterClockwise ? 1 << 3 : (1 << 3) | (1 << 5);
+							int outside = 0;
+							for (const int d : { 1, 3, 5, 7 })
+								if (!(r.connections & (1 << (d - 1))) && !(r.connections & (1 << ((d + 1) % 8))))
+									outside |= 1 << d;
+							return outside;
+						};
+						std::pair<const RiverArt*, int> best{ nullptr, 0 };
+						int bestFan = 0;
+						for (const auto& d : deltas)
+							if (const int fan = turned(fansOver(*d.first), d.second); fan && (fan & sea) == fan && std::popcount(unsigned(fan)) > bestFan)
+								best = d, bestFan = std::popcount(unsigned(fan));
+						if (best.first)
+							fits = { best };
+						else if (end)
+						{
+							// (the coast beside the river, not ahead of it: the straight one)
+							const auto straight = std::ranges::find_if(deltas, [](const auto& d) { return d.first->delta == RiverArt::Delta::Straight; });
+							fits = { straight != deltas.end() ? *straight : deltas.front() };
+						}
 					}
 					if (fits.empty())
 						continue;
@@ -2077,7 +2125,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 
 		void drawTerrain(const Frustum& frustum, const MapView::Options& options)
 		{
-			if (!vb || !atlasTex || !plotTex || !detailTex || !decalTex || !layerTable)
+			if (!vb || !atlasTex || !plotTex || !detailTex || !decalTex || !cellTex)
 				return;
 			TerrainConstants tc{};
 			tc.mapW = map.width;
@@ -2106,13 +2154,12 @@ float4 PSTerrain(PSIn i) : SV_Target
 				const Vec3 c{ worldW() / 2 + dx, worldH() / 2, 0 };
 				return frustum.sphere(c, length(Vec3{ worldW(), worldH(), 0 }) / 2 + map.peakScale * S());
 			};
-			renderer.reserveSamplers(4);
+			renderer.reserveSamplers(5);
 			SDL_GPURenderPass* pass = renderer.pass();
 			renderer.bindPipeline(terrainPipeline);
-			const SDL_GPUTextureSamplerBinding textures[4] = { { plotTex->texture, sampler }, { atlasTex->texture, sampler },
-				{ decalTex->texture, detailWrap }, { detailTex->texture, detailWrap } };
-			SDL_BindGPUFragmentSamplers(pass, 0, textures, 4);
-			SDL_BindGPUFragmentStorageBuffers(pass, 0, &layerTable->buffer, 1);
+			const SDL_GPUTextureSamplerBinding textures[5] = { { plotTex->texture, sampler }, { atlasTex->texture, sampler },
+				{ decalTex->texture, detailWrap }, { detailTex->texture, detailWrap }, { cellTex->texture, sampler } };
+			SDL_BindGPUFragmentSamplers(pass, 0, textures, 5);
 			const SDL_GPUBufferBinding vbb{ vb->buffer, 0 }, ibb{ ib->buffer, 0 };
 			SDL_BindGPUVertexBuffers(pass, 0, &vbb, 1);
 			SDL_BindGPUIndexBuffer(pass, &ibb, SDL_GPU_INDEXELEMENTSIZE_32BIT);

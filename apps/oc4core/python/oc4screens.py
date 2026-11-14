@@ -87,7 +87,7 @@ class _Widget(object):
 	__slots__ = ('name', 'kind', 'parent', 'mode', 'x', 'y', 'z', 'w', 'h', 'style', 'pstyle', 'text', 'help', 'tex', 'tex2',
 		'wt', 'd1', 'd2', 'opt', 'flags', 'font', 'shown', 'enabled', 'state', 'hittest', 'seq', 'vertical', 'scroll', 'children',
 		'bars', 'lists', 'columns', 'rows', 'headers', 'iconw', 'iconh', 'items', 'selected', 'color', 'size', 'defw', 'defh', 'points',
-		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort')
+		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset')
 
 	def __init__(self, name, kind):
 		self.name = name
@@ -131,6 +131,7 @@ class _Widget(object):
 		self.points = None     # lines
 		self.cells = None      # tables: {(row, column): the name of the control attached there}
 		self.sort = None       # tables that sort: (column, descending) the rows are shown by, or (-1, False)
+		self.inset = 0         # scroll panels (addScrollPanel): where what is placed in them (attach...At) starts
 
 
 class _Screen(object):
@@ -600,6 +601,10 @@ class CyGInterfaceScreen(object):
 		w = self._s.add(szName, 'panel')
 		w.text, w.scroll = _text(title), True
 		w.x, w.y, w.w, w.h, w.pstyle = int(iX), int(iY), int(iWidth), int(iHeight), _style(_cpe.PanelStyles, eStyle)
+		# (inside the theme's layout margin, GFC_Control_Layout's Size_OuterMargin of 8: the
+		# WorldBuilder's load/save buttons, at 0 in their panel at 70, line up with its landmark and
+		# erase buttons at 8 and 43; the city screen's resource names fit their columns)
+		w.inset = 8
 
 	def attachPanel(self, szAttachTo, szName, title, helpText, bVerticalLayout, bScrollable, eStyle):
 		w = self._s.add(szName, 'panel', szAttachTo, 'flow')
@@ -1661,11 +1666,15 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 		for c in w.children:
 			cw = s.widgets.get(c)
 			if cw is not None:
-				_display_widget(s, cw, left, top, inner, childFlow, out)
+				_display_widget(s, cw, left + w.inset, top + w.inset, inner, childFlow, out)
 		if scrolls:
 			held = [i for i in out[first:] if i[1] != 'scrollbar']
-			w.extent = max([i[5] for i in held] + [childFlow[1]]) + 4 - top
-			w.hextent = max([i[4] for i in held] + [left]) + 4 - left
+			# (the margin below and right of what it holds only once that overflows: a strip of
+			# buttons as big as its panel, the WorldBuilder's load/save one, has no scroll bars)
+			extent = max([i[5] for i in held] + [childFlow[1]]) - top
+			hextent = max([i[4] for i in held] + [left]) - left
+			w.extent = extent + 4 if extent > height else extent
+			w.hextent = hextent + 4 if hextent > width else hextent
 			_scrolls(w, x, y, x + width, y + height, s.id, _LIST_ROW, out, True)
 
 

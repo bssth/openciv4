@@ -14,6 +14,7 @@
 #include <array>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -42,7 +43,9 @@ namespace oc4::render
 		}
 		// The keyboard's choice, where the mouse is not: the nearest thing that can be used that
 		// way (round the far side with `wrap`); false if there is nothing. Moving the mouse ends it.
-		bool moveChoice(NavDirection direction, bool wrap);
+		// (`within`: only among what has its middle there, the main interface's widgets too: the
+		// gamepad's walk along the unit's action buttons)
+		bool moveChoice(NavDirection direction, bool wrap, const NavRect* within = nullptr);
 		bool keyChoice() const { return m_keyHover && m_hover >= 0; }
 		void clearKeyChoice() { m_keyHover = false; }
 		// What it chose, about to be used: an open pull down's item hands the choice back to its box.
@@ -80,6 +83,7 @@ namespace oc4::render
 
 		ButtonArt& m_art;
 		Theme& m_theme;
+		std::map<std::string, Theme::Skin, std::less<>> m_namedSkins; // panels styled "@style|property": that skin of the theme
 		bool m_fontsRead = false;
 		Theme::Skin m_tooltip; // the theme's (the help's box)
 		// The theme's pull down (GFC_Control_StandardComboBox_Style): its box and its button, plain
@@ -94,6 +98,7 @@ namespace oc4::render
 		std::vector<Item> m_items;
 		int m_hover = -1, m_pressed = -1;
 		bool m_keyHover = false; // m_hover is the keyboard's
+		std::optional<NavRect> m_keyWithin; // (the keys choose only in there, and from the main interface too)
 		Item m_keyItem;          // (to find it again when the items are made again)
 		Item m_pressedItem;          // (to find it again when the items are made again)
 		int m_mouseX = -1, m_mouseY = -1;

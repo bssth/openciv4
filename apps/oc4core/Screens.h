@@ -106,8 +106,9 @@ namespace oc4::host
 		// are there). True if they took it (it goes no further then).
 		bool keyEvent(int key, bool shift, bool ctrl, bool alt, int mouseX, int mouseY, int plotX, int plotY);
 
-	private:
 		bool menuUp(); // the main menu, a talk or a screen over the map: the arrows are its
+
+	private:
 		struct Item
 		{
 			int screen = -1;

@@ -392,6 +392,11 @@ namespace oc4::scene
 					m.zTest = p.zbuffer->testEnabled();
 					m.zWrite = p.zbuffer->writeEnabled();
 				}
+				// An additive layer (One, One: the rivers' rapids, glows) only adds light, in any
+				// order: its depth would hide what is drawn under it after it (a river's water, the
+				// sea at its mouth), as the blended meshes go by their distance from the eye.
+				if (m.alphaBlend && m.srcBlend == Blend::One && m.dstBlend == Blend::One)
+					m.zWrite = false;
 				if (p.stencil)
 					m.cull = p.stencil->drawMode == 3 ? Cull::None : p.stencil->drawMode == 2 ? Cull::Front : Cull::Back;
 				// The leaderheads' skin shaders (TLeaderheadShader*) draw it opaque: the alpha of

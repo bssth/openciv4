@@ -192,6 +192,12 @@ add_library(oc4_render STATIC
 	src/render/Theme.cpp
 )
 target_link_libraries(oc4_render PUBLIC oc4_anim oc4_gfx oc4_media SDL3::SDL3-static PRIVATE oc4_options)
+# SPIR-V versions of the shaders (src/render/SpirvShaders.inc, from tools/shaders/gen_spirv.py): with them,
+# OC4_GPU=vulkan draws through SDL's Vulkan backend (MoltenVK on macOS). A start for Linux.
+option(OC4_SPIRV_SHADERS "Also build the SPIR-V shaders (OC4_GPU=vulkan selects SDL's Vulkan backend)" OFF)
+if(OC4_SPIRV_SHADERS)
+	target_compile_definitions(oc4_render PRIVATE OC4_SPIRV_SHADERS)
+endif()
 if(WIN32)
 	target_link_libraries(oc4_render PUBLIC d3dcompiler dwrite windowscodecs ole32)
 endif()
@@ -311,7 +317,7 @@ if(NOT MSVC)
 	target_compile_options(oc4core PRIVATE -fms-extensions -ferror-limit=0 -Wno-everything -ffp-contract=off)
 endif()
 if(MSVC)
-	target_compile_options(oc4core PRIVATE /permissive /Zc:forScope- /W3 /EHsc /MP /source-charset:windows-1252 /execution-charset:windows-1252
+	target_compile_options(oc4core PRIVATE /permissive /W3 /EHsc /MP /source-charset:windows-1252 /execution-charset:windows-1252
 		/wd4244 /wd4267 /wd4996 /wd4251 /wd4018 /wd4800)
 endif()
 if(WIN32)
@@ -350,6 +356,28 @@ target_include_directories(wasd_pan_test PRIVATE src)
 target_link_libraries(wasd_pan_test PRIVATE oc4_options)
 add_test(NAME wasd_pan COMMAND wasd_pan_test)
 set_target_properties(wasd_pan_test PROPERTIES FOLDER "tests")
+
+add_executable(edge_scroll_test tests/edge_scroll_test.cpp)
+target_include_directories(edge_scroll_test PRIVATE src)
+add_test(NAME edge_scroll COMMAND edge_scroll_test)
+set_target_properties(edge_scroll_test PROPERTIES FOLDER "tests")
+
+add_executable(auto_end_turn_test tests/auto_end_turn_test.cpp)
+target_include_directories(auto_end_turn_test PRIVATE apps/oc4core)
+target_link_libraries(auto_end_turn_test PRIVATE oc4_options)
+add_test(NAME auto_end_turn COMMAND auto_end_turn_test)
+set_target_properties(auto_end_turn_test PROPERTIES FOLDER "tests")
+
+add_executable(xml_decode_test tests/xml_decode_test.cpp)
+target_include_directories(xml_decode_test PRIVATE apps/oc4core)
+target_link_libraries(xml_decode_test PRIVATE oc4_options)
+add_test(NAME xml_decode COMMAND xml_decode_test)
+set_target_properties(xml_decode_test PROPERTIES FOLDER "tests")
+
+add_executable(pad_map_test tests/pad_map_test.cpp)
+target_include_directories(pad_map_test PRIVATE src)
+add_test(NAME pad_map COMMAND pad_map_test)
+set_target_properties(pad_map_test PROPERTIES FOLDER "tests")
 
 add_executable(globe_bend_test tests/globe_bend_test.cpp)
 target_include_directories(globe_bend_test PRIVATE src)

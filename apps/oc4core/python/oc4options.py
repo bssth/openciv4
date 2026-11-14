@@ -47,7 +47,7 @@ _profile = {
 	'clock': False, 'hours24': False,
 	'graphicsLevel': 0, 'renderQuality': 0, 'globeView': 0, 'movieQuality': 0, 'mainMenu': 0, 'antiAliasing': 0, 'uiScale': 0,
 	'speakers': '', 'musicPath': '', 'voice': False,
-	'wasdPan': False,
+	'wasdPan': False, 'autoEndTurn': False, 'edgeScroll': True,
 }
 
 
@@ -79,7 +79,7 @@ def _load():
 					_profile['nosound'][parts[1]] = value == '1'
 				elif parts[0] in ('graphic', 'player'):
 					_profile[parts[0]][int(parts[1])] = value == '1'
-				elif parts[0] in ('clock', 'hours24', 'voice', 'wasdPan'):
+				elif parts[0] in ('clock', 'hours24', 'voice', 'wasdPan', 'autoEndTurn', 'edgeScroll'):
 					_profile[parts[0]] = value == '1'
 				elif parts[0] in ('graphicsLevel', 'renderQuality', 'globeView', 'movieQuality', 'mainMenu', 'antiAliasing', 'uiScale'):
 					_profile[parts[0]] = int(value)
@@ -98,7 +98,7 @@ def _save():
 	lines = []
 	for key in ('name', 'speakers', 'musicPath'):
 		lines.append('%s=%s' % (key, _profile[key]))
-	for key in ('clock', 'hours24', 'voice', 'wasdPan'):
+	for key in ('clock', 'hours24', 'voice', 'wasdPan', 'autoEndTurn', 'edgeScroll'):
 		lines.append('%s=%d' % (key, 1 if _profile[key] else 0))
 	for key in ('graphicsLevel', 'renderQuality', 'globeView', 'movieQuality', 'mainMenu', 'antiAliasing', 'uiScale'):
 		lines.append('%s=%d' % (key, _profile[key]))
@@ -124,6 +124,8 @@ def _applyGraphics():
 			oc4host.set_graphic_option(int(i), bool(on))
 		oc4host.set_ui_scale(_profile['uiScale'])
 		oc4host.set_wasd_pan(_profile['wasdPan'])
+		oc4host.set_auto_end_turn(_profile['autoEndTurn'])
+		oc4host.set_edge_scroll(_profile['edgeScroll'])
 	except Exception:
 		pass
 
@@ -158,6 +160,61 @@ def _wasdPanOn():
 		return bool(oc4host.wasd_pan())
 	except Exception:
 		return _profile['wasdPan']
+
+
+# Ending idle turns (openciv4's own option too): its check box under W A S D's; Ctrl+Shift+E in
+# the window changes it as well (the host calls setAutoEndTurn).
+AUTO_END_TURN_CHECKBOX = 'Oc4AutoEndTurnCheckBox'
+
+
+def setAutoEndTurn(on):
+	"""Ctrl+Shift+E: the player's choice, kept."""
+	_profile['autoEndTurn'] = bool(on)
+	_save()
+	ctrl = _state['ctrl']
+	if ctrl is not None:
+		ctrl.setValue(AUTO_END_TURN_CHECKBOX, bool(on))
+
+
+def handleAutoEndTurnClicked(args):
+	on = bool(args[0])
+	_profile['autoEndTurn'] = on
+	_save()
+	try:
+		oc4host.choose_auto_end_turn(on)
+	except Exception:
+		pass
+	return 1
+
+
+def _autoEndTurnOn():
+	try:
+		return bool(oc4host.auto_end_turn())
+	except Exception:
+		return _profile['autoEndTurn']
+
+
+# Edge scrolling (openciv4's own option, on by default as in the original): its check box under
+# the others on the Game tab.
+EDGE_SCROLL_CHECKBOX = 'Oc4EdgeScrollCheckBox'
+
+
+def handleEdgeScrollClicked(args):
+	on = bool(args[0])
+	_profile['edgeScroll'] = on
+	_save()
+	try:
+		oc4host.choose_edge_scroll(on)
+	except Exception:
+		pass
+	return 1
+
+
+def _edgeScrollOn():
+	try:
+		return bool(oc4host.edge_scroll())
+	except Exception:
+		return _profile['edgeScroll']
 
 
 def _graphicDefault(i):
@@ -347,6 +404,7 @@ class CyGTabCtrl(object):
 		self._tab = 0
 		self._next = 1
 		self._shown = True
+		self._size = (W, H)
 		_state['ctrl'] = self
 		_schedule()
 
@@ -357,7 +415,10 @@ class CyGTabCtrl(object):
 
 	# the window
 	def setModal(self, i): pass
-	def setSize(self, w, h): pass
+	def setSize(self, w, h):
+		# (the window's size: the game's options 800 x 600, BUG's 950 x 715 for its 14 tabs)
+		self._size = (max(400, int(w)), max(300, int(h)))
+		_schedule()
 	def setControlsExpanding(self, b): pass
 	def setColumnLength(self, i): pass
 	def destroy(self):
@@ -398,6 +459,15 @@ class CyGTabCtrl(object):
 			self.setToolTip(WASD_PAN_CHECKBOX, u'Holding W, A, S or D on its own moves the map, as the arrows do. Their own hotkeys '
 				u'(S Sentry, A Automate, W next unit, D destroy) then need the unit\'s buttons; with Shift, Ctrl or Alt they are the '
 				u'game\'s as ever, and in menus and screens they are letters.')
+			self.attachCheckBox(parent, AUTO_END_TURN_CHECKBOX, u'End idle turns automatically (Ctrl+Shift+E)', 'oc4options', 'handleAutoEndTurnClicked',
+				AUTO_END_TURN_CHECKBOX, _autoEndTurnOn())
+			self.setToolTip(AUTO_END_TURN_CHECKBOX, u'When no unit needs orders and nothing is open, the turn ends after 2 seconds '
+				u'even if you did nothing in it. Press a key or click while it waits to stay on that turn. Popups, the city '
+				u'screen and other screens pause it. Pair with Automate Production and automated workers to let the game run.')
+			self.attachCheckBox(parent, EDGE_SCROLL_CHECKBOX, u'Scroll the map at the screen edge', 'oc4options', 'handleEdgeScrollClicked',
+				EDGE_SCROLL_CHECKBOX, _edgeScrollOn())
+			self.setToolTip(EDGE_SCROLL_CHECKBOX, u'Moving the mouse to the edge of the screen or window moves the map that way. '
+				u'Turn it off to pan only with the arrow keys (or W A S D) and the mouse.')
 		self._node('hbox', parent, name)
 	def attachPanel(self, parent, name): self._node('panel', parent, name)
 	def attachScrollPanel(self, parent, name): self._node('vbox', parent, name)
@@ -534,9 +604,22 @@ def _height(n, w):
 	return h + 2 * pad
 
 
+def _natural(n):
+	"""A label's own width (CF_LABEL_DEFAULTSIZE, as BUG asks for its pull downs' titles)."""
+	try:
+		return oc4screens._textWidth(u'<font=2>' + n.text + u'</font>', _cpe.FontTypes.GAME_FONT) + 8
+	except Exception:
+		return 8 * len(n.text) + 8
+
+
 def _shares(n, w):
-	"""The widths of an horizontal box's children: separators and spacers narrow, the rest alike."""
+	"""The widths of an horizontal box's children: separators and spacers narrow, labels of their
+	default size (CF_LABEL_DEFAULTSIZE) as wide as their text (up to half the box), the rest alike."""
 	fixed = dict((c.id, 12) for c in n.children if c.kind in ('vsep', 'spacer'))
+	if len(n.children) > 1:
+		for c in n.children:
+			if c.kind == 'label' and 'CF_LABEL_DEFAULTSIZE' in c.flags:
+				fixed[c.id] = min(_natural(c), w / 2)
 	others = [c for c in n.children if c.id not in fixed]
 	rest = max(0, w - sum(fixed.values()) - _GAP * max(0, len(n.children) - 1))
 	each = rest / max(1, len(others))
@@ -582,7 +665,10 @@ def _place(screen, n, x, y, w, h):
 		screen.addEditBoxGFC(name, x, y, min(w, 260), 24, general, -1, -1, font)
 		screen.setEditBoxString(name, n.text)
 	elif k == 'dropdown':
-		screen.addDropDownBoxGFC(name, x, y, min(w, 260), general, -1, -1, font)
+		dw = min(w, 260)
+		if 'LAYOUT_RIGHT' in n.flags:
+			x += w - dw
+		screen.addDropDownBoxGFC(name, x, y, dw, general, -1, -1, font)
 		for i, item in enumerate(n.items):
 			screen.addPullDownString(name, item, i, i, i == int(n.value))
 	elif k in ('hslider', 'vslider'):
@@ -627,17 +713,60 @@ def relayout():
 	screen.setDimensions(0, 0, RW, RH)
 	screen.showScreen(_cpe.PopupStates.POPUPSTATE_IMMEDIATE, False)
 	screen.setCloseOnEscape(True)
-	x0, y0 = (RW - W) / 2, max(0, (RH - H) / 2)
-	screen.addPanel('OptBack', u'', u'', True, False, x0, y0, W, H, _cpe.PanelStyles.PANEL_STYLE_MAIN)
-	screen.setLabel('OptTitle', 'Background', u'<font=3b>' + ctrl._title + u'</font>', 1 << 2, x0 + W / 2, y0 + 10, 0,
+	# (the size the script asked for, setSize, kept on the display)
+	w, h = min(ctrl._size[0], RW), min(ctrl._size[1], RH)
+	x0, y0 = (RW - w) / 2, max(0, (RH - h) / 2)
+	screen.addPanel('OptBack', u'', u'', True, False, x0, y0, w, h, _cpe.PanelStyles.PANEL_STYLE_MAIN)
+	screen.setLabel('OptTitle', 'Background', u'<font=3b>' + ctrl._title + u'</font>', 1 << 2, x0 + w / 2, y0 + 10, 0,
 		_cpe.FontTypes.TITLE_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
-	# the tabs
-	tw = (W - 20) / max(1, len(ctrl._tabs))
-	for i, (form, label) in enumerate(ctrl._tabs):
-		screen.setButtonGFC('OptTab%d' % i, label, '', x0 + 10 + i * tw, y0 + 38, tw - 4, 28, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1,
-			_cpe.ButtonStyles.BUTTON_STYLE_STANDARD)
+	# the tabs: each as wide as its label, in as many rows as they need (BUG's 14 do not fit one),
+	# each row stretched across the window
+	y = _tabRows(screen, ctrl, x0 + 10, y0 + 38, w - 20)
 	form = ctrl._tabs[min(ctrl._tab, len(ctrl._tabs) - 1)][0]
-	_place(screen, form, x0 + 14, y0 + 76, W - 28, H - 90)
+	_place(screen, form, x0 + 14, y + 6, w - 28, h - (y + 6 - y0) - 14)
+
+
+_TAB_HEIGHT = 28
+
+
+def _tabWidth(label):
+	try:
+		return oc4screens._textWidth(label, _cpe.FontTypes.GAME_FONT) + 24
+	except Exception:
+		return 9 * len(label) + 24
+
+
+def _tabRows(screen, ctrl, x, y, width):
+	"""Lays the tab buttons out in rows; returns where the row under the last one would start."""
+	n = len(ctrl._tabs)
+	tw = width / max(1, n)
+	if all(_tabWidth(label) <= tw - 4 for form, label in ctrl._tabs):
+		# (all fit alike in one row: one row of equal tabs, the game's own options screen)
+		for i, (form, label) in enumerate(ctrl._tabs):
+			screen.setButtonGFC('OptTab%d' % i, label, '', x + i * tw, y, tw - 4, _TAB_HEIGHT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1,
+				_cpe.ButtonStyles.BUTTON_STYLE_STANDARD)
+		return y + _TAB_HEIGHT + 4
+	rows, row, used = [], [], 0
+	for i, (form, label) in enumerate(ctrl._tabs):
+		tw = _tabWidth(label)
+		if row and used + tw > width:
+			rows.append(row)
+			row, used = [], 0
+		row.append((i, label, tw))
+		used += tw + 4
+	if row:
+		rows.append(row)
+	for r in rows:
+		natural = sum(tw for i, label, tw in r) + 4 * (len(r) - 1)
+		extra = (width - natural) / max(1, len(r)) if len(rows) == 1 or r is not rows[-1] else 0
+		cx = x
+		for i, label, tw in r:
+			bw = tw + extra
+			screen.setButtonGFC('OptTab%d' % i, label, '', cx, y, bw, _TAB_HEIGHT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1,
+				_cpe.ButtonStyles.BUTTON_STYLE_STANDARD)
+			cx += bw + 4
+		y += _TAB_HEIGHT + 4
+	return y
 
 
 def handleInput(args):
