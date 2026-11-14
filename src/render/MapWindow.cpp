@@ -1019,6 +1019,16 @@ namespace oc4::render
 				downOnPopup = true;
 				return;
 			}
+			// On the main interface's minimap: the camera goes there (and follows while held), as the
+			// original's (where the team's map is not centred yet, the minimap and the camera's leash
+			// keep the map's edges hidden).
+			if (down && left && !popup.active() && ui.active() && onMinimap(x, y) && ui.onMainMinimap(x, y))
+			{
+				SDL_CaptureMouse(true);
+				minimapDrag = true;
+				jumpFromMinimap(x, y);
+				return;
+			}
 			// On the game's screens: theirs (a click on a widget, or nothing for the map).
 			if (down && ui.active() && ui.solid(x, y)) // (a popup up too: both take clicks, as the original's)
 			{
