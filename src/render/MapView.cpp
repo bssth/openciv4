@@ -1132,7 +1132,44 @@ float4 PSTerrain(PSIn i) : SV_Target
 						if (q->riverEast)
 							segment(qx + 1, qy, qx + 1, qy + 1);
 					}
+			// Flat land is not flat: gentle relief, so that the light varies over it as in the
+			// original (the same blend tiles under an even light look like one tile repeated).
+			// Faded out towards water and river beds, so that shores and rivers keep their levels.
+			const auto land = [&](int x, int y) {
+				const PlotView* p = map.plot(x, y);
+				return p && !p->water ? 1.0f : 0.0f;
+			};
+			const float l0 = land(ix, iy) + (land(ix + 1, iy) - land(ix, iy)) * fx;
+			const float l1 = land(ix, iy + 1) + (land(ix + 1, iy + 1) - land(ix, iy + 1)) * fx;
+			const float onLand = smoother((l0 + (l1 - l0) * fy - 0.5f) * 2);
+			if (onLand > 0)
+				h += relief(px, py) * kRelief * S() * onLand * (1 - bed);
 			return h - bed * 0.025f * S();
+		}
+
+		static constexpr float kRelief = 0.12f; // of a plot, either way
+
+		// Smooth noise in [-1, 1] over the map in plots, a few octaves of value noise whose
+		// lattices have whole cells a plot, so that a wrapping map has no seam.
+		float relief(float px, float py) const
+		{
+			const auto octave = [&](int cells, int salt) {
+				const float qx = px * float(cells), qy = py * float(cells);
+				const int x0 = int(std::floor(qx)), y0 = int(std::floor(qy));
+				const float fx = smoother(qx - float(x0)), fy = smoother(qy - float(y0));
+				const int periodX = map.width * cells, periodY = map.height * cells;
+				const auto at = [&](int x, int y) {
+					if (map.wrapX)
+						x = (x % periodX + periodX) % periodX;
+					if (map.wrapY)
+						y = (y % periodY + periodY) % periodY;
+					return unitFloat(hash(x, y, salt)) * 2 - 1;
+				};
+				const float a = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * fx;
+				const float b = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * fx;
+				return a + (b - a) * fy;
+			};
+			return 0.6f * octave(1, 101) + 0.3f * octave(2, 102) + 0.1f * octave(4, 103);
 		}
 
 		void buildTerrain()
