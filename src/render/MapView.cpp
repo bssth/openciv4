@@ -1180,8 +1180,71 @@ float4 PSTerrain(PSIn i) : SV_Target
 			ib = renderer.createBuffer(SDL_GPU_BUFFERUSAGE_INDEX, indices.data(), uint32_t(indices.size() * 4));
 		}
 
+		// How far the minimap is moved: by none once the team's map is centred, or with the fog of
+		// war off; until then, so that what the team has seen is in its middle (on an axis the map
+		// wraps on, the seen part as the shortest stretch around it).
+		std::pair<int, int> shift() const
+		{
+			if (map.minimapCentered || !fog || map.width <= 0 || map.height <= 0)
+				return { 0, 0 };
+			const int W = map.width, H = map.height;
+			std::vector<uint8_t> cols(size_t(W), 0), rows(size_t(H), 0);
+			for (int y = 0; y < H; ++y)
+				for (int x = 0; x < W; ++x)
+					if (map.plots[size_t(x) + size_t(y) * W].revealed)
+						cols[size_t(x)] = rows[size_t(y)] = 1;
+			const auto along = [](const std::vector<uint8_t>& seen, bool wraps) {
+				const int n = int(seen.size());
+				int first = -1, last = -1;
+				for (int i = 0; i < n; ++i)
+					if (seen[size_t(i)])
+						last = i, first = first < 0 ? i : first;
+				if (first < 0)
+					return 0;
+				int start = first, length = last - first + 1;
+				if (wraps)
+				{
+					// (the longest run not seen, around the end too: the seen part is the rest)
+					int bestGap = 0, gapEnd = -1;
+					for (int i = 0, run = 0; i < 2 * n; ++i)
+					{
+						run = seen[size_t(i % n)] ? 0 : run + 1;
+						if (run > bestGap && run <= n)
+							bestGap = run, gapEnd = i % n;
+					}
+					if (bestGap > 0 && bestGap < n)
+						start = (gapEnd + 1) % n, length = n - bestGap;
+				}
+				const int middle = start + length / 2;
+				return wraps ? ((middle - n / 2) % n + n) % n : middle - n / 2;
+			};
+			return { along(cols, map.wrapX), along(rows, map.wrapY) };
+		}
+
+		std::optional<std::array<int, 4>> computeSeen() const
+		{
+			if (map.minimapCentered || !fog || map.width <= 0 || map.height <= 0)
+				return std::nullopt;
+			std::array<int, 4> b{ map.width, map.height, -1, -1 };
+			for (int y = 0; y < map.height; ++y)
+				for (int x = 0; x < map.width; ++x)
+					if (map.plots[size_t(x) + size_t(y) * size_t(map.width)].revealed)
+						b = { std::min(b[0], x), std::min(b[1], y), std::max(b[2], x), std::max(b[3], y) };
+			if (b[2] < 0)
+				return std::nullopt;
+			if (map.wrapX)
+				b[0] = 0, b[2] = map.width - 1;
+			if (map.wrapY)
+				b[1] = 0, b[3] = map.height - 1;
+			return b;
+		}
+
+		// (the camera's leash, worked out with the minimap: when the plots change)
+		std::optional<std::array<int, 4>> seen;
+
 		void updateMinimap()
 		{
+			seen = computeSeen();
 			paintMinimap(minimapPixels, 0.45f, 0.25f, true);
 			++minimapVersion;
 		}
@@ -1195,11 +1258,18 @@ float4 PSTerrain(PSIn i) : SV_Target
 			const int W = map.width, H = map.height;
 			std::vector<uint8_t>& minimapPixels = pixels;
 			minimapPixels.assign(size_t(W) * H * 4, 0);
+			for (size_t i = 3; i < minimapPixels.size(); i += 4)
+				minimapPixels[i] = 255; // (black where it was moved off the map)
+			// (turned so that the start is in the middle, until the map is centred; not the whole map's)
+			const auto [sx, sy] = wholeMap ? std::pair{ 0, 0 } : shift();
 			for (int y = 0; y < H; ++y)
 				for (int x = 0; x < W; ++x)
 				{
 					const PlotView& p = map.plots[size_t(x) + size_t(y) * W];
-					uint8_t* px = &minimapPixels[(size_t(H - 1 - y) * W + x) * 4];
+					const int ox = map.wrapX ? ((x - sx) % W + W) % W : x - sx, oy = map.wrapY ? ((y - sy) % H + H) % H : y - sy;
+					if (ox < 0 || ox >= W || oy < 0 || oy >= H)
+						continue;
+					uint8_t* px = &minimapPixels[(size_t(H - 1 - oy) * W + ox) * 4];
 					uint32_t c = p.terrain >= 0 && size_t(p.terrain) < terrainColors.size() ? terrainColors[size_t(p.terrain)] : 0xFF808080;
 					float b = float(c & 255) / 255, g = float((c >> 8) & 255) / 255, r = float((c >> 16) & 255) / 255;
 					if (p.peak)
@@ -1223,7 +1293,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 			{
 				if (!cities || (fog && !map.plots[size_t(c.x) + size_t(c.y) * W].revealed))
 					continue;
-				uint8_t* px = &minimapPixels[(size_t(H - 1 - c.y) * W + c.x) * 4];
+				const int ox = map.wrapX ? ((c.x - sx) % W + W) % W : c.x - sx, oy = map.wrapY ? ((c.y - sy) % H + H) % H : c.y - sy;
+				if (ox < 0 || ox >= W || oy < 0 || oy >= H)
+					continue;
+				uint8_t* px = &minimapPixels[(size_t(H - 1 - oy) * W + ox) * 4];
 				px[0] = px[1] = px[2] = 255;
 			}
 		}
@@ -3150,6 +3223,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 	}
 
 	const std::vector<uint32_t>& MapView::terrainColors() const { return m->terrainColors; }
+	std::pair<int, int> MapView::minimapShift() const { return m->shift(); }
+
+	std::optional<std::array<int, 4>> MapView::seenBounds() const { return m->hasMap ? m->seen : std::nullopt; }
+
 	const std::vector<uint8_t>& MapView::minimap(uint64_t& version) const
 	{
 		version = m->minimapVersion;
