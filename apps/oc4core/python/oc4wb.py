@@ -199,6 +199,14 @@ _flyout = None
 
 # ---------------------------------------------------------------- what a palette holds
 
+def _art(tag):
+	"""An interface art's file (CIV4ArtDefines_Interface), or '' (the item shows its name)."""
+	try:
+		return str(_cpe.CyArtFileMgr().getInterfaceArtInfo(tag).getPath())
+	except Exception:
+		return ''
+
+
 def _items(ctrl):
 	"""The active section's items: (list, index, button art, label, selected)."""
 	gc = _gc
@@ -238,8 +246,10 @@ def _items(ctrl):
 		elif tab == 2:
 			for i in range(gc.getNumTerrainInfos()):
 				out.append((0, i, gc.getTerrainInfo(i).getButton(), gc.getTerrainInfo(i).getDescription(), sel(0, i)))
-			for i, name in enumerate((u'Peak', u'Hills', u'Flat', u'Water')):
-				out.append((1, i, '', name, sel(1, i)))
+			# (the plot types and the river with the original's own buttons)
+			for i, (name, art) in enumerate(((u'Peak', 'WORLDBUILDER_PLOT_TYPE_MOUNTAIN'), (u'Hills', 'WORLDBUILDER_PLOT_TYPE_HILL'),
+					(u'Flat', 'WORLDBUILDER_PLOT_TYPE_PLAINS'), (u'Water', 'WORLDBUILDER_PLOT_TYPE_OCEAN'))):
+				out.append((1, i, _art(art), name, sel(1, i)))
 			k = 0
 			for i in range(gc.getNumFeatureInfos()):
 				info = gc.getFeatureInfo(i)
@@ -248,7 +258,7 @@ def _items(ctrl):
 					k += 1
 			for i in range(gc.getNumRouteInfos()):
 				out.append((3, i, gc.getRouteInfo(i).getButton(), gc.getRouteInfo(i).getDescription(), sel(3, i)))
-			out.append((3, gc.getNumRouteInfos(), '', u'River', sel(3, gc.getNumRouteInfos())))
+			out.append((3, gc.getNumRouteInfos(), _art('WORLDBUILDER_RIVER_PLACEMENT'), u'River', sel(3, gc.getNumRouteInfos())))
 		elif tab == 3:
 			for i in range(gc.getMAX_CIV_PLAYERS()):
 				p = gc.getPlayer(i)
