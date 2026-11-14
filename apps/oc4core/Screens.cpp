@@ -433,6 +433,7 @@ namespace oc4::host
 		// a talk's music
 		Sounds& sounds = utility.sounds();
 		host.def("audio_play", [&sounds](const std::string& tag) { sounds.play(tag); });
+		host.def("ui_no_tech_splash", [&ui] { return ui.noTechSplash(); });
 		host.def("movie_playable", [&utility](const std::string& file) {
 			const auto at = utility.assets().locate(file);
 			return media::available() && at && !at->file.empty();
@@ -706,6 +707,7 @@ if _walls:
 			m_mainId = py::module_::import("CvScreenEnums").attr("MAIN_INTERFACE").cast<int>();
 			py::module_::import("CvScreensInterface").attr("showMainInterface")();
 			m_utility.gameInterface().makeInterfaceDirty();
+			m_utility.gameInterface().techSplash = true;
 			m_active = true;
 			m_laidOut = m_seenSize = { width, height };
 		}

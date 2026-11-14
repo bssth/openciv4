@@ -441,7 +441,10 @@ class CyGInterfaceScreen(object):
 	def getRenderInterfaceOnly(self): return False
 	def setScreenGroup(self, iGroup): pass
 	def getScreenGroup(self): return 0
-	def setSound(self, szSound): pass
+	# (the screen's sound as it is shown: the tech splash's quote)
+	def setSound(self, szSound):
+		if szSound:
+			oc4host.audio_play(_str(szSound))
 	def setSoundId(self, iSound): pass
 	def showWindowBackground(self, bShow): pass
 	def setPersistent(self, b): pass
@@ -2162,7 +2165,7 @@ class CyInterface(object):
 		x, y = oc4host.ui_mouse_plot()
 		return _cpe.CyMap().plot(x, y)
 	def countEntities(self, iI): return 0
-	def noTechSplash(self): return True
+	def noTechSplash(self): return oc4host.ui_no_tech_splash()
 	def shiftKey(self): return oc4host.ui_key(0)
 	def ctrlKey(self): return oc4host.ui_key(1)
 	def altKey(self): return oc4host.ui_key(2)
