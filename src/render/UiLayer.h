@@ -14,6 +14,7 @@
 #include <array>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -82,6 +83,7 @@ namespace oc4::render
 
 		ButtonArt& m_art;
 		Theme& m_theme;
+		std::map<std::string, Theme::Skin, std::less<>> m_namedSkins; // panels styled "@style|property": that skin of the theme
 		bool m_fontsRead = false;
 		Theme::Skin m_tooltip; // the theme's (the help's box)
 		// The theme's pull down (GFC_Control_StandardComboBox_Style): its box and its button, plain

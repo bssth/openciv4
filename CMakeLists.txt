@@ -368,6 +368,12 @@ target_link_libraries(auto_end_turn_test PRIVATE oc4_options)
 add_test(NAME auto_end_turn COMMAND auto_end_turn_test)
 set_target_properties(auto_end_turn_test PROPERTIES FOLDER "tests")
 
+add_executable(xml_decode_test tests/xml_decode_test.cpp)
+target_include_directories(xml_decode_test PRIVATE apps/oc4core)
+target_link_libraries(xml_decode_test PRIVATE oc4_options)
+add_test(NAME xml_decode COMMAND xml_decode_test)
+set_target_properties(xml_decode_test PROPERTIES FOLDER "tests")
+
 add_executable(pad_map_test tests/pad_map_test.cpp)
 target_include_directories(pad_map_test PRIVATE src)
 add_test(NAME pad_map COMMAND pad_map_test)
