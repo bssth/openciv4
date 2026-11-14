@@ -141,6 +141,8 @@ namespace oc4::host
 
 		for (const auto& [name, on] : s.options)
 			ic.setOption(static_cast<GameOptionTypes>(infoType(name)), on);
+		if (ic.getOption(GAMEOPTION_ADVANCED_START))
+			ic.setNumAdvancedStartPoints(s.advancedStartPoints >= 0 ? s.advancedStartPoints : 600);
 
 		const int numVictories = GC.getNumVictoryInfos();
 		std::unique_ptr<bool[]> victories(new bool[size_t(numVictories)]);

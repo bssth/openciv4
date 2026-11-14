@@ -79,8 +79,9 @@ def takeChoice():
 	"""None while the player chooses; then ('new', {settings}), ('load', utf-8 path, humans to host for or 0),
 	('join', address), ('mod', its folder) or ('exit',).
 	A new game's settings may also hold 'players' (a count), 'options' ({'GAMEOPTION_...': on}),
-	'victories' (['VICTORY_...'], those on), 'mapOptions' ({option: value}) and 'slots'
-	({slot: {'status': 'human'|'ai'|'closed', 'civ', 'leader', 'team'}}); left out, the usual."""
+	'victories' (['VICTORY_...'], those on), 'mapOptions' ({option: value}), 'slots'
+	({slot: {'status': 'human'|'ai'|'closed', 'civ', 'leader', 'team'}}) and 'advancedStartPoints';
+	left out, the usual."""
 	c = _state['choice']
 	_state['choice'] = None
 	return c
@@ -391,12 +392,12 @@ def _mapCall(module, fn, args, default):
 
 
 def _mapOptions(name):
-	"""The map script's options the player sees: (option, its name, [(value, text)], default, random)."""
+	"""The map script's options, its hidden ones too (only Play Now hides them): (option, its
+	name, [(value, text)], default, random)."""
 	module = _mapModule(name)
 	count = _mapCall(module, 'getNumCustomMapOptions', None, 0) or 0
-	hidden = _mapCall(module, 'getNumHiddenCustomMapOptions', None, 0) or 0
 	out = []
-	for i in range(max(0, count - hidden)):
+	for i in range(count):
 		values = _mapCall(module, 'getNumCustomMapOptionValues', (i,), 0) or 0
 		out.append((i, _u(_mapCall(module, 'getCustomMapOptionName', (i,), u'%d' % (i + 1))),
 			[(v, _u(_mapCall(module, 'getCustomMapOptionDescAt', (i, v), u'%d' % (v + 1)))) for v in range(values)],
@@ -453,6 +454,7 @@ def _customDefaults():
 		'options': [gc.getGameOptionInfo(i).getType() for i in range(gc.getNumGameOptionInfos()) if gc.getGameOptionInfo(i).getDefault()],
 		'slots': [{'status': p == 0 and 'human' or 'ai', 'civ': '', 'leader': '', 'team': p} for p in range(gc.getMAX_CIV_PLAYERS())],
 		'touched': False,
+		'startPoints': 600,
 	}
 	for key, label, count, get, default in _worldRows():
 		c[key] = default
@@ -490,6 +492,8 @@ def _customDefaults():
 				if isinstance(s.get('team'), int) and 0 <= s['team'] < len(c['slots']):
 					slot['team'] = s['team']
 			c['touched'] = bool(saved.get('touched'))
+		if isinstance(saved.get('startPoints'), int) and saved['startPoints'] >= 0:
+			c['startPoints'] = saved['startPoints']
 	return c
 
 
@@ -552,124 +556,153 @@ def _checkBox(screen, name, on, x, y, size):
 	screen.setState(name, on)
 
 
-_SHORT = {'size': u'World Size', 'climate': u'Climate', 'sea': u'Sea Level', 'era': u'Era', 'speed': u'Game Speed', 'handicap': u'Difficulty'}
-
-
 def _customPage(screen, W, H):
+	"""As the original's: the players' rows across the top (status, team, civilization, leader,
+	difficulty; a closed slot's greyed), below them Settings, Options and Victories."""
 	gc = _gc()
 	c = _custom()
 	_state['customItems'] = items = {}
 	x, y = 20, 64
 	w, h = W - 40, H - 84
 	screen.addPanel('CGPanel', u'', u'', True, False, x, y, w, h, _cpe.PanelStyles.PANEL_STYLE_MAIN)
-	_label(screen, 'CGHeader', _t('TXT_KEY_MAIN_MENU_CUSTOM_GAME', u'Custom Game'), W / 2, y + 14, '3b', 1 << 2)
-	inner = w - 60
-	# (the options' column as wide as its two columns of labels need, at most 45%; the players
-	# get 60% of the rest)
-	longest = max([len(gc.getGameOptionInfo(o).getDescription()) for o in _gameOptions()] + [10])
-	optW = min(int(inner * 0.45), max(int(inner * 0.30), 2 * (36 + int(longest * 7.5))))
-	colW = [int((inner - optW) * 0.6), inner - optW - int((inner - optW) * 0.6), optW]
-	colX = [x + 20, x + 40 + colW[0], x + 60 + colW[0] + colW[1]]
-	top, bottom = y + 56, y + h - 72
-
-	# Players: a row per slot.
-	slots = c['slots']
-	_label(screen, 'CGPlayersHeader', _t('TXT_KEY_MAIN_MENU_PLAYERS', u'Players'), colX[0], top, '3b')
-	rowH = max(24, min(32, (bottom - top - 34) / len(slots)))
-	gap = 6
-	teamW = 54
-	statusW = int((colW[0] - teamW - 3 * gap) * 0.22)
-	civW = int((colW[0] - teamW - 3 * gap) * 0.37)
-	leaderW = colW[0] - teamW - 3 * gap - statusW - civW
-	anyCiv = _leadAnyCiv(c)
-	human = _civs(True)
-	ai = _civs(False)
+	_label(screen, 'CGHeader', _t('TXT_KEY_MAIN_MENU_CUSTOM_GAME', u'Custom Game').upper(), W / 2, y + 14, '3b', 1 << 2)
 	random = _t('TXT_KEY_MAIN_MENU_RANDOM', u'Random')
-	for p, slot in enumerate(slots):
-		ry = top + 34 + p * rowH
-		sx = colX[0]
+	grey = lambda text: u'<color=160,160,160>%s</color>' % text
+
+	# Players: the open slots and the next closed one (opening it shows the one after).
+	slots = c['slots']
+	lastOpen = max([p for p, s in enumerate(slots) if s['status'] != 'closed'] + [0])
+	shown = min(len(slots), lastOpen + 2)
+	px, pw = x + 20, w - 40
+	ptop = y + 50
+	# (the rows give way to the options below: their check boxes need perColumn rows)
+	options = _gameOptions()
+	box = 20
+	perColumn = (len(options) + 1) / 2
+	below = 80 + perColumn * (box + 1) + 16
+	rowH = max(26, min(36, (y + h - 72 - 12 - ptop - below) / shown))
+	parts = [0.21, 0.14, 0.36, 0.145, 0.145] # status, team, civilization, leader, difficulty
+	gap = 8
+	inner = pw - 16 - gap * (len(parts) - 1)
+	widths = [int(inner * f) for f in parts]
+	cols = [px + 8]
+	for wd in widths[:-1]:
+		cols.append(cols[-1] + wd + gap)
+	anyCiv = _leadAnyCiv(c)
+	human, ai = _civs(True), _civs(False)
+	aiHandicap = gc.getHandicapInfo(gc.getDefineINT('AI_HANDICAP')).getDescription()
+	for p in range(shown):
+		slot = slots[p]
+		ry = ptop + p * rowH
+		screen.addPanel('CGRow%d' % p, u'', u'', True, False, px, ry, pw, rowH - 4, _cpe.PanelStyles.PANEL_STYLE_IN)
+		dy = ry + (rowH - 4 - 24) / 2
 		if p == 0:
-			_label(screen, 'CGHuman', _t('TXT_KEY_MAIN_MENU_HUMAN', u'Human'), sx + 4, ry + 3)
+			_label(screen, 'CGHuman', _t('TXT_KEY_MAIN_MENU_HUMAN', u'Human'), cols[0] + 6, dy + 3)
 		else:
-			_pullDown(screen, 'CGStatus%d' % p, sx, ry, statusW,
+			_pullDown(screen, 'CGStatus%d' % p, cols[0], dy, widths[0],
 				[(_t('TXT_KEY_MAIN_MENU_AI', u'AI'), 'ai'), (_t('TXT_KEY_MAIN_MENU_CLOSED', u'Closed'), 'closed')], slot['status'])
 			items['CGStatus%d' % p] = ('ai', 'closed')
 		if slot['status'] == 'closed':
+			for k, text in ((1, u'Team %d' % (p + 1)), (2, random), (3, random), (4, aiHandicap)):
+				_label(screen, 'CGClosed%d_%d' % (k, p), grey(text), cols[k] + 6, dy + 3)
 			continue
-		sx += statusW + gap
-		civs = [(random, '')] + (human if p == 0 else ai)
-		_pullDown(screen, 'CGCiv%d' % p, sx, ry, civW, civs, slot['civ'])
+		teams = [(u'Team %d' % (t + 1), t) for t in range(len(slots))]
+		_pullDown(screen, 'CGTeam%d' % p, cols[1], dy, widths[1], teams, slot['team'])
+		items['CGTeam%d' % p] = [d for t, d in teams]
+		civs = [(random, '')] + (p == 0 and human or ai)
+		_pullDown(screen, 'CGCiv%d' % p, cols[2], dy, widths[2], civs, slot['civ'])
 		items['CGCiv%d' % p] = [d for t, d in civs]
-		sx += civW + gap
 		leaders = [(random, '')]
 		if slot['civ'] or anyCiv:
 			leaders += _civLeaders(slot['civ'], anyCiv)
-		_pullDown(screen, 'CGLeader%d' % p, sx, ry, leaderW, leaders, slot['leader'])
+		_pullDown(screen, 'CGLeader%d' % p, cols[3], dy, widths[3], leaders, slot['leader'])
 		items['CGLeader%d' % p] = [d for t, d in leaders]
-		sx += leaderW + gap
-		teams = [(u'%d' % (t + 1), t) for t in range(len(slots))]
-		_pullDown(screen, 'CGTeam%d' % p, sx, ry, teamW, teams, slot['team'])
-		items['CGTeam%d' % p] = [d for t, d in teams]
-	_label(screen, 'CGTeamHeader', _t('TXT_KEY_MAIN_MENU_TEAM', u'Team'), colX[0] + colW[0] - teamW, top + 8, 1)
+		if p == 0:
+			handicaps = [(gc.getHandicapInfo(i).getDescription(), gc.getHandicapInfo(i).getType()) for i in range(gc.getNumHandicapInfos())]
+			_pullDown(screen, 'CGhandicap', cols[4], dy, widths[4], handicaps, c['handicap'])
+			items['CGhandicap'] = [d for t, d in handicaps]
+		else:
+			_label(screen, 'CGDifficulty%d' % p, grey(aiHandicap), cols[4] + 6, dy + 3)
 
-	# Settings: the map and the world, then the map script's own options.
-	_label(screen, 'CGSettingsHeader', _t('TXT_KEY_MAIN_MENU_SETTINGS', u'Settings'), colX[1], top, '3b')
-	labelW = int(colW[1] * 0.36)
-	ddX, ddW = colX[1] + labelW, colW[1] - labelW
-	ry = top + 34
-	maps = _state['maps']
-	_label(screen, 'CGMapLabel', u'Map', colX[1], ry + 3)
-	_pullDown(screen, 'CGMap', ddX, ry, ddW, [(m, m) for m in maps], c['map'])
-	items['CGMap'] = list(maps)
-	ry += 32
+	# Settings, Options, Victories.
+	btop = ptop + shown * rowH + 12
+	bbottom = y + h - 72
+	bw = w - 40 - 2 * gap
+	bwidths = [int(bw * 0.36), int(bw * 0.36)]
+	bwidths.append(bw - bwidths[0] - bwidths[1])
+	# (a narrow window: Options as wide as two columns of its labels need, from Victories first)
+	longest = max([len(gc.getGameOptionInfo(o).getDescription()) for o in options] + [10])
+	need = 2 * (40 + int(longest * 7.5)) + 16
+	if bwidths[1] < need:
+		take = min(need - bwidths[1], max(0, bwidths[2] - 180))
+		bwidths[1] += take
+		bwidths[2] -= take
+		take = min(need - bwidths[1], max(0, bwidths[0] - 240))
+		bwidths[1] += take
+		bwidths[0] -= take
+	bx = [x + 20, x + 20 + bwidths[0] + gap, x + 20 + bwidths[0] + bwidths[1] + 2 * gap]
+	for k, (name, title) in enumerate((('CGSettingsPanel', _t('TXT_KEY_MAIN_MENU_SETTINGS', u'Settings')),
+			('CGOptionsPanel', _t('TXT_KEY_MAIN_MENU_OPTIONS', u'Options')), ('CGVictoriesPanel', _t('TXT_KEY_MAIN_MENU_VICTORIES', u'Victories')))):
+		screen.addPanel(name, u'', u'', True, False, bx[k], btop, bwidths[k], bbottom - btop, _cpe.PanelStyles.PANEL_STYLE_IN)
+		_label(screen, name + 'Title', title.upper(), bx[k] + 10, btop + 8, '2b')
+	ctop = btop + 40
+
+	# Settings: labels right-aligned before their pull downs, the map script's options after.
+	labelX = bx[0] + max(int(bwidths[0] * 0.3), 96)
+	ddX, ddW = labelX + 10, bx[0] + bwidths[0] - labelX - 22
 	mapOptions, climate, sea = _mapOptions(c['map'])
+	rows = [('map', u'Map:', [(m, m) for m in _state['maps']], c['map'])]
+	short = {'size': u'Size:', 'climate': u'Climate:', 'sea': u'Sealevel:', 'era': u'Era:', 'speed': u'Speed:'}
 	for key, label, count, get, default in _worldRows():
-		if (key == 'climate' and not climate) or (key == 'sea' and not sea):
+		if key == 'handicap' or (key == 'climate' and not climate) or (key == 'sea' and not sea):
 			continue
-		_label(screen, 'CGLabel' + key, _SHORT.get(key, label), colX[1], ry + 3)
-		infos = [(get(i).getDescription(), get(i).getType()) for i in range(count)]
-		_pullDown(screen, 'CG' + key, ddX, ry, ddW, infos, c[key])
-		items['CG' + key] = [d for t, d in infos]
-		ry += 32
+		rows.append((key, short.get(key, label), [(get(i).getDescription(), get(i).getType()) for i in range(count)], c[key]))
 	chosen = c['mapOptions'].setdefault(c['map'], {})
-	if mapOptions:
-		ry += 8
-		_label(screen, 'CGMapOptionsHeader', _t('TXT_KEY_MAIN_MENU_CUSTOM_SETUP_OPTIONS', u'Options') + u': ' + c['map'], colX[1], ry, 2)
-		ry += 28
 	for i, name, values, default, canRandom in mapOptions:
-		_label(screen, 'CGMapOptLabel%d' % i, name, colX[1], ry + 3)
-		choices = list(values) + (canRandom and [(-1, random)] or [])
-		value = chosen.get(i, default)
-		_pullDown(screen, 'CGMapOpt%d' % i, ddX, ry, ddW, [(t, v) for v, t in choices], value)
-		items['CGMapOpt%d' % i] = [v for v, t in choices]
-		ry += 32
+		choices = [(t, v) for v, t in values] + (canRandom and [(random, -1)] or [])
+		rows.append(('MapOpt%d' % i, name, choices, chosen.get(i, default)))
+	sh = max(26, min(36, (bbottom - ctop - 8) / max(1, len(rows))))
+	for k, (key, label, choices, selected) in enumerate(rows):
+		ry = ctop + k * sh
+		name = key == 'map' and 'CGMap' or 'CG' + key
+		_label(screen, name + 'Label', label, labelX, ry + 3, 2, 1 << 1)
+		_pullDown(screen, name, ddX, ry, ddW, choices, selected)
+		items[name] = [d for t, d in choices]
 
-	# Victories and the game options: check boxes, the option's help as its label's tooltip.
-	box = 20
-	_label(screen, 'CGVictoriesHeader', _t('TXT_KEY_MAIN_MENU_VICTORIES', u'Victories'), colX[2], top, '3b')
-	victories = range(gc.getNumVictoryInfos())
-	options = _gameOptions()
-	optionsTop = top + 34 + len(victories) * (box + 4) + 16
-	columns = (len(options) * (box + 4) > bottom - optionsTop - 34) and 2 or 1
+	# Options: Advanced Start's points, then the check boxes (two columns if one is too long).
+	ox = bx[1] + 16
+	_label(screen, 'CGStartPointsLabel', u'Advanced Start Base Points:', bx[1] + bwidths[1] - 100, ctop + 3, 2, 1 << 1)
+	screen.addEditBoxGFC('CGStartPoints', bx[1] + bwidths[1] - 90, ctop, 70, 26, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1, _cpe.FontTypes.GAME_FONT)
+	screen.setEditBoxString('CGStartPoints', u'%d' % c.get('startPoints', 600))
+	otop = ctop + 40
+	avail = bbottom - otop - 8
+	columns = (len(options) * (box + 6) > avail) and 2 or 1
 	perColumn = (len(options) + columns - 1) / columns
-	optH = max(box, min(box + 6, (bottom - optionsTop - 34) / max(1, perColumn)))
-	for k, v in enumerate(victories):
-		info = gc.getVictoryInfo(v)
-		ry = top + 34 + k * (box + 4)
-		_checkBox(screen, 'CGVictory%d' % v, info.getType() in c['victories'], colX[2], ry, box)
-		_label(screen, 'CGVictoryLabel%d' % v, info.getDescription(), colX[2] + box + 8, ry + 1)
-	_label(screen, 'CGOptionsHeader', _t('TXT_KEY_MAIN_MENU_OPTIONS', u'Options'), colX[2], optionsTop, '3b')
+	oh = max(box + 1, min(box + 16, avail / max(1, perColumn)))
 	for k, o in enumerate(options):
 		info = gc.getGameOptionInfo(o)
-		ox = colX[2] + (k / perColumn) * (colW[2] / columns)
-		oy = optionsTop + 34 + (k % perColumn) * optH
-		_checkBox(screen, 'CGOption%d' % o, info.getType() in c['options'], ox, oy, box)
-		_label(screen, 'CGOptionLabel%d' % o, info.getDescription(), ox + box + 8, oy + 1, help=info.getHelp())
+		cx = ox + (k / perColumn) * ((bwidths[1] - 24) / columns)
+		cy = otop + (k % perColumn) * oh
+		_checkBox(screen, 'CGOption%d' % o, info.getType() in c['options'], cx, cy, box)
+		_label(screen, 'CGOptionLabel%d' % o, info.getDescription(), cx + box + 8, cy + 1, help=info.getHelp())
+
+	# Victories: those a single player game can have (the target score's needs one set).
+	vh = max(box + 1, min(box + 16, (bbottom - ctop - 8) / max(1, len(_victories()))))
+	for k, v in enumerate(_victories()):
+		info = gc.getVictoryInfo(v)
+		cy = ctop + k * vh
+		_checkBox(screen, 'CGVictory%d' % v, info.getType() in c['victories'], bx[2] + 16, cy, box)
+		_label(screen, 'CGVictoryLabel%d' % v, info.getDescription(), bx[2] + 16 + box + 8, cy + 1)
 
 	if _state['message']:
-		_label(screen, 'CGMessage', u'<color=255,96,96>' + _state['message'] + u'</color>', W / 2, y + h - 92, 2, 1 << 2)
+		_label(screen, 'CGMessage', u'<color=255,96,96>' + _state['message'] + u'</color>', W / 2, y + h - 52, 2, 1 << 2)
 	_button(screen, 'MenuCustomLaunch', _t('TXT_KEY_MAIN_MENU_LAUNCH', u'Launch!'), x + w - 230, y + h - 60, 200)
 	_button(screen, 'MenuBack', _t('TXT_KEY_MAIN_MENU_GO_BACK', u'Go Back'), x + 30, y + h - 60, 200)
+
+
+def _victories():
+	gc = _gc()
+	return [v for v in range(gc.getNumVictoryInfos()) if not gc.getVictoryInfo(v).isTargetScore()]
 
 
 def _keepCustom():
@@ -704,8 +737,13 @@ def _keepCustom():
 			if v is not None:
 				chosen[int(name[len('CGMapOpt'):])] = v
 	gc = _gc()
+	shownVictories = set(_victories())
 	c['victories'] = [gc.getVictoryInfo(v).getType() for v in range(gc.getNumVictoryInfos())
-		if screen.getCheckBoxState('CGVictory%d' % v)]
+		if (screen.getCheckBoxState('CGVictory%d' % v) if v in shownVictories else gc.getVictoryInfo(v).getType() in c['victories'])]
+	try:
+		c['startPoints'] = max(0, int(_u(screen.getEditBoxString('CGStartPoints')).strip()))
+	except (ValueError, TypeError, AttributeError):
+		pass
 	shown = set(_gameOptions())
 	c['options'] = [gc.getGameOptionInfo(o).getType() for o in range(gc.getNumGameOptionInfos())
 		if (screen.getCheckBoxState('CGOption%d' % o) if o in shown else gc.getGameOptionInfo(o).getType() in c['options'])]
@@ -777,6 +815,8 @@ def _customLaunch():
 	settings['options'] = dict([(str(gc.getGameOptionInfo(o).getType()), gc.getGameOptionInfo(o).getType() in c['options'])
 		for o in range(gc.getNumGameOptionInfos())])
 	settings['victories'] = [str(v) for v in c['victories']]
+	if 'GAMEOPTION_ADVANCED_START' in c['options']:
+		settings['advancedStartPoints'] = c.get('startPoints', 600)
 	# (the open slots one after another, as the map scripts count their players; the teams
 	# numbered in the order they first come)
 	teams = {}

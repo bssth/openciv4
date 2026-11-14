@@ -3,7 +3,7 @@
 //   oc4core [--civ4 <root>] [--mod <Mods\\Name> | <mod folder>] [--python-home <dir>] [--log-dir <dir>]
 //           [--turns N [--map Continents] [--size SMALL] [--players N] [--seed N]]
 //           [--option GAMEOPTION_X[=0|1]]... [--victories VICTORY_A,VICTORY_B | none] [--map-option N=V]...
-//           [--slot N=human|ai|closed[:CIV[:LEADER[:TEAM]]]]...
+//           [--slot N=human|ai|closed[:CIV[:LEADER[:TEAM]]]]... [--advanced-start-points N]
 //           [--load <file.CivBeyondSwordSave>] [--save <file.CivBeyondSwordSave> [--save-at TURN]]
 //           [--profile] [--profile-out <stacks.folded>] [--rand-log] [--exec <script.py>] [--exec-first <script.py>]
 //           [--menu | --view | --play [--screenshot <file.png>] [--view-size WxH] [--ui-scale PERCENT] [--show-fps] [--wasd-pan] [--auto-end-turn] [--no-edge-scroll] [--look X,Y[,distance in plots]] [--keys <window keys>]
@@ -13,7 +13,8 @@
 // A new game's setup beyond the world: --option turns a game option on (=0: off; else the
 // XML's default), --victories the only victory conditions (else all), --map-option sets the
 // map script's option N to its value V (both from 0), --slot changes a player slot (0 the
-// human's, the others AI; an empty part is random, the team its own). The prefixes
+// human's, the others AI; an empty part is random, the team its own), --advanced-start-points
+// the points of Advanced Start (when it is on; else 600, as the original's). The prefixes
 // GAMEOPTION_, VICTORY_, CIVILIZATION_ and LEADER_ may be left out. The menu's new game
 // takes those the menu does not choose.
 //
@@ -262,6 +263,8 @@ namespace
 				o.game.players = std::stoi(next().wstring());
 			else if (a == L"--option")
 				o.game.options.push_back(host::setup::parseOption(next().string()));
+			else if (a == L"--advanced-start-points")
+				o.game.advancedStartPoints = host::setup::number(next().string(), "--advanced-start-points");
 			else if (a == L"--victories")
 				o.game.victories = host::setup::parseVictories(next().string());
 			else if (a == L"--map-option")
@@ -2068,6 +2071,8 @@ int wmain(int argc, wchar_t** argv)
 							played.game.mapOptions = asked.mapOptions;
 						if (played.game.slots.empty())
 							played.game.slots = asked.slots;
+						if (played.game.advancedStartPoints < 0)
+							played.game.advancedStartPoints = asked.advancedStartPoints;
 						break;
 					}
 					if (choice->kind == host::MenuChoice::Kind::Mod)

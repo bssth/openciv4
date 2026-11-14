@@ -796,6 +796,8 @@ if _walls:
 					choice.game.seed = d["seed"].cast<unsigned>();
 				if (d.contains("players"))
 					choice.game.players = d["players"].cast<int>();
+				if (d.contains("advancedStartPoints"))
+					choice.game.advancedStartPoints = d["advancedStartPoints"].cast<int>();
 				// {GAMEOPTION_...: on}, [VICTORY_...], {option: value}, {slot: {status, civ, leader, team}}
 				if (d.contains("options"))
 					for (const auto& [name, on] : d["options"].cast<py::dict>())

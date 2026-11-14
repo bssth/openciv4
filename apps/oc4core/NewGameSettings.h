@@ -42,6 +42,7 @@ namespace oc4::host
 		std::vector<std::string> victories;                 // VICTORY_... that are on (empty: all)
 		std::map<int, int> mapOptions;                      // the map script's option -> its value (else its default)
 		std::map<int, SlotSetting> slots;                   // slot -> how it differs
+		int advancedStartPoints = -1; // with Advanced Start (-1: the original's Custom Game's default, 600)
 	};
 
 	namespace setup
