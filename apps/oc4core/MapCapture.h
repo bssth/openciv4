@@ -46,6 +46,8 @@ namespace oc4::host
 		int modelIndex(const void* art, const char* nif, const char* kfm, float scale, const char* shadow = nullptr, const char* shadowNode = nullptr,
 			float shadowScale = 1);
 		void loadCityLSystem();
+		void loadPlotLSystem();
+		int plotLayout(const class CvPlot& plot, int bonus);
 		void loadAttachables(render::MapSnapshot& s);
 	public:
 		// The cities with the Great Wall (their plots, the map's): the wall along their owners'
@@ -68,6 +70,34 @@ namespace oc4::host
 		std::map<std::string, std::pair<std::string, std::string>> m_wallBuilders;
 		// Buildings of the LSystem's water and coast layouts, by LSystem name: their scale.
 		std::map<std::string, float> m_shoreBuildings;
+
+		// CIV4PlotLSystem.xml, as far as farms take from it: its nodes' art and its productions.
+		// Attributes ("Era", "Bonus", "Improvement") are lists; scalars ("NIF:...") name: value.
+		struct LAttributes
+		{
+			std::map<std::string, std::vector<std::string>> lists;
+			std::vector<std::pair<std::string, std::string>> scalars;
+			bool allows(const std::string& cls, const std::string& value, const char* all, const char* none) const;
+			std::string scalar(const std::string& name) const;
+		};
+		struct LArtRef : LAttributes
+		{
+			std::string name, nif, node, kfm;
+			float scale = 1, rotate = 0; // (degrees)
+		};
+		struct LProduction : LAttributes
+		{
+			std::string from, name;
+			struct To
+			{
+				std::string node;
+				float x = 0, y = 0, rotate = 0;
+			};
+			std::vector<To> to;
+		};
+		std::map<std::string, std::vector<LArtRef>> m_plotNodes; // by LNode name: its art
+		std::vector<LProduction> m_plotProductions;
+		std::map<uint64_t, int> m_plotLayouts; // into the snapshot's plotLayouts
 
 		const AssetResolver& m_assets;
 		std::vector<LSystemHouse> m_lsystemHouses;

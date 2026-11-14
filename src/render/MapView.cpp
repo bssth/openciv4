@@ -372,6 +372,9 @@ float4 PSTerrain(PSIn i) : SV_Target
 		scene::Model model;
 		std::unique_ptr<GpuModel> gpu;
 		std::optional<anim::Sequence> idle, run; // event codes 1000, 1010
+		// A resource's look by its state (event codes 1, 2, 3: CvPlot::getVisibleBonusState):
+		// not improved, improved, improved and worked; each shows its own nodes.
+		std::optional<anim::Sequence> states[3];
 		// Fortifying, then fortified: melee (1020, 1021) and ranged (1030, 1031), as the
 		// animation categories ANIMCAT_*_FORTIFY and *_FORTIFIED of the first set.
 		std::optional<anim::Sequence> fortify[2], fortified[2];
@@ -461,6 +464,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			bool onGround = false; // heights over the terrain (roads)
 			int plot = -1;         // the plot it belongs to (fog of war)
 			uint64_t unit = 0;     // a unit's figure: owner and id
+			const anim::Sequence* sequence = nullptr; // animated: what it plays (none: its idle)
 			bool resting = false, ranged = false; // fortified (and so on); its art's fortify is the ranged one
 			// In a battle (into map.battles): its side, its place in the formation (the last
 			// ones die first), and (the attacker) the step it takes towards the defender.
@@ -1120,6 +1124,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 					for (uint32_t step = 0; step < 3; ++step)
 						wanted.emplace_back(1050 + 3 * w + step, &lm.work[w][step]);
 				wanted.emplace_back(1040u, &lm.found);
+				for (uint32_t state = 0; state < 3; ++state)
+					wanted.emplace_back(state + 1, &lm.states[state]);
 				wanted.emplace_back(1004u, &lm.heal);
 				std::vector<std::optional<anim::Sequence>> damaged(16);
 				for (uint32_t state = 0; state < 4; ++state)
@@ -1675,7 +1681,9 @@ float4 PSTerrain(PSIn i) : SV_Target
 		}
 
 		// A model of the snapshot standing at a point, animated when it has an idle animation.
-		void addDecor(int index, Vec3 at, float yaw, uint32_t h)
+		// Draped: its heights over the terrain under each of its points, as roads are (a land
+		// resource: its fields would sink under the slope of a hill beside it).
+		void addDecor(int index, Vec3 at, float yaw, uint32_t h, int state = 0, bool draped = false)
 		{
 			if (index < 0 || size_t(index) >= map.models.size())
 				return;
@@ -1683,8 +1691,24 @@ float4 PSTerrain(PSIn i) : SV_Target
 			LoadedModel* lm = model(art.nif, art.kfm);
 			if (!lm)
 				return;
-			at.z = ground(at.x, at.y);
-			if (!lm->idle)
+			const float groundZ = ground(at.x, at.y);
+			at.z = draped ? 4.0f : groundZ; // (draped: a little over it: low leaves, a wheat field's, are not lost in the terrain's bumps)
+			const anim::Sequence* sequence = state >= 1 && state <= 3 && lm->states[state - 1] ? &*lm->states[state - 1] : nullptr;
+			if (draped && !lm->idle && !sequence)
+			{
+				Instance inst;
+				inst.model = lm;
+				inst.place = placement(at, yaw, art.scale);
+				inst.world.resize(lm->bindWorld.size());
+				for (size_t i = 0; i < inst.world.size(); ++i)
+					inst.world[i] = inst.place * lm->bindWorld[i];
+				inst.center = inst.place.point(lm->bounds.center()) + Vec3{ 0, 0, groundZ };
+				inst.radius = lm->bounds.radius() * art.scale + 1;
+				inst.onGround = true;
+				decor.push_back(std::move(inst));
+				return;
+			}
+			if (!lm->idle && !sequence)
 			{
 				decor.push_back(placeStatic(lm, placement(at, yaw, art.scale)));
 				return;
@@ -1692,11 +1716,55 @@ float4 PSTerrain(PSIn i) : SV_Target
 			Instance inst;
 			inst.model = lm;
 			inst.place = placement(at, yaw, art.scale);
-			inst.center = inst.place.point(lm->bounds.center());
+			inst.center = inst.place.point(lm->bounds.center()) + Vec3{ 0, 0, draped ? groundZ : 0 };
 			inst.radius = lm->bounds.radius() * art.scale + 1;
 			inst.animated = true;
+			inst.onGround = draped;
+			inst.sequence = sequence;
 			inst.phase = unitFloat(h) * 10;
 			decor.push_back(std::move(inst));
+		}
+
+		// What the plot LSystem lays out on a plot: models standing, and nodes of models (a
+		// farm's crops) laid on the ground, each over the one before it.
+		void addLayout(const std::vector<PlotPiece>& pieces, Vec3 center, uint32_t h)
+		{
+			float lift = 0.5f;
+			for (const PlotPiece& piece : pieces)
+			{
+				const Vec3 at{ center.x + piece.x * S(), center.y + piece.y * S(), 0 };
+				if (piece.node.empty())
+				{
+					addDecor(piece.model, at, piece.yaw, h++);
+					continue;
+				}
+				if (piece.model < 0 || size_t(piece.model) >= map.models.size())
+					continue;
+				const ModelArt& art = map.models[size_t(piece.model)];
+				LoadedModel* lm = model(art.nif, {});
+				if (!lm)
+					continue;
+				buildParts(*lm);
+				const auto part = std::ranges::find_if(lm->parts, [&](const LoadedModel::Part& p) {
+					return toLowerAscii(lm->model.nodes[size_t(p.node)].name) == toLowerAscii(piece.node);
+				});
+				if (part == lm->parts.end())
+					continue;
+				// (the node stands somewhere in its file: moved to the middle of the plot's piece)
+				const Vec3 origin = lm->bindWorld[size_t(part->node)].translation;
+				Instance inst;
+				inst.model = lm;
+				inst.place = placement({ at.x, at.y, lift }, piece.yaw, art.scale) * translation({ -origin.x, -origin.y, 0 });
+				inst.world.resize(lm->bindWorld.size());
+				for (size_t i = 0; i < inst.world.size(); ++i)
+					inst.world[i] = inst.place * lm->bindWorld[i];
+				inst.visible = part->visible;
+				inst.center = { at.x, at.y, ground(at.x, at.y) };
+				inst.radius = part->bounds.radius() * art.scale + 0.2f * S();
+				inst.onGround = true;
+				decor.push_back(std::move(inst));
+				lift += 0.1f;
+			}
 		}
 
 		// A piece laid on the terrain (roads, rivers): heights over it, a little above it
@@ -1824,10 +1892,12 @@ float4 PSTerrain(PSIn i) : SV_Target
 					const Vec3 center{ (float(x) + 0.5f) * S(), (float(y) + 0.5f) * S(), 0 };
 					if (p.route >= 0)
 						addRoute(x, y, p);
-					if (p.improvement >= 0 && size_t(p.improvement) < map.improvements.size())
+					if (p.layout >= 0 && size_t(p.layout) < map.plotLayouts.size())
+						addLayout(map.plotLayouts[size_t(p.layout)], center, hash(x, y, 7));
+					else if (p.improvement >= 0 && size_t(p.improvement) < map.improvements.size())
 						addDecor(map.improvements[size_t(p.improvement)], center, 0, hash(x, y, 7));
 					if (p.bonus >= 0 && size_t(p.bonus) < map.bonuses.size())
-						addDecor(map.bonuses[size_t(p.bonus)], center, 0, hash(x, y, 8));
+						addDecor(map.bonuses[size_t(p.bonus)], center, 0, hash(x, y, 8), p.bonusState, !p.water);
 				}
 		}
 
@@ -2813,6 +2883,15 @@ float4 PSTerrain(PSIn i) : SV_Target
 			LoadedModel& lm = *inst.model;
 			if (lm.model.particles.empty() && lm.attachTags.empty())
 				return;
+			// (laid on the terrain: its nodes' heights are over it, as the shader puts them)
+			std::vector<Affine> raised;
+			if (inst.onGround)
+			{
+				raised.assign(world.begin(), world.end());
+				for (auto& w : raised)
+					w.translation.z += ground(w.translation.x, w.translation.y);
+				world = raised;
+			}
 			uint64_t key = uint64_t(reinterpret_cast<uintptr_t>(&lm)) * 0x9E3779B97F4A7C15ull ^ uint64_t(uint32_t(inst.plot)) << 24 ^ uint64_t(uint32_t(inst.figureIndex));
 			key += uint64_t(effectsThisFrame[key]++) * 0x100000001B3ull; // (the same model twice on a plot)
 			drawParticlesOf(lm, key, world, visible);
@@ -3054,7 +3133,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 					else if (rested >= 0 && fortify)
 						fortify->apply(fortify->duration(), pose);
 					else if (inst.animated)
-						lm.idle->apply(frozen ? 0 : time + inst.phase, pose);
+						(inst.sequence ? *inst.sequence : *lm.idle).apply(frozen ? 0 : time + inst.phase, pose);
 					if (inst.damage > 0)
 						for (const anim::Sequence& d : lm.damage[inst.damage - 1])
 							d.apply(std::fmod(time + inst.phase, std::max(d.duration(), 0.01f)), pose);
@@ -3149,7 +3228,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			shape[i] = uint8_t((p.water ? 1 : 0) | (p.hills ? 2 : 0) | (p.peak ? 4 : 0) | (p.riverSouth ? 8 : 0) | (p.riverEast ? 16 : 0));
 			featureKey[i] = int32_t(p.feature) << 8 | p.featureVariety;
 			decorKey[i] = uint64_t(uint16_t(p.improvement)) | uint64_t(uint16_t(p.bonus)) << 16 | uint64_t(uint16_t(p.route)) << 32 |
-				uint64_t(p.riverSouth) << 48 | uint64_t(p.riverEast) << 49;
+				uint64_t(p.riverSouth) << 48 | uint64_t(p.riverEast) << 49 | uint64_t(uint16_t(p.layout + 1) & 0xFFF) << 50 | uint64_t(p.bonusState & 3) << 62;
 		}
 		const bool reshaped = resized || shape != m->shape;
 		const bool refeatured = reshaped || newArt || featureKey != m->featureKey;
