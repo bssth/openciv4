@@ -10,6 +10,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -1521,11 +1522,39 @@ float4 PSTerrain(PSIn i) : SV_Target
 						for (const int degrees : r.rotations.empty() ? std::vector<int>{ 0 } : r.rotations)
 							if (turned(r.connections, degrees) == mask)
 								(r.delta == RiverArt::Delta::None ? fits : deltas).push_back({ &r, degrees });
-					// A river ending at the coast flows out through a delta (the straight one).
-					if (end && coast && !deltas.empty())
+					// A river reaching the coast flows out through a delta: the one whose rapids fan
+					// out over the plots around the corner that are water. Those plots are the
+					// corner's diagonals (DirectionTypes bits, turned as the connections are).
+					// Unturned, a delta's river comes from the north: the straight one fans out
+					// over both plots ahead, the clockwise one over the south-west one (to the
+					// river's right), the counter-clockwise one over the south-east one; one at a
+					// bend (two connections) over the plot outside the bend.
+					if (coast && !deltas.empty())
 					{
-						const auto straight = std::ranges::find_if(deltas, [](const auto& d) { return d.first->delta == RiverArt::Delta::Straight; });
-						fits = { straight != deltas.end() ? *straight : deltas.front() };
+						const int sea = (water(cx, cy) ? 1 << 1 : 0) | (water(cx, cy - 1) ? 1 << 3 : 0) | (water(cx - 1, cy - 1) ? 1 << 5 : 0) |
+							(water(cx - 1, cy) ? 1 << 7 : 0);
+						const auto fansOver = [&](const RiverArt& r) {
+							if (r.connections == (1 << 0))
+								return r.delta == RiverArt::Delta::Clockwise ? 1 << 5 : r.delta == RiverArt::Delta::CounterClockwise ? 1 << 3 : (1 << 3) | (1 << 5);
+							int outside = 0;
+							for (const int d : { 1, 3, 5, 7 })
+								if (!(r.connections & (1 << (d - 1))) && !(r.connections & (1 << ((d + 1) % 8))))
+									outside |= 1 << d;
+							return outside;
+						};
+						std::pair<const RiverArt*, int> best{ nullptr, 0 };
+						int bestFan = 0;
+						for (const auto& d : deltas)
+							if (const int fan = turned(fansOver(*d.first), d.second); fan && (fan & sea) == fan && std::popcount(unsigned(fan)) > bestFan)
+								best = d, bestFan = std::popcount(unsigned(fan));
+						if (best.first)
+							fits = { best };
+						else if (end)
+						{
+							// (the coast beside the river, not ahead of it: the straight one)
+							const auto straight = std::ranges::find_if(deltas, [](const auto& d) { return d.first->delta == RiverArt::Delta::Straight; });
+							fits = { straight != deltas.end() ? *straight : deltas.front() };
+						}
 					}
 					if (fits.empty())
 						continue;
