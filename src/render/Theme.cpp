@@ -271,7 +271,8 @@ namespace oc4::render
 
 	bool Theme::Button::empty() const
 	{
-		return std::ranges::all_of(skin, [](const Skin& s) { return s.empty(); }) && std::ranges::none_of(image, [](const Bitmap& b) { return bool(b); });
+		return std::ranges::all_of(skin, [](const Skin& s) { return s.empty(); }) && std::ranges::none_of(image, [](const Bitmap& b) { return bool(b); }) &&
+			std::ranges::all_of(mark, [](const Skin& s) { return s.empty(); });
 	}
 
 	struct Theme::Impl
@@ -876,6 +877,7 @@ namespace oc4::render
 			{
 				b->skin[i] = m->skin(s, m->property(s, std::string("GFC_CtrlTheme_Bitmap_Control_Button_Skin_") + kStates[i]));
 				b->image[i] = m->bitmap(s, m->property(s, std::string("GFC_Control_Button_Image_") + kStates[i]));
+				b->mark[i] = m->skin(s, m->property(s, std::string("GFC_CtrlTheme_Bitmap_Control_Button_Skin_Image_") + kStates[i]));
 				const bool text = m->colour(s, m->property(s, std::string("GFC_Control_Button_Color_Text_") + kStates[i]), b->text[i], b->textAlpha[i]);
 				const bool shadow = m->colour(s, m->property(s, std::string("GFC_Control_Button_Color_TextShadow_") + kStates[i]), b->shadow[i], b->shadowAlpha[i]);
 				b->coloured = b->coloured || (text && shadow);

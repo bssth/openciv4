@@ -286,6 +286,8 @@ namespace oc4::render
 			const float ix = std::round(it.x0 + (w - iw) / 2), iy = std::round(it.y0 + (h - ih) / 2);
 			Theme::draw(o, image, ix, iy, ix + iw, iy + ih, it.alpha);
 		}
+		if (const Theme::Skin& mark = !b->mark[size_t(state)].empty() ? b->mark[size_t(state)] : b->mark[size_t(base)]; !mark.empty())
+			Theme::draw(o, mark, it.x0, it.y0, it.x1, it.y1, it.alpha);
 		return true;
 	}
 
