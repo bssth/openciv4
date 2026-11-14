@@ -1751,8 +1751,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 					ty = (ty % TH + TH) % TH;
 				return tx < 0 || ty < 0 || tx >= TW || ty >= TH ? -1 : ty * TW + tx;
 			};
-			const float far = kBorderReach * float(R);
-			std::vector<float> edge(label.size(), far);
+			const float reach = kBorderReach * float(R);
+			std::vector<float> edge(label.size(), reach);
 			for (int ty = 0; ty < TH; ++ty)
 				for (int tx = 0; tx < TW; ++tx)
 				{
@@ -1783,7 +1783,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			for (size_t i = 0; i < label.size(); ++i)
 			{
 				data[i * 4 + 0] = owner[i];
-				data[i * 4 + 1] = uint16_t(std::min(edge[i] / far, 1.0f) * 65535.0f + 0.5f);
+				data[i * 4 + 1] = uint16_t(std::min(edge[i] / reach, 1.0f) * 65535.0f + 0.5f);
 			}
 			if (!borderTex || borderTex->width != uint32_t(TW) || borderTex->height != uint32_t(TH))
 			{
