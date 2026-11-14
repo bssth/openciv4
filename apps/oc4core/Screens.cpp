@@ -177,6 +177,15 @@ namespace oc4::host
 					sizes.push_back(era.attr("getCitySoundscapeSciptId")(s).cast<int>());
 				places.city.push_back(std::move(sizes));
 			}
+			const int leaders = gc.attr("getNumLeaderHeadInfos")().cast<int>();
+			for (int l = 0; l < leaders; ++l)
+			{
+				py::object leader = gc.attr("getLeaderHeadInfo")(l);
+				std::vector<int> music;
+				for (int e = 0; e < eras; ++e)
+					music.push_back(leader.attr("getDiploPeaceMusicScriptIds")(e).cast<int>());
+				places.leaderPeaceMusic.push_back(std::move(music));
+			}
 		}
 		catch (py::error_already_set& e)
 		{
