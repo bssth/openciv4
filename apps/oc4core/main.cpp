@@ -569,8 +569,8 @@ namespace
 		};
 		// The leaders' music where the camera looks, in the game's first era (the original's):
 		// each civilization's share of the land around (the plots its borders hold as the
-		// player knows them, the nearer the more; wider from farther up), its leader's peace
-		// music of its era.
+		// player knows them, the nearer the more), its leader's peace music of its era; heard
+		// only from close by: full at the nearest, gone a third of the way up.
 		const auto territoryMusicHere = [&]() {
 			std::vector<std::pair<int, float>> music;
 			const PlayerTypes active = game.getActivePlayer();
@@ -578,8 +578,11 @@ namespace
 			if (active == NO_PLAYER || team == NO_TEAM || CvPlayerAI::getPlayerNonInl(active).getCurrentEra() != 0)
 				return music;
 			const auto look = window.look();
+			const float zoom = std::clamp((13 - look.distance) / (13 - 4.5f), 0.0f, 1.0f);
+			if (zoom <= 0)
+				return music;
 			CvMap& map = GC.getMap();
-			const int radius = std::clamp(int(look.distance / 4), 1, 6);
+			const int radius = 2;
 			const int cx = int(std::floor(look.x)), cy = int(std::floor(look.y));
 			float total = 0;
 			for (int dy = -radius; dy <= radius; ++dy)
@@ -609,7 +612,7 @@ namespace
 						it->second += w;
 				}
 			for (auto& m : music)
-				m.second /= std::max(total, 1.0f);
+				m.second *= zoom / std::max(total, 1.0f);
 			return music;
 		};
 		host::Screens::setTextWidth([&window](const std::string& markup, int font) { return window.textWidth(markup, font); });
