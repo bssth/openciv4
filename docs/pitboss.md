@@ -12,12 +12,16 @@ data mods such as Next War are supported; custom C++ cores remain unsupported.
 
 ## Linux prerequisites
 
-The full engine integration currently depends on the Linux runtime work in
-[foofly/openciv4's linux-port branch](https://github.com/foofly/openciv4/tree/linux-port),
-including Linux save hashing/library loading, asset lookup and SDK compatibility.
-Those prerequisites and the fork's renderer/dependency changes are outside this
-PitBoss-only proposal. A plain upstream Linux checkout cannot yet run the full
-server/client integration. Windows and macOS PitBoss transports are not implemented.
+The full engine integration depends on [Linux runtime PR #32](https://github.com/bssth/openciv4/pull/32).
+[Headless setup and regression PR #40](https://github.com/bssth/openciv4/pull/40)
+adds reproducible dependencies, presets, native library naming and Linux CI.
+The SDK include/formatting portability fixes are already upstream; the separate
+[map-init logging fix](https://github.com/bssth/openciv4-dll/pull/13) changes only
+a diagnostic. None of those changes are duplicated in this PitBoss-only proposal.
+Until the runtime prerequisite lands, a plain upstream Linux checkout cannot run
+the full server/client integration. Windows and macOS PitBoss transports are not
+implemented. The complete working fork remains available on
+[linux-port](https://github.com/foofly/openciv4/tree/linux-port).
 
 The transport and persistence tests can run directly from this tree, with no SDK,
 renderer, Python runtime, game assets or Linux engine port:
@@ -193,6 +197,8 @@ It exits unsuccessfully on disconnect or desynchronization.
 The complete BtS/Next War two-client runs, graphical login, timed turns during
 diplomacy, unchanged 100-turn single-player checksums, and sanitizer checks were
 performed on the Linux fork at `aab50c8`. The rebased upstream proposal has separate
-transport-only validation; those fork results do not establish full-engine or
-Windows/macOS compatibility for this branch. A native Windows build and an
-original-game save fixture still need validation before this proposal is ready.
+Linux transport validation, and its Windows build/CTest passed in
+[upstream CI](https://github.com/bssth/openciv4/actions/runs/43587617244).
+Those checks do not establish full Linux gameplay or macOS compatibility for this
+branch. Full Linux integration on the prerequisite stack and an original-game save
+fixture still need validation before this proposal is ready.
