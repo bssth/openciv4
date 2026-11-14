@@ -220,7 +220,9 @@ select-all, backspace, Tab and password masking; menu login reaches a real serve
 and follows timed turns without desynchronizing. These checks use the same PR
 stack under Xvfb with Mesa software Vulkan and Khronos validation enabled.
 
-An original-game save fixture, fresh native Windows/macOS builds and integration
-of the prerequisite PRs still need validation/review before this proposal is ready.
+The refreshed proposal's native Windows build/CTest and shader checks pass in
+[fork CI](https://github.com/foofly/openciv4/actions/runs/43637604460).
+An original-game save fixture, native macOS validation and integration of the
+prerequisite PRs still need validation/review before this proposal is ready.
 The earlier timed-turn check with diplomacy open was performed on the working fork;
 that particular check has not been repeated on this PR stack.
