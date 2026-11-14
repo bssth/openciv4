@@ -120,6 +120,30 @@ float4 tile(uint slice, uint rotation, float2 uv, float2 dx, float2 dy)
 	return atlas.SampleGrad(atlasSampler, float3(uv, slice), dx, dy);
 }
 
+// Smooth noise in [0, 1] over the map, `scale` cells a plot: around a wrapping map without a seam.
+float valueNoise(float2 p, float scale)
+{
+	float2 q = p * scale;
+	float2 c = floor(q), f = q - c;
+	f = f * f * (3 - 2 * f);
+	float2 period = float2(mapSize) * scale;
+	float v[4];
+	[unroll] for (int k = 0; k < 4; ++k)
+	{
+		float2 at = c + float2(k & 1, k >> 1);
+		if (wrapX)
+			at.x -= period.x * floor(at.x / period.x);
+		if (wrapY)
+			at.y -= period.y * floor(at.y / period.y);
+		uint h = uint(at.x) * 0x9E3779B1u ^ uint(at.y) * 0x85EBCA77u;
+		h ^= h >> 15;
+		h *= 0x2C1B3C6Du;
+		h ^= h >> 12;
+		v[k] = float(h & 0xFFFF) / 65535.0;
+	}
+	return lerp(lerp(v[0], v[1], f.x), lerp(v[2], v[3], f.x), f.y);
+}
+
 static const int2 kCorner[4] = { int2(0, 1), int2(1, 1), int2(1, 0), int2(0, 0) }; // top left, top right, bottom right, bottom left
 
 float4 PSTerrain(PSIn i) : SV_Target
@@ -171,17 +195,33 @@ float4 PSTerrain(PSIn i) : SV_Target
 	// The detail textures sharpen the ground up close (their mips fade to grey far away).
 	color *= detail * 2;
 
-	// Features painted on the ground: blended between the plot centres that have them, with
-	// a ragged edge from the texture's own alpha.
+	// Features painted on the ground (flood plains: grass on the plot's own ground): blended
+	// between the plot centres that have them, in patches that grow together towards the
+	// plot's edges with river and leave the ground between them away from it.
 	uint d = max(max(decal[0], decal[1]), max(decal[2], decal[3]));
 	if (d > 0)
 	{
 		float2 w = smoothstep(0, 1, f);
 		float4 has = float4(decal[0] == d, decal[1] == d, decal[2] == d, decal[3] == d);
 		float amount = lerp(lerp(has[3], has[2], w.x), lerp(has[0], has[1], w.x), w.y);
+		// Distance to the nearest plot edge with river, in plots (a plot's flags 16 and 32: river
+		// along its south and east edges).
+		int2 own = int2(floor(p));
+		float river = 2;
+		[unroll] for (int k = 0; k < 9; ++k)
+		{
+			int2 q = own + int2(k % 3 - 1, k / 3 - 1);
+			uint flags = plotAt(q).a;
+			if (flags & 16)
+				river = min(river, length(p - float2(clamp(p.x, q.x, q.x + 1), q.y)));
+			if (flags & 32)
+				river = min(river, length(p - float2(q.x + 1, clamp(p.y, q.y, q.y + 1))));
+		}
+		float nearRiver = 1 - smoothstep(0.05, 0.8, river);
 		float4 tex = decals.Sample(decalSampler, float3(p * 2, d - 1)); // (tiled: wrapping)
-		float ragged = decals.Sample(decalSampler, float3(p * 0.37, d - 1)).a;
-		color = lerp(color, tex.rgb, smoothstep(0.35, 0.75, amount * (0.55 + 0.6 * ragged)) * 0.9);
+		float patches = 0.5 * valueNoise(p, 3) + 0.3 * valueNoise(p, 7) + 0.2 * valueNoise(p, 17);
+		float cover = amount * lerp(0.3, 1.0, nearRiver);
+		color = lerp(color, tex.rgb * detail * 2, smoothstep(0.45, 0.65, cover * (0.35 + 0.95 * patches)));
 	}
 
 	float3 n = normalize(i.nrm);
@@ -366,6 +406,17 @@ float4 PSTerrain(PSIn i) : SV_Target
 		bool attachResolved = false;
 		// Where the model clears trees (bind pose, model space): centre and radius.
 		std::vector<std::pair<Vec3, float>> treeCuts;
+		// A river piece's water ("ContourGeometry RiverBase": a grid over the plot textured with
+		// its bed and water): its triangles (model space, bind pose) with their texture
+		// coordinates, and where that texture is water. The trees standing in it go.
+		struct Water
+		{
+			std::vector<Vec3> corners; // three a triangle: x, y and (in z) nothing
+			std::vector<std::array<float, 2>> uvs;
+			std::shared_ptr<const std::vector<uint8_t>> alpha; // 1: water
+			uint32_t width = 0, height = 0;
+		};
+		std::optional<Water> water;
 		std::vector<int> top;
 		Bounds bounds;
 
@@ -397,6 +448,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			Affine place;
 			std::vector<Affine> world;    // static instances: the final transforms
 			std::vector<uint8_t> visible; // empty: the model's own
+			std::vector<scene::Material> materials; // empty: the model's own (a forest piece's trees cut)
 			Vec3 center;
 			float radius = 0;
 			Vec3 team = kDefaultTeamColor;
@@ -480,6 +532,12 @@ float4 PSTerrain(PSIn i) : SV_Target
 
 		// Models
 		std::unordered_map<std::string, std::unique_ptr<LoadedModel>> models;
+		struct WaterAlpha
+		{
+			std::shared_ptr<const std::vector<uint8_t>> alpha;
+			uint32_t width = 0, height = 0;
+		};
+		std::unordered_map<std::string, WaterAlpha> waterAlpha; // by texture
 		std::map<std::string, std::shared_ptr<const nif::File>> kfCache;
 		std::vector<Instance> features, decor, cities, units;
 		// Each city's pieces by its plot, kept while what it shows stays the same (cleared with the terrain or the art).
@@ -873,10 +931,60 @@ float4 PSTerrain(PSIn i) : SV_Target
 					levels.push_back(std::move(down));
 				}
 			}
-			if (textures.empty())
-				levels.assign(kMips, std::vector<uint8_t>(kSize * kSize * 4, 0)); // the shader still samples one
+			// (two slices at least: the shader samples an array, and one slice would make a plain texture)
+			const size_t slices = std::max<size_t>(textures.size(), 2);
+			while (levels.size() < slices * kMips)
+				levels.emplace_back(size_t(kSize >> (levels.size() % kMips)) * (kSize >> (levels.size() % kMips)) * 4, 0);
 			const std::vector<std::span<const uint8_t>> subresources(levels.begin(), levels.end());
-			decalTex = renderer.createTexture(kSize, kSize, uint32_t(std::max<size_t>(textures.size(), 1)), kMips, TextureFormat::BGRA8, subresources);
+			decalTex = renderer.createTexture(kSize, kSize, uint32_t(slices), kMips, TextureFormat::BGRA8, subresources);
+		}
+
+		void findWater(const nif::File& file, LoadedModel& lm, const AssetLocation& loc)
+		{
+			std::string name;
+			for (size_t b = 0; b < file.blocks.size() && name.empty(); ++b)
+				if (const auto* geom = file.get<nif::NiGeometry>(nif::Ref(b)))
+					for (const nif::Ref e : geom->extraData)
+						if (const auto* text = file.get<nif::NiStringExtraData>(e); text && toLowerAscii(text->value).contains("riverbase"))
+							name = geom->name;
+			const auto item = std::ranges::find_if(lm.model.items, [&](const scene::DrawItem& i) { return !name.empty() && i.nodeName == name; });
+			if (item == lm.model.items.end() || item->material.baseTexture.empty())
+				return;
+			const auto texture = assets.locateTexture(loc, item->material.baseTexture);
+			if (!texture)
+				return;
+			LoadedModel::Water w;
+			auto& cached = waterAlpha[texture->key];
+			if (!cached.alpha)
+				try
+				{
+					const gfx::Image image = gfx::loadTexture(assets.read(*texture));
+					const auto pixels = gfx::decodeBgra(image);
+					auto alpha = std::make_shared<std::vector<uint8_t>>(size_t(image.width) * image.height);
+					// (water: blue where it is drawn; the rest of what it draws is the river's bed of
+					// sand, which a sandy ground shows to the edge of the grid)
+					for (size_t i = 0; i < alpha->size(); ++i)
+						(*alpha)[i] = pixels[i * 4 + 3] >= 128 && int(pixels[i * 4]) > int(pixels[i * 4 + 2]) + 16;
+					cached = { alpha, image.width, image.height };
+				}
+				catch (const std::exception& e)
+				{
+					problem(std::format("{}: {}", texture->key, e.what()));
+					return;
+				}
+			w.alpha = cached.alpha;
+			w.width = cached.width;
+			w.height = cached.height;
+			const scene::Model& m = lm.model;
+			const auto world = m.worldTransforms(m.bindLocals());
+			const Affine& at = item->node >= 0 && size_t(item->node) < world.size() ? world[size_t(item->node)] : Affine{};
+			for (const uint32_t i : item->indices)
+			{
+				const scene::Vertex& v = item->vertices[i];
+				w.corners.push_back(at.point(v.position));
+				w.uvs.push_back({ v.uv.x, v.uv.y });
+			}
+			lm.water = std::move(w);
 		}
 
 		LoadedModel* model(const std::string& nif, const std::string& kfm)
@@ -929,6 +1037,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 					if (name.starts_with("treecut") || name.starts_with("cuttree"))
 						node.hidden = true;
 				}
+				findWater(*file, lm, *loc);
 				lm.gpu = renderer.upload(lm.model, assets, *loc);
 				for (const auto& missing : lm.gpu->stats().missing)
 					problem(std::format("{}: texture {}", nif, missing));
@@ -1355,7 +1464,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 				data[i * 4 + 2] = uint16_t(p.owner + 1);
 				const uint16_t decal = p.feature >= 0 && size_t(p.feature) < featureDecal.size() ? featureDecal[size_t(p.feature)] : 0;
 				data[i * 4 + 3] = uint16_t((p.water ? 1 : 0) | (p.riverSouth || p.riverEast ? 2 : 0) | (p.revealed ? 4 : 0) | (p.visible ? 8 : 0) |
-					decal << 8);
+					(p.riverSouth ? 16 : 0) | (p.riverEast ? 32 : 0) | decal << 8);
 			}
 			if (!plotTex || plotTex->width != uint32_t(W) || plotTex->height != uint32_t(H))
 			{
@@ -1722,7 +1831,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 				}
 		}
 
-		// Trees inside the tree cut spheres of the improvements, resources and roads go.
+		// Trees inside the tree cut spheres of the improvements, resources, roads and rivers go:
+		// a tree that is a node of its own, or one of a forest piece's trees (DrawItem::trees).
 		void cutTrees()
 		{
 			std::unordered_map<int, std::vector<std::pair<Vec3, float>>> cuts; // by plot
@@ -1732,35 +1842,91 @@ float4 PSTerrain(PSIn i) : SV_Target
 					px = (px % map.width + map.width) % map.width;
 				return px + py * map.width;
 			};
+			std::unordered_map<int, std::vector<const Instance*>> waters; // by plot
 			for (const Instance& d : decor)
+			{
 				for (const auto& [c, r] : d.model->treeCuts)
 				{
 					const Vec3 w = d.place.point(c);
 					cuts[plotKey(w.x, w.y)].push_back({ w, r * d.place.scale });
 				}
-			if (cuts.empty())
+				if (d.model->water)
+					waters[plotKey(d.place.translation.x, d.place.translation.y)].push_back(&d);
+			}
+			if (cuts.empty() && waters.empty())
 				return;
+			// In a river piece's water: the texture's alpha where the point is on its grid.
+			const auto inWater = [&](const Instance& river, Vec3 p) {
+				const LoadedModel::Water& w = *river.model->water;
+				for (size_t t = 0; t + 2 < w.corners.size(); t += 3)
+				{
+					const Vec3 a = river.place.point(w.corners[t]), b = river.place.point(w.corners[t + 1]), c = river.place.point(w.corners[t + 2]);
+					const float d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+					if (std::abs(d) < 1e-6f)
+						continue;
+					const float l0 = ((b.y - c.y) * (p.x - c.x) + (c.x - b.x) * (p.y - c.y)) / d;
+					const float l1 = ((c.y - a.y) * (p.x - c.x) + (a.x - c.x) * (p.y - c.y)) / d;
+					const float l2 = 1 - l0 - l1;
+					if (l0 < -1e-4f || l1 < -1e-4f || l2 < -1e-4f)
+						continue;
+					float u = l0 * w.uvs[t][0] + l1 * w.uvs[t + 1][0] + l2 * w.uvs[t + 2][0];
+					float v = l0 * w.uvs[t][1] + l1 * w.uvs[t + 1][1] + l2 * w.uvs[t + 2][1];
+					u -= std::floor(u), v -= std::floor(v);
+					const uint32_t x = std::min(uint32_t(u * float(w.width)), w.width - 1), y = std::min(uint32_t(v * float(w.height)), w.height - 1);
+					return (*w.alpha)[size_t(y) * w.width + x] != 0;
+				}
+				return false;
+			};
+			const auto inCut = [&](Vec3 p) {
+				for (int dy = -1; dy <= 1; ++dy)
+					for (int dx = -1; dx <= 1; ++dx)
+					{
+						const int key = plotKey(p.x + float(dx) * S(), p.y + float(dy) * S());
+						if (const auto it = cuts.find(key); it != cuts.end())
+							for (const auto& [c, r] : it->second)
+								if (std::hypot(p.x - c.x, p.y - c.y) < r)
+									return true;
+						// (a tree whose crown reaches over the water: its trunk on the bank)
+						if (const auto it = waters.find(key); it != waters.end())
+							for (const Instance* river : it->second)
+								for (int k = 0; k < 9; ++k)
+								{
+									const float angle = float(k) * std::numbers::pi_v<float> / 4, reach = k == 8 ? 0 : 0.08f * S();
+									if (inWater(*river, p + Vec3{ std::cos(angle) * reach, std::sin(angle) * reach, 0 }))
+										return true;
+								}
+					}
+				return false;
+			};
 			for (Instance& f : features)
 			{
 				const LoadedModel& lm = *f.model;
+				for (size_t k = 0; k < lm.model.items.size(); ++k)
+				{
+					const scene::DrawItem& item = lm.model.items[k];
+					if (item.trees.empty() || item.node < 0 || size_t(item.node) >= f.world.size())
+						continue;
+					uint32_t treesCut = 0;
+					for (size_t t = 0; t < item.trees.size() && t < 32; ++t)
+						if (!std::isnan(item.trees[t].x) && inCut(f.world[size_t(item.node)].point({ item.trees[t].x, item.trees[t].y, 0 })))
+							treesCut |= 1u << t;
+					if (!treesCut)
+						continue;
+					if (f.materials.empty())
+						for (const auto& i : lm.model.items)
+							f.materials.push_back(i.material);
+					f.materials[k].treesCut = treesCut;
+				}
+				// (a piece that numbers its trees has them in one mesh, not a node each)
+				if (std::ranges::any_of(lm.model.items, [](const scene::DrawItem& i) { return !i.trees.empty(); }))
+					continue;
 				bool changed = false;
 				std::vector<uint8_t> visible = f.visible.empty() ? lm.bindVisible : f.visible;
 				for (size_t i = 0; i < f.world.size(); ++i)
 				{
 					if (lm.model.nodes[i].parent != lm.spread || lm.spread < 0)
 						continue;
-					const Vec3 p = f.world[i].translation;
-					bool cut = false;
-					for (int dy = -1; dy <= 1 && !cut; ++dy)
-						for (int dx = -1; dx <= 1 && !cut; ++dx)
-							if (const auto it = cuts.find(plotKey(p.x + float(dx) * S(), p.y + float(dy) * S())); it != cuts.end())
-								for (const auto& [c, r] : it->second)
-									if (std::hypot(p.x - c.x, p.y - c.y) < r)
-									{
-										cut = true;
-										break;
-									}
-					if (!cut)
+					if (!inCut(f.world[i].translation))
 						continue;
 					for (size_t n = 0; n < visible.size(); ++n)
 						if (lm.top[n] == int(i))
@@ -2951,14 +3117,14 @@ float4 PSTerrain(PSIn i) : SV_Target
 				}
 				if (dx == 0)
 				{
-					renderer.draw(*lm.gpu, inst.world, visible, {}, inst.team, inst.onGround);
+					renderer.draw(*lm.gpu, inst.world, visible, inst.materials, inst.team, inst.onGround);
 					drawEffects(inst, inst.world, visible);
 					continue;
 				}
 				world = inst.world;
 				for (auto& w : world)
 					w.translation.x += dx;
-				renderer.draw(*lm.gpu, world, visible, {}, inst.team, inst.onGround);
+				renderer.draw(*lm.gpu, world, visible, inst.materials, inst.team, inst.onGround);
 				drawEffects(inst, world, visible);
 			}
 		}
