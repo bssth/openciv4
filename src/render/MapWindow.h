@@ -42,7 +42,8 @@ namespace oc4::render
 		bool pump();
 		// The first map frames the camera on the active player's capital (focusX/Y) or the middle.
 		void setMap(const MapSnapshot& snapshot, int focusX = -1, int focusY = -1);
-		void lookAt(int x, int y, float distanceInPlots = 9);
+		// (distanceInPlots below 0: the game's start distance, CAMERA_START_DISTANCE)
+		void lookAt(int x, int y, float distanceInPlots = -1);
 		// Moves the camera over the plot, keeping its distance.
 		void centerOn(int x, int y);
 		// The interface's size: its units (UiScale.h), which the screens, the mouse and the
