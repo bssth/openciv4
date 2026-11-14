@@ -248,6 +248,10 @@ namespace oc4::render
 		// in plots (CvLandscapeInfo).
 		int width = 0, height = 0;
 		bool wrapX = false, wrapY = false;
+		// The team's map is centred (CvGame::shouldCenterMinimap: Calendar, Stonehenge). Until it is,
+		// the minimap shows what the team has seen in its middle, at its own scale: it does not tell
+		// how big the world is nor where in it the team is.
+		bool minimapCentered = true;
 		float plotSize = 120, hillScale = 0.13f, peakScale = 0.44f;
 		std::vector<PlotView> plots; // x + y * width
 		std::vector<PlayerView> players;
