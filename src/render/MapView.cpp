@@ -120,6 +120,30 @@ float4 tile(uint slice, uint rotation, float2 uv, float2 dx, float2 dy)
 	return atlas.SampleGrad(atlasSampler, float3(uv, slice), dx, dy);
 }
 
+// Smooth noise in [0, 1] over the map, `scale` cells a plot: around a wrapping map without a seam.
+float valueNoise(float2 p, float scale)
+{
+	float2 q = p * scale;
+	float2 c = floor(q), f = q - c;
+	f = f * f * (3 - 2 * f);
+	float2 period = float2(mapSize) * scale;
+	float v[4];
+	[unroll] for (int k = 0; k < 4; ++k)
+	{
+		float2 at = c + float2(k & 1, k >> 1);
+		if (wrapX)
+			at.x -= period.x * floor(at.x / period.x);
+		if (wrapY)
+			at.y -= period.y * floor(at.y / period.y);
+		uint h = uint(at.x) * 0x9E3779B1u ^ uint(at.y) * 0x85EBCA77u;
+		h ^= h >> 15;
+		h *= 0x2C1B3C6Du;
+		h ^= h >> 12;
+		v[k] = float(h & 0xFFFF) / 65535.0;
+	}
+	return lerp(lerp(v[0], v[1], f.x), lerp(v[2], v[3], f.x), f.y);
+}
+
 static const int2 kCorner[4] = { int2(0, 1), int2(1, 1), int2(1, 0), int2(0, 0) }; // top left, top right, bottom right, bottom left
 
 float4 PSTerrain(PSIn i) : SV_Target
@@ -171,17 +195,33 @@ float4 PSTerrain(PSIn i) : SV_Target
 	// The detail textures sharpen the ground up close (their mips fade to grey far away).
 	color *= detail * 2;
 
-	// Features painted on the ground: blended between the plot centres that have them, with
-	// a ragged edge from the texture's own alpha.
+	// Features painted on the ground (flood plains: grass on the plot's own ground): blended
+	// between the plot centres that have them, in patches that grow together towards the
+	// plot's edges with river and leave the ground between them away from it.
 	uint d = max(max(decal[0], decal[1]), max(decal[2], decal[3]));
 	if (d > 0)
 	{
 		float2 w = smoothstep(0, 1, f);
 		float4 has = float4(decal[0] == d, decal[1] == d, decal[2] == d, decal[3] == d);
 		float amount = lerp(lerp(has[3], has[2], w.x), lerp(has[0], has[1], w.x), w.y);
+		// Distance to the nearest plot edge with river, in plots (a plot's flags 16 and 32: river
+		// along its south and east edges).
+		int2 own = int2(floor(p));
+		float river = 2;
+		[unroll] for (int k = 0; k < 9; ++k)
+		{
+			int2 q = own + int2(k % 3 - 1, k / 3 - 1);
+			uint flags = plotAt(q).a;
+			if (flags & 16)
+				river = min(river, length(p - float2(clamp(p.x, q.x, q.x + 1), q.y)));
+			if (flags & 32)
+				river = min(river, length(p - float2(q.x + 1, clamp(p.y, q.y, q.y + 1))));
+		}
+		float nearRiver = 1 - smoothstep(0.05, 0.8, river);
 		float4 tex = decals.Sample(decalSampler, float3(p * 2, d - 1)); // (tiled: wrapping)
-		float ragged = decals.Sample(decalSampler, float3(p * 0.37, d - 1)).a;
-		color = lerp(color, tex.rgb, smoothstep(0.35, 0.75, amount * (0.55 + 0.6 * ragged)) * 0.9);
+		float patches = 0.5 * valueNoise(p, 3) + 0.3 * valueNoise(p, 7) + 0.2 * valueNoise(p, 17);
+		float cover = amount * lerp(0.3, 1.0, nearRiver);
+		color = lerp(color, tex.rgb * detail * 2, smoothstep(0.45, 0.65, cover * (0.35 + 0.95 * patches)));
 	}
 
 	float3 n = normalize(i.nrm);
@@ -873,10 +913,12 @@ float4 PSTerrain(PSIn i) : SV_Target
 					levels.push_back(std::move(down));
 				}
 			}
-			if (textures.empty())
-				levels.assign(kMips, std::vector<uint8_t>(kSize * kSize * 4, 0)); // the shader still samples one
+			// (two slices at least: the shader samples an array, and one slice would make a plain texture)
+			const size_t slices = std::max<size_t>(textures.size(), 2);
+			while (levels.size() < slices * kMips)
+				levels.emplace_back(size_t(kSize >> (levels.size() % kMips)) * (kSize >> (levels.size() % kMips)) * 4, 0);
 			const std::vector<std::span<const uint8_t>> subresources(levels.begin(), levels.end());
-			decalTex = renderer.createTexture(kSize, kSize, uint32_t(std::max<size_t>(textures.size(), 1)), kMips, TextureFormat::BGRA8, subresources);
+			decalTex = renderer.createTexture(kSize, kSize, uint32_t(slices), kMips, TextureFormat::BGRA8, subresources);
 		}
 
 		LoadedModel* model(const std::string& nif, const std::string& kfm)
@@ -1245,7 +1287,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 				data[i * 4 + 2] = uint16_t(p.owner + 1);
 				const uint16_t decal = p.feature >= 0 && size_t(p.feature) < featureDecal.size() ? featureDecal[size_t(p.feature)] : 0;
 				data[i * 4 + 3] = uint16_t((p.water ? 1 : 0) | (p.riverSouth || p.riverEast ? 2 : 0) | (p.revealed ? 4 : 0) | (p.visible ? 8 : 0) |
-					decal << 8);
+					(p.riverSouth ? 16 : 0) | (p.riverEast ? 32 : 0) | decal << 8);
 			}
 			if (!plotTex || plotTex->width != uint32_t(W) || plotTex->height != uint32_t(H))
 			{

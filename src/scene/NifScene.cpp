@@ -382,7 +382,14 @@ namespace oc4::scene
 					m.alphaFunc = static_cast<Compare>(p.alpha->testFunc());
 					m.alphaRef = p.alpha->threshold;
 				}
-				if (p.vertexColor)
+				// A forest piece lists its trees' positions ("OFFSETCOUNT = n", "OFFSETi = x,y") and
+				// numbers each tree's vertices in the red of their colour (green and blue 1): no
+				// colour, the game's trees keep the texture's own.
+				const bool treeLayout = std::ranges::any_of(geom.extraData, [&](Ref e) {
+					const auto* s = m_file.get<NiStringExtraData>(e);
+					return s && s->value.starts_with("OFFSETCOUNT");
+				});
+				if (p.vertexColor && !treeLayout)
 				{
 					m.vertexColorMode = p.vertexColor->vertexMode;
 					m.lightingMode = p.vertexColor->lightingMode;
