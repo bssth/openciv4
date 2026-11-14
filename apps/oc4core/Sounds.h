@@ -16,6 +16,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace oc4::host
 {
@@ -50,6 +52,11 @@ namespace oc4::host
 		// none): its bed loops, its other sounds come now and then around the camera. Another
 		// fades the last one out.
 		void setSoundscape(int soundscape);
+		// The leaders' music heard where the camera looks (the original's first era: over a
+		// civilization's land its leader's peace music, the era's soundtrack elsewhere): each a
+		// 2D script with how much of the view is theirs (0..1, together at most 1). Each loops,
+		// as loud as its share, the soundtrack as the rest; none: the soundtrack alone.
+		void setTerritoryMusic(std::vector<std::pair<int, float>> music);
 		// Any thread: the player's volumes, 0..1 (the options screen's: master, music, effects,
 		// speech, ambience, interface; a kind "no sound": 0).
 		static void setVolumes(const float volumes[6]);
