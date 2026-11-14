@@ -2986,8 +2986,13 @@ def diploClick(name, part, right=False, shift=False):
 	_diploRefresh()
 
 
-_DIPLO_ESCAPE = ('EXIT', 'NEVERMIND', 'REJECT', 'REJECT_DEMAND', 'REJECT_OFFER', 'REFUSE_HELP', 'NO_CONVERT', 'NO_JOIN_WAR',
+# (Esc goes back a step first: "Never mind" from the trade table, the deals or "something else" to the
+# greeting; "Something else" from its own questions (their research, their attitude, a target) to it)
+_DIPLO_ESCAPE = ('NEVERMIND', 'EXIT', 'REJECT', 'REJECT_DEMAND', 'REJECT_OFFER', 'REFUSE_HELP', 'NO_CONVERT', 'NO_JOIN_WAR',
 	'NO_MAKE_PEACE_WITH', 'NO_RENEGOTIATE', 'NO_REVOLUTION', 'NO_STOP_TRADING')
+_DIPLO_SOMETHING_ELSE_MENUS = ('AI_DIPLOCOMMENT_RESEARCH', 'AI_DIPLOCOMMENT_TARGET', 'AI_DIPLOCOMMENT_ATTITUDE',
+	'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_FURIOUS', 'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_ANNOYED', 'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_CAUTIOUS',
+	'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_PLEASED', 'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_FRIENDLY')
 _DIPLO_ENTER = ('ACCEPT', 'ACCEPT_DEMAND', 'ACCEPT_OFFER', 'GIVE_HELP', 'PEACE', 'COMPLETE_DEAL')
 
 
@@ -3003,7 +3008,13 @@ def _diploPick(kinds):
 
 
 def diploEscape():
-	"""Esc in a talk: its way out, or a no (never war); the talk keeps the key either way."""
+	"""Esc in a talk: back to the menu it came from, else its way out, or a no (never war); the talk
+	keeps the key either way."""
+	gc = _cpe.CyGlobalContext()
+	comment = oc4host.diplo_comment()
+	if comment >= 0 and gc.getDiplomacyInfo(comment).getType() in _DIPLO_SOMETHING_ELSE_MENUS:
+		_diploPick(('SOMETHING_ELSE', 'EXIT'))
+		return True
 	_diploPick(_DIPLO_ESCAPE)
 	return True
 

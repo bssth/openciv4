@@ -1248,6 +1248,10 @@ namespace
 			{
 				if (player.isTurnActive() || utility.diplomacy().active())
 					press(key);
+				// (out of its turn Esc still closes the screen on top: an advisor opened while the
+				// others move)
+				else if (key.key == render::key::Escape)
+					screens.escape();
 				changed = true;
 			}
 			if (const auto a = window.takeActionClick(); a && size_t(*a) < actionIds.size())
