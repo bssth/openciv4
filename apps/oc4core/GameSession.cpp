@@ -74,6 +74,21 @@ namespace oc4::host
 			return type;
 		}
 
+		// A setting the loaded game may not have under the engine's default name (Realism Invictus has
+		// no GAMESPEED_NORMAL): then the game's own standard one from its GlobalDefines, the setting the
+		// original's setup screen starts from. A name given explicitly must exist.
+		int infoTypeOrStandard(const std::string& name, const std::string& engineDefault, const char* standardDefine)
+		{
+			if (name != engineDefault || GC.getInfoTypeForString(name.c_str()) >= 0)
+				return infoType(name);
+			// (the XML loader has turned the define's type name into its index, as STANDARD_TURNTIMER)
+			const int standard = GC.getDefineINT(standardDefine);
+			if (standard < 0)
+				throw std::runtime_error("unknown type " + name + " and no " + standardDefine);
+			std::printf("  %s instead of %s (the game has no %s)\n", standardDefine, name.c_str(), name.c_str());
+			return standard;
+		}
+
 		// Small deterministic generator for the staging room choices (civs, leaders).
 		struct SetupRandom
 		{
@@ -121,10 +136,10 @@ namespace oc4::host
 		m_python.setMapScriptModule(s.mapScript);
 		ic.setMapScriptName(CvWString(s.mapScript)); // reads the script's custom options
 		ic.setWorldSize(static_cast<WorldSizeTypes>(infoType(s.worldSize)));
-		ic.setClimate(static_cast<ClimateTypes>(infoType(s.climate)));
-		ic.setSeaLevel(static_cast<SeaLevelTypes>(infoType(s.seaLevel)));
-		ic.setEra(static_cast<EraTypes>(infoType(s.era)));
-		ic.setGameSpeed(static_cast<GameSpeedTypes>(infoType(s.gameSpeed)));
+		ic.setClimate(static_cast<ClimateTypes>(infoTypeOrStandard(s.climate, NewGameSettings{}.climate, "STANDARD_CLIMATE")));
+		ic.setSeaLevel(static_cast<SeaLevelTypes>(infoTypeOrStandard(s.seaLevel, NewGameSettings{}.seaLevel, "STANDARD_SEALEVEL")));
+		ic.setEra(static_cast<EraTypes>(infoTypeOrStandard(s.era, NewGameSettings{}.era, "STANDARD_ERA")));
+		ic.setGameSpeed(static_cast<GameSpeedTypes>(infoTypeOrStandard(s.gameSpeed, NewGameSettings{}.gameSpeed, "STANDARD_GAMESPEED")));
 		ic.setTurnTimer(static_cast<TurnTimerTypes>(GC.getDefineINT("STANDARD_TURNTIMER")));
 		ic.setCalendar(static_cast<CalendarTypes>(GC.getDefineINT("STANDARD_CALENDAR")));
 
@@ -160,7 +175,7 @@ namespace oc4::host
 		if (s.pitboss && std::ranges::any_of(s.humans, [&](int p) { return p < 0 || p >= numPlayers; }))
 			throw std::runtime_error("human seat outside configured player count");
 
-		const HandicapTypes humanHandicap = static_cast<HandicapTypes>(infoType(s.handicap));
+		const HandicapTypes humanHandicap = static_cast<HandicapTypes>(infoTypeOrStandard(s.handicap, NewGameSettings{}.handicap, "STANDARD_HANDICAP"));
 		const HandicapTypes aiHandicap = static_cast<HandicapTypes>(GC.getDefineINT("AI_HANDICAP"));
 		for (int p = 0; p < numPlayers; ++p)
 		{

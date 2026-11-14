@@ -12,6 +12,7 @@
 #include "render/Overlay.h"
 #include "render/Renderer.h"
 
+#include <array>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -52,6 +53,13 @@ namespace oc4::render
 		// The map at one pixel per plot, north up (BGRA8): terrain, owners, cities; `version`
 		// changes with it.
 		const std::vector<uint8_t>& minimap(uint64_t& version) const;
+		// The plots the minimap is moved by until the team's map is centred (MapSnapshot::minimapCentered):
+		// its column x shows plot column x + first, its row y plot row y + second (around the map where it wraps).
+		std::pair<int, int> minimapShift() const;
+		// Until the team's map is centred (with the fog of war on): the plots it has seen, x0, y0, x1, y1
+		// inclusive (on an axis the map wraps on, the whole map). The camera keeps near them rather than
+		// on the map, so that where the map ends does not show.
+		std::optional<std::array<int, 4>> seenBounds() const;
 		// The same without the cities, the owners' colours over the terrain that strong (0: the
 		// terrain alone), as the screens' own minimaps start from (the military advisor's).
 		// unexplored: black with the fog of war on, unless it shows the whole map (a replay's).

@@ -107,6 +107,9 @@ namespace oc4::scene
 		uint32_t lightingMode = 1;
 
 		std::string shaderName;
+
+		// A forest piece's trees not drawn (DrawItem::trees): tree i by bit i - 1.
+		uint32_t treesCut = 0;
 	};
 
 	struct Node
@@ -136,6 +139,10 @@ namespace oc4::scene
 		std::vector<Affine> skinToBone;
 
 		Bounds bindBounds; // world space, bind pose
+
+		// A forest piece: where its trees stand (its node's space), tree i (the red of its
+		// vertices' colour) at [i - 1]; not a number where there is none.
+		std::vector<nif::Vec2> trees;
 	};
 
 	// A particle system (NiParticleSystem) as its emitter, modifiers and controllers have it:
