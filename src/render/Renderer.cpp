@@ -52,9 +52,15 @@ namespace oc4::render
 
 		bool useVulkan()
 		{
+#if !defined(_WIN32) && !defined(__APPLE__)
+			return true; // Linux: Vulkan is the only GPU backend with shaders
+#else
 			const char* gpu = std::getenv("OC4_GPU");
 			return gpu && std::strcmp(gpu, "vulkan") == 0;
+#endif
 		}
+#elif !defined(_WIN32) && !defined(__APPLE__)
+#error "Linux draws through Vulkan only: configure with -DOC4_SPIRV_SHADERS=ON"
 #endif
 		constexpr char kShaderBody[] = R"hlsl(
 
@@ -437,8 +443,10 @@ float4 PSOverlay(Out p) : SV_Target
 #endif
 #ifdef __APPLE__
 		m_device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_MSL, debug, nullptr);
-#else
+#elif defined(_WIN32)
 		m_device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_DXBC, debug, nullptr);
+#else
+		m_device = nullptr; // (unreachable: useVulkan() is always true on Linux)
 #endif
 		if (!m_device)
 			fail("SDL_CreateGPUDevice");
@@ -558,6 +566,10 @@ float4 PSOverlay(Out p) : SV_Target
 		ci.code_size = std::strlen(msl->source);
 		ci.entrypoint = entry;
 		ci.format = SDL_GPU_SHADERFORMAT_MSL;
+#elif !defined(_WIN32)
+		(void)source;
+		SDL_GPUShaderCreateInfo ci{}; // (unreachable: useVulkan() is always true on Linux)
+		throw std::runtime_error(std::format("{} {}: Linux draws through Vulkan only", name, entry));
 #else
 		const bool vertex = stage == SDL_GPU_SHADERSTAGE_VERTEX;
 		const D3D_SHADER_MACRO defines[] = { { "UNIFORMS", vertex ? "space1" : "space3" }, { nullptr, nullptr } };

@@ -47,8 +47,7 @@ port a mod's game core: [openciv4-dll/docs/PORTING.md](https://github.com/bssth/
 * **Multiplayer** over the network (`--host`, `--join`), early.
 
 Not yet: the original's main menu (a simpler one stands in), the minimap's modes, the globe
-view, some animations, Linux and macOS (the window, input, sound and text are already on SDL3
-and FreeType; the shaders are still HLSL for Direct3D 12).
+view, some animations.
 
 ## Building (Windows, x64)
 
@@ -117,6 +116,35 @@ it and `gen_spirv.py` with `--check`, which fails when a checked-in file is out 
 
 The macOS game core plays the same games as the Windows x64 one: AI games from the same seed
 give the same sync checksums turn by turn.
+
+## Building (Linux, x86-64)
+
+A native build with clang, rendering through SDL3's Vulkan backend (the SPIR-V shaders, so
+`-DOC4_SPIRV_SHADERS=ON`). Built and played on Arch Linux with Mesa's Intel driver.
+`cmake ninja clang`, a Vulkan driver, the X11 or Wayland development files SDL3 builds against,
+and OpenSSL (libcrypto: the saves' MD5). The game core's flags are clang's, so use clang.
+
+* Python 2.7.18 as a shared library (distributions no longer ship it): from python.org's
+  sources, `./configure --enable-shared --enable-unicode=ucs4 --prefix=<prefix>` (`ucs4`:
+  `wchar_t` is 32 bits here), `make`, `make install`.
+* Under `external/`, as on macOS: pybind11 2.9.2, zlib 1.3.1, SDL3 3.4.18 (source), dr_libs,
+  FreeType 2.13.3 and DirectXMath.
+
+```sh
+CC=clang CXX=clang++ cmake -S . -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DOC4_SPIRV_SHADERS=ON -DOC4_PYTHON27_DIR=<prefix>
+cmake --build build/linux
+ctest --test-dir build/linux
+build/linux/bin/oc4core --civ4 "<Civ4>" --menu
+```
+
+`<Civ4>` is a Beyond the Sword install's root; Steam's (the Windows version, installed for
+Proton) is at `~/.local/share/Steam/steamapps/common/Sid Meier's Civilization IV Beyond the Sword`.
+Files are found whatever case the game asks for them in. Saves and settings go to
+`~/Documents/My Games` (`OC4_DOCUMENTS=<folder>` puts them elsewhere).
+
+The Linux build plays the same games as the Windows x64 one: AI games from the same seed give
+the same sync checksums turn by turn, and saves load on either.
 
 ## Command line
 
