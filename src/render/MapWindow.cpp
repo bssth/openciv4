@@ -1435,6 +1435,110 @@ namespace oc4::render
 			return true;
 		}
 
+		// A bordered plot as the original draws its area borders (Art/Terrain/PlotTextures/
+		// AreaBorder.dds): along each edge the next plot is not of the set, a bright line with
+		// rounded corners where two such edges meet and a soft glow inside it; over the plot, a
+		// faint fill and thin diagonal lines.
+		void drawHatched(const MapWindow::PlotMarks::Mark& m, const std::set<std::pair<int, int>>& set, float S)
+		{
+			const auto& map = view->map();
+			const auto in = [&](int dx, int dy) {
+				int nx = m.x + dx;
+				if (map.wrapX)
+					nx = (nx + map.width) % map.width;
+				return set.contains({ nx, m.y + dy });
+			};
+			// (exposed edges: south, east, north, west; v = 0 is the south edge)
+			const bool south = !in(0, -1), east = !in(1, 0), north = !in(0, 1), west = !in(-1, 0);
+			constexpr float kInset = 0.05f, kRadius = 0.16f, kGlow = 0.05f;
+			const float L = west ? kInset : 0, R = east ? 1 - kInset : 1, B = south ? kInset : 0, T = north ? 1 - kInset : 1;
+			// (the corners' radii: rounded where both its edges show)
+			const float rSW = south && west ? kRadius : 0, rSE = south && east ? kRadius : 0, rNE = north && east ? kRadius : 0, rNW = north && west ? kRadius : 0;
+			const auto project = [&](float u, float v, float& sx, float& sy) {
+				return groundToScreen((float(m.x) + u) * S, (float(m.y) + v) * S, 3, sx, sy);
+			};
+			const auto inside = [&](float u, float v) {
+				if (u < L || u > R || v < B || v > T)
+					return false;
+				const auto corner = [&](float cu, float cv, float r, bool left, bool bottom) {
+					if (r <= 0 || (left ? u > cu : u < cu) || (bottom ? v > cv : v < cv))
+						return true;
+					return (u - cu) * (u - cu) + (v - cv) * (v - cv) <= r * r;
+				};
+				return corner(L + rSW, B + rSW, rSW, true, true) && corner(R - rSE, B + rSE, rSE, false, true) &&
+					corner(R - rNE, T - rNE, rNE, false, false) && corner(L + rNW, T - rNW, rNW, true, false);
+			};
+			// a curve along the ground, as short lines
+			const auto stroke = [&](auto&& at, int steps, Color color, float alpha, float width) {
+				float px = 0, py = 0;
+				bool had = false;
+				for (int i = 0; i <= steps; ++i)
+				{
+					float u = 0, v = 0, sx = 0, sy = 0;
+					at(float(i) / float(steps), u, v);
+					const bool ok = project(u, v, sx, sy);
+					if (ok && had)
+						overlay->line(px, py, sx, sy, color, alpha, width);
+					px = sx, py = sy, had = ok;
+				}
+			};
+			// the fill: three strips, leaving the rounded corners out
+			const float rl = std::max(rSW, rNW), rr = std::max(rSE, rNE);
+			const float strips[3][4] = { { L + rl, B, R - rr, T }, { L, B + rSW, L + rl, T - rNW }, { R - rr, B + rSE, R, T - rNE } };
+			for (const auto& q : strips)
+			{
+				if (q[2] <= q[0] || q[3] <= q[1])
+					continue;
+				float px[4], py[4];
+				const float us[4] = { q[0], q[2], q[2], q[0] }, vs[4] = { q[1], q[1], q[3], q[3] };
+				bool ok = true;
+				for (int k = 0; k < 4 && ok; ++k)
+					ok = project(us[k], vs[k], px[k], py[k]);
+				if (ok)
+					overlay->quad(px, py, m.color, 0.10f * m.alpha);
+			}
+			// the diagonal lines, inside the rounded outline
+			constexpr int kSamples = 24;
+			for (float c = -1.0f; c < 1.0f; c += 0.075f)
+			{
+				// (the line u - v = c across the plot)
+				float px = 0, py = 0;
+				bool had = false;
+				for (int i = 0; i <= kSamples; ++i)
+				{
+					const float u = float(i) / kSamples, v = u - c;
+					float sx = 0, sy = 0;
+					const bool ok = v >= 0 && v <= 1 && inside(u, v) && project(u, v, sx, sy);
+					if (ok && had)
+						overlay->line(px, py, sx, sy, m.color, 0.30f * m.alpha, 1.25f);
+					px = sx, py = sy, had = ok;
+				}
+			}
+			// the edges: the glow inside, a dark line under, the bright line
+			const auto edges = [&](float d, Color color, float alpha, float width) {
+				const float l = west ? L + d : 0, r = east ? R - d : 1, b = south ? B + d : 0, t = north ? T - d : 1;
+				const float sw = rSW > 0 ? std::max(0.0f, rSW - d) : 0, se = rSE > 0 ? std::max(0.0f, rSE - d) : 0;
+				const float ne = rNE > 0 ? std::max(0.0f, rNE - d) : 0, nw = rNW > 0 ? std::max(0.0f, rNW - d) : 0;
+				if (south) stroke([&](float f, float& u, float& v) { u = l + sw + f * (r - se - l - sw), v = b; }, 6, color, alpha, width);
+				if (east) stroke([&](float f, float& u, float& v) { u = r, v = b + se + f * (t - ne - b - se); }, 6, color, alpha, width);
+				if (north) stroke([&](float f, float& u, float& v) { u = r - ne - f * (r - ne - l - nw), v = t; }, 6, color, alpha, width);
+				if (west) stroke([&](float f, float& u, float& v) { u = l, v = t - nw - f * (t - nw - b - sw); }, 6, color, alpha, width);
+				// (the rounded corners, a quarter circle each)
+				const float pi = 3.14159265f;
+				const auto arc = [&](float cu, float cv, float rad, float a0) {
+					if (rad > 0)
+						stroke([&](float f, float& u, float& v) { const float a = a0 + f * pi / 2; u = cu + rad * std::cos(a), v = cv + rad * std::sin(a); }, 8, color, alpha, width);
+				};
+				arc(l + sw, b + sw, sw, pi);
+				arc(r - se, b + se, se, 1.5f * pi);
+				arc(r - ne, t - ne, ne, 0);
+				arc(l + nw, t - nw, nw, 0.5f * pi);
+			};
+			edges(kGlow, m.color, 0.18f * m.alpha, 7);
+			edges(0, { 0, 0, 0 }, 0.35f * m.alpha, 5);
+			edges(0, m.color, std::min(1.0f, m.alpha + 0.1f), 3);
+		}
+
 		// The marked plots: circles; the outline of each layer's and colour's set of plots, its
 		// edges where the next plot is not of it; the signs' captions.
 		void drawMarks()
@@ -1467,7 +1571,9 @@ namespace oc4::render
 			{
 				if (m.fill)
 					continue;
-				if (m.border)
+				if (m.border && m.hatched)
+					drawHatched(m, sets[key(m)], S);
+				else if (m.border)
 				{
 					const auto& set = sets[key(m)];
 					// (the plot's edges: south, east, north, west, and the plot beyond each)
