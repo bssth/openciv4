@@ -192,11 +192,16 @@ namespace oc4::host
 		void clearVector(std::vector<float>& vec) override { std::vector<float>().swap(vec); }
 
 		// Session / lobby: a local single-player engine
-		int getAssignedNetworkID(int) override { return -1; }
-		bool isConnected(int) override { return false; }
+		int getAssignedNetworkID(int player) override;
+		bool isConnected(int player) override;
 		bool isGameActive() override { return m_gameActive; }
-		int GetLocalNetworkID() override { return -1; }
-		bool IsPitbossHost() const override { return false; }
+		int GetLocalNetworkID() override { return m_pitbossHost ? -1 : m_pitbossSeat; }
+		bool IsPitbossHost() const override { return m_pitbossHost; }
+		void setPitboss(bool host, int seat = -1) { m_pitboss = true; m_pitbossHost = host; m_pitbossSeat = seat; }
+		CvString GetPitbossSmtpHost() const override { return {}; }
+		CvWString GetPitbossSmtpLogin() const override { return {}; }
+		CvWString GetPitbossSmtpPassword() const override { return {}; }
+		CvString GetPitbossEmail() const override { return {}; }
 		int getChtLvl() override { return 0; }
 		bool GetWorldBuilderMode() override { return m_interface.worldBuilder(); }
 		int getCurrentLanguage() const override { return m_language; }
@@ -206,8 +211,8 @@ namespace oc4::host
 		void callUpdater() override {}
 		void openSlot(PlayerTypes) override {}
 		// Length of a turn slice; the DLL scales mission animations with it.
-		int getMillisecsPerTurn() override { return 1000; }
-		float getSecsPerTurn() override { return 1.0f; }
+		int getMillisecsPerTurn() override { return m_pitboss ? 250 : 1000; }
+		float getSecsPerTurn() override { return m_pitboss ? 0.25f : 1.0f; }
 		int getTurnsPerMinute() override { return 60000 / getMillisecsPerTurn(); } // turn slices; CvGame divides by it
 		void reportStatistics() override {} // online stat reporting
 		CvWString getMapScriptName() override { return CvWString(std::string(m_python.getMapScriptModule())); }
@@ -414,6 +419,8 @@ namespace oc4::host
 		void setGameInitializing(bool initializing) { m_gameInitializing = initializing; }
 
 	private:
+		bool m_pitboss = false, m_pitbossHost = false;
+		int m_pitbossSeat = -1;
 		bool m_done = false;
 		const AssetResolver& m_assets;
 		PythonHost& m_python;

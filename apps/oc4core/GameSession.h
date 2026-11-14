@@ -31,6 +31,8 @@ namespace oc4::host
 		std::string civilization, leader; // the human's (CIVILIZATION_..., LEADER_...); empty: as the others, at random
 		int players = 0; // 0: the world size's default
 		unsigned int seed = 1;
+		bool pitboss = false;
+		std::vector<int> humans;
 	};
 
 	class GameSession
@@ -64,6 +66,9 @@ namespace oc4::host
 		// A multiplayer game, after every player loaded the same save: the human seats (the rest
 		// AI players), simultaneous turns, this game's own seat.
 		void setupMultiplayer(const std::vector<int>& humans, int seat);
+		void setupPitboss(const std::vector<int>& humans, int seat, bool server);
+		std::string pitbossPythonState() const;
+		void restorePitbossPythonState(const std::string& state);
 		void loadGame(const std::filesystem::path& path);
 		// Throws what loadGame would before it changes anything: not a save, another mod's.
 		void checkSave(const std::filesystem::path& path) const;

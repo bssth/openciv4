@@ -45,6 +45,10 @@
 #include "GameFont.h"
 #include "GameSession.h"
 #include "Net.h"
+#ifdef __linux__
+#include "PitbossGame.h"
+#include <thread>
+#endif
 #include "MapCapture.h"
 #include "Profiler.h"
 #include "PythonHost.h"
@@ -129,6 +133,7 @@ namespace
 		fs::path profileOut;  // also write folded stacks for flame graphs
 		bool menu = false;    // the main menu first, then the game chosen there is played
 		std::string menuPage; // ... opened on that page ("load")
+		std::string menuMessage;
 		std::vector<std::wstring> kept; // the options a relaunch keeps: the install's, the mod's, Python's, the logs', the window's
 		bool view = false;    // the map in a window
 		bool play = false;    // ... where the active player gives the orders
@@ -150,6 +155,11 @@ namespace
 		int hostPort = 0;
 		int humans = 2;
 		std::string join;
+		fs::path pitbossConfig, passwordFile;
+		std::string pitbossJoin;
+		std::string pitbossPassword;
+		double pitbossCheckSeconds = 0;
+		int seat = -1;
 	};
 
 	fs::path exeFolder()
@@ -235,6 +245,13 @@ namespace
 					o.kept.insert(o.kept.end(), { a, argv[i + 1] });
 			if (a == L"--civ4")
 				o.civ4Root = next();
+#ifdef __linux__
+			else if (a == L"--pitboss") o.pitbossConfig = fs::absolute(next());
+			else if (a == L"--pitboss-join") { o.pitbossJoin = next().string(); o.view = o.play = true; }
+			else if (a == L"--seat") o.seat = std::stoi(next().string());
+			else if (a == L"--password-file") o.passwordFile = fs::absolute(next());
+			else if (a == L"--pitboss-check") o.pitbossCheckSeconds = std::stod(next().string());
+#endif
 			else if (a == L"--mod")
 				o.mod = next();
 			else if (a == L"--python-home")
@@ -243,6 +260,8 @@ namespace
 				o.logDir = next();
 			else if (a == L"--menu-page")
 				o.menuPage = next().string();
+			else if (a == L"--menu-message")
+				o.menuMessage = next().string();
 			else if (a == L"--turns")
 				o.turns = std::stoi(next().wstring());
 			else if (a == L"--map")
@@ -327,6 +346,29 @@ namespace
 			else
 				throw std::runtime_error("unknown option");
 		}
+#ifdef __linux__
+		if (!o.pitbossConfig.empty())
+		{
+			if (o.view || o.menu || o.turns || !o.load.empty() || !o.save.empty() || o.hostPort || !o.join.empty())
+				throw std::runtime_error("--pitboss is exclusive with other game modes");
+			const auto config = host::pb::Config::read(o.pitbossConfig);
+			if (o.civ4Root.empty())
+			{
+				const auto root = host::pb::value(config.values, "server.civ4");
+				if (!root.empty()) o.civ4Root = o.pitbossConfig.parent_path() / root;
+			}
+			if (!o.mod)
+				if (const auto mod = host::pb::value(config.values, "server.mod"); !mod.empty()) o.mod = fs::u8path(mod);
+		}
+		if (!o.pitbossJoin.empty() && (o.seat < 0 || o.seat >= 18 || o.hostPort || !o.join.empty() || o.menu || o.turns || !o.load.empty()))
+			throw std::runtime_error("--pitboss-join requires --seat 0..17 and is exclusive with hosting, loading and autoplay");
+		if (o.pitbossCheckSeconds != 0)
+		{
+			if (o.pitbossJoin.empty() || !std::isfinite(o.pitbossCheckSeconds) || o.pitbossCheckSeconds <= 0 || o.pitbossCheckSeconds > 3600)
+				throw std::runtime_error("--pitboss-check needs --pitboss-join and a duration of 0..3600 seconds");
+			o.view = o.play = false;
+		}
+#endif
 		if (argc <= 1)
 			o.menu = true; // (started as a game is: its menu)
 		if (o.civ4Root.empty())
@@ -1368,7 +1410,9 @@ namespace
 			// live until it is done, and this frame's rest waits for it)
 			const int turn = game.getGameTurn();
 			// (a battle shown: the game goes on a battle slice at a time, as its animation)
-			if (player.isTurnActive() && !host::Entities::battleWait() && !ui.worldBuilder())
+			// A dedicated server owns progress even while this player's dialogs or animations wait.
+			// Keep consuming its frames when our turn ends, diplomacy opens, or the game is over.
+			if (host::Net::get().pitboss() || (player.isTurnActive() && !host::Entities::battleWait() && !ui.worldBuilder()))
 			{
 				worker.start([&session] { session.update(); });
 				if (!worker.finishWithin(std::chrono::milliseconds(20)))
@@ -1439,7 +1483,7 @@ namespace
 			// Not our turn: the others move, a tenth of a second of the game at a time (or one of
 			// its updates, however long), then the map is captured again.
 			// (a leader talking to the player holds them until the talk is over, as the original's)
-			if (!CvPlayerAI::getPlayerNonInl(game.getActivePlayer()).isTurnActive() && game.getGameState() != GAMESTATE_OVER &&
+			if (!host::Net::get().pitboss() && !CvPlayerAI::getPlayerNonInl(game.getActivePlayer()).isTurnActive() && game.getGameState() != GAMESTATE_OVER &&
 				!utility.diplomacy().active())
 			{
 				window.setBusy(true);
@@ -1690,6 +1734,7 @@ namespace
 			std::printf("  saved %s\n", opt.screenshot.string().c_str());
 		}
 		screens.closeMenu();
+		window.setEditing(false);
 		window.setUi({});
 		window.setUiWheel({});
 		sounds.setTalkMusic(-1, -1);
@@ -1801,6 +1846,23 @@ int wmain(int argc, wchar_t** argv)
 	host::installCrashHandler();
 	try
 	{
+#ifdef __linux__
+		if (argc >= 2 && (std::wstring_view(argv[1]) == L"--pitboss-admin" || std::wstring_view(argv[1]) == L"--pitboss-password"))
+		{
+			if (argc < 4) throw std::runtime_error("expected STATE_DIR and command/seat");
+			const fs::path state = fs::absolute(argv[2]);
+			if (std::wstring_view(argv[1]) == L"--pitboss-password")
+				host::pb::setCredential(state, std::stoi(fs::path(argv[3]).string()), host::pb::passwordPrompt());
+			else
+			{
+				std::string command;
+				for (int i = 3; i < argc; ++i) { if (i > 3) command += ' '; command += fs::path(argv[i]).string(); }
+				if (command.starts_with("password ")) command += " " + host::pb::passwordPrompt();
+				std::printf("%s\n", host::pb::admin(state, command).c_str());
+			}
+			return 0;
+		}
+#endif
 		const Options opt = [&] {
 			Options o = parseArgs(argc, argv);
 			// Started as a game is (no options) by a program that has only played mods: the last of them
@@ -1876,6 +1938,8 @@ int wmain(int argc, wchar_t** argv)
 		host::PythonHost python(assets);
 		python.setExecutable(exePath);
 		host::Utility utility(assets, python, xml, opt.logDir);
+		if (!opt.pitbossConfig.empty()) utility.setPitboss(true);
+		if (!opt.pitbossJoin.empty()) utility.setPitboss(false, opt.seat);
 		utility.setModFolder(dllModFolder);
 		// Before utility goes: the game core frees memory through its interface until it unloads.
 		const struct KeepGameCoreMemory
@@ -1978,7 +2042,7 @@ int wmain(int argc, wchar_t** argv)
 			session.probeSave(opt.probeSave);
 		}
 
-		if (opt.turns > 0 || !opt.load.empty() || opt.view || opt.menu || !opt.save.empty())
+		if (opt.turns > 0 || !opt.load.empty() || opt.view || opt.menu || !opt.save.empty() || !opt.pitbossConfig.empty() || opt.pitbossCheckSeconds > 0)
 		{
 			host::GameSession session(utility, python);
 			session.setModFolder(modFolder);
@@ -1989,6 +2053,15 @@ int wmain(int argc, wchar_t** argv)
 				return true;
 			});
 			// The menu first: what it chooses is played as with --play, in its window.
+#ifdef __linux__
+			if (!opt.pitbossConfig.empty() || !opt.pitbossJoin.empty() || opt.menu)
+				host::pb::identity(host::pitbossIdentity(assets, mapDirs));
+			if (!opt.pitbossConfig.empty())
+			{
+				host::runPitboss(host::pb::Config::read(opt.pitbossConfig), session, utility);
+				return 0;
+			}
+#endif
 			Options played = opt;
 			std::optional<render::MapWindow> menuWindow;
 			if (opt.menu)
@@ -2011,7 +2084,7 @@ int wmain(int argc, wchar_t** argv)
 					if (m.folder != modFolder)
 						otherMods.push_back(m.folder);
 				// (a save that cannot be played here: the menu again, saying why)
-				std::string message;
+				std::string message = opt.menuMessage;
 				for (;;)
 				{
 					const auto choice = runMenu(opt, *menuWindow, utility, title, maps, otherMods, played.viewKeys, message);
@@ -2030,6 +2103,15 @@ int wmain(int argc, wchar_t** argv)
 						played.join = choice->join;
 						break;
 					}
+#ifdef __linux__
+					if (choice->kind == host::MenuChoice::Kind::Pitboss)
+					{
+						played.pitbossJoin = choice->join;
+						played.seat = choice->seat;
+						played.pitbossPassword = choice->password;
+						break;
+					}
+#endif
 					if (choice->kind == host::MenuChoice::Kind::NewGame)
 					{
 						played.game = choice->game;
@@ -2058,119 +2140,175 @@ int wmain(int argc, wchar_t** argv)
 				}
 			}
 			// Joining a multiplayer game: the host's save, loaded as any other.
-			host::Net::Welcome joined;
-			if (!played.join.empty())
+			try
 			{
-				std::printf("\nmultiplayer: joining %s\n", played.join.c_str());
-				host::Net::get().join(played.join);
-				joined = host::Net::get().awaitWelcome();
-				const fs::path file = multiplayerFolder() / L"joined.CivBeyondSwordSave";
-				std::ofstream(file, std::ios::binary).write(reinterpret_cast<const char*>(joined.save.data()), std::streamsize(joined.save.size()));
-				std::printf("  multiplayer: seat %d, %zu humans, the game %zu bytes\n", joined.seat, joined.humans.size(), joined.save.size());
-				played.load = file;
-			}
-			if (!played.load.empty())
-			{
-				std::printf("\nload: %s\n", utf8Path(played.load.filename()).c_str());
-				stage("load game", [&] {
-					session.loadGame(played.load);
-					return true;
-				});
-			}
-			else
-			{
-				std::printf("\nnew game: %s, %s, seed %u%s%s\n", played.game.mapScript.c_str(), played.game.worldSize.c_str(), played.game.seed,
-					played.game.leader.empty() ? "" : ", ", played.game.leader.c_str());
-				stage("start new game", [&] {
-					session.startNewGame(played.game);
-					return true;
-				});
-			}
-			if (!opt.execFirst.empty())
-			{
-				const auto bytes = readWholeFile(opt.execFirst);
-				python.run(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
-			}
-			// Hosting a multiplayer game: a new one is saved and started again from its save (all
-			// the players then begin from the same file); a loaded one waits for the others, gives
-			// them their seats and the file, and the frames begin.
-			if (played.hostPort > 0 && played.load.empty())
-			{
-				const fs::path file = multiplayerFolder() / L"host-start.CivBeyondSwordSave";
-				session.saveGame(file);
-				g_relaunch = std::vector<std::wstring>{ L"--play", L"--host", std::to_wstring(played.hostPort), L"--humans",
-					std::to_wstring(played.humans), L"--load", file.wstring() };
-				played.view = false;
-			}
-			else if (played.hostPort > 0)
-			{
-				const PlayerTypes mine = GC.getGame().getActivePlayer();
-				std::vector<int> humans{ int(mine) };
-				for (int pass = 0; pass < 2; ++pass)
-					for (int p = 0; p < GC.getMAX_CIV_PLAYERS() && int(humans.size()) < played.humans; ++p)
-					{
-						const CvPlayerAI& pl = CvPlayerAI::getPlayerNonInl(static_cast<PlayerTypes>(p));
-						if (pl.isAlive() && !pl.isBarbarian() && std::ranges::find(humans, p) == humans.end() && (pass == 1 || pl.isHuman()))
-							humans.push_back(p);
-					}
-				host::Net& net = host::Net::get();
-				net.listen(static_cast<uint16_t>(played.hostPort));
-				std::printf("\nmultiplayer: hosting on port %d for %zu humans (seats", played.hostPort, humans.size());
-				for (const int h : humans)
-					std::printf(" %d", h);
-				std::printf(")\n");
-				std::fflush(stdout);
-				// (the window up and live meanwhile, saying who has come; closing it gives up)
-				if (!menuWindow && played.view)
-					menuWindow.emplace(assets, opt.viewWidth, opt.viewHeight, !opt.screenshot.empty());
-				net.acceptPlayers(int(humans.size()) - 1, [&](int joined) {
-					if (!menuWindow)
-						return true;
-					menuWindow->setStatus(std::format("multiplayer: waiting for the others on port {} ({} of {} here)", played.hostPort,
-						joined + 1, humans.size()));
-					menuWindow->frame(0.1f);
-					return menuWindow->pump();
-				});
-				net.welcome(std::vector<int>(humans.begin() + 1, humans.end()), humans, readWholeFile(played.load));
-				session.setupMultiplayer(humans, int(mine));
-				net.start();
-			}
-			else if (!played.join.empty())
-			{
-				session.setupMultiplayer(joined.humans, joined.seat);
-				host::Net::get().start();
-			}
-			// (in a window the AI plays them while the map shows)
-			if (opt.turns > 0 && (!opt.view || !opt.screenshot.empty()))
-			{
-				std::printf("\nAI autoplay, %d turns:\n", opt.turns);
-				host::SamplingProfiler profiler;
-				if (opt.profile)
-					profiler.start();
-				const auto tPlay = std::chrono::steady_clock::now();
-				session.autoPlay(opt.turns, [&](int turn) {
-					if (turn == opt.saveAt && !opt.save.empty())
-					{
-						session.saveGame(opt.save);
-						std::printf("  saved %s at turn %d\n", opt.save.filename().string().c_str(), turn);
-					}
-				});
-				std::printf("  %.2fs\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - tPlay).count());
-				if (opt.profile)
+				host::Net::Welcome joined;
+#ifdef __linux__
+				std::string joinedRuntimeState;
+				if (!played.pitbossJoin.empty())
 				{
-					profiler.stop();
-					profiler.report(stdout, 40);
-					if (!opt.profileOut.empty())
-						profiler.writeFolded(opt.profileOut);
+					std::string password = std::move(played.pitbossPassword);
+					if (!played.passwordFile.empty()) { std::ifstream file(played.passwordFile); if (!file || !std::getline(file, password)) throw std::runtime_error("cannot read password file"); }
+					else if (password.empty()) password = host::pb::passwordPrompt();
+					auto welcome = host::pb::join(played.pitbossJoin, played.seat, password);
+					joined.seat = welcome.seat; joined.humans = welcome.humans;
+					joinedRuntimeState = std::move(welcome.runtimeState);
+					const fs::path file = multiplayerFolder() / L"pitboss.CivBeyondSwordSave";
+					std::ofstream(file, std::ios::binary).write(reinterpret_cast<const char*>(welcome.save.data()), std::streamsize(welcome.save.size()));
+					played.load = file;
 				}
+#endif
+				if (!played.join.empty())
+				{
+					std::printf("\nmultiplayer: joining %s\n", played.join.c_str());
+					host::Net::get().join(played.join);
+					joined = host::Net::get().awaitWelcome();
+					const fs::path file = multiplayerFolder() / L"joined.CivBeyondSwordSave";
+					std::ofstream(file, std::ios::binary).write(reinterpret_cast<const char*>(joined.save.data()), std::streamsize(joined.save.size()));
+					std::printf("  multiplayer: seat %d, %zu humans, the game %zu bytes\n", joined.seat, joined.humans.size(), joined.save.size());
+					played.load = file;
+				}
+				if (!played.load.empty())
+				{
+					std::printf("\nload: %s\n", utf8Path(played.load.filename()).c_str());
+					stage("load game", [&] {
+						session.loadGame(played.load);
+						return true;
+					});
+				}
+				else
+				{
+					std::printf("\nnew game: %s, %s, seed %u%s%s\n", played.game.mapScript.c_str(), played.game.worldSize.c_str(), played.game.seed,
+						played.game.leader.empty() ? "" : ", ", played.game.leader.c_str());
+					stage("start new game", [&] {
+						session.startNewGame(played.game);
+						return true;
+					});
+				}
+				if (!opt.execFirst.empty() && played.pitbossJoin.empty())
+				{
+					const auto bytes = readWholeFile(opt.execFirst);
+					python.run(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+				}
+				// Hosting a multiplayer game: a new one is saved and started again from its save (all
+				// the players then begin from the same file); a loaded one waits for the others, gives
+				// them their seats and the file, and the frames begin.
+#ifdef __linux__
+				if (!played.pitbossJoin.empty())
+				{
+					session.setupPitboss(joined.humans, joined.seat, false);
+					session.restorePitbossPythonState(joinedRuntimeState);
+					host::pb::ready(uint32_t(GC.getGame().calculateSyncChecksum()));
+					if (!opt.execFirst.empty())
+					{
+						const auto bytes = readWholeFile(opt.execFirst);
+						python.run(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+					}
+					if (played.pitbossCheckSeconds > 0)
+					{
+						const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(played.pitbossCheckSeconds);
+						while (std::chrono::steady_clock::now() < until)
+						{
+							session.update();
+							std::this_thread::sleep_for(std::chrono::milliseconds(5));
+						}
+						std::printf("PitBoss check passed: seat %d turn %d checksum %08X\n", played.seat, GC.getGame().getGameTurn(), unsigned(GC.getGame().calculateSyncChecksum()));
+						host::pb::disconnect();
+					}
+				}
+				else
+#endif
+				if (played.hostPort > 0 && played.load.empty())
+				{
+					const fs::path file = multiplayerFolder() / L"host-start.CivBeyondSwordSave";
+					session.saveGame(file);
+					g_relaunch = std::vector<std::wstring>{ L"--play", L"--host", std::to_wstring(played.hostPort), L"--humans",
+						std::to_wstring(played.humans), L"--load", file.wstring() };
+					played.view = false;
+				}
+				else if (played.hostPort > 0)
+				{
+					const PlayerTypes mine = GC.getGame().getActivePlayer();
+					std::vector<int> humans{ int(mine) };
+					for (int pass = 0; pass < 2; ++pass)
+						for (int p = 0; p < GC.getMAX_CIV_PLAYERS() && int(humans.size()) < played.humans; ++p)
+						{
+							const CvPlayerAI& pl = CvPlayerAI::getPlayerNonInl(static_cast<PlayerTypes>(p));
+							if (pl.isAlive() && !pl.isBarbarian() && std::ranges::find(humans, p) == humans.end() && (pass == 1 || pl.isHuman()))
+								humans.push_back(p);
+						}
+					host::Net& net = host::Net::get();
+					net.listen(static_cast<uint16_t>(played.hostPort));
+					std::printf("\nmultiplayer: hosting on port %d for %zu humans (seats", played.hostPort, humans.size());
+					for (const int h : humans)
+						std::printf(" %d", h);
+					std::printf(")\n");
+					std::fflush(stdout);
+					// (the window up and live meanwhile, saying who has come; closing it gives up)
+					if (!menuWindow && played.view)
+						menuWindow.emplace(assets, opt.viewWidth, opt.viewHeight, !opt.screenshot.empty());
+					net.acceptPlayers(int(humans.size()) - 1, [&](int joined) {
+						if (!menuWindow)
+							return true;
+						menuWindow->setStatus(std::format("multiplayer: waiting for the others on port {} ({} of {} here)", played.hostPort,
+							joined + 1, humans.size()));
+						menuWindow->frame(0.1f);
+						return menuWindow->pump();
+					});
+					net.welcome(std::vector<int>(humans.begin() + 1, humans.end()), humans, readWholeFile(played.load));
+					session.setupMultiplayer(humans, int(mine));
+					net.start();
+				}
+				else if (!played.join.empty())
+				{
+					session.setupMultiplayer(joined.humans, joined.seat);
+					host::Net::get().start();
+				}
+				// (in a window the AI plays them while the map shows)
+				if (opt.turns > 0 && (!opt.view || !opt.screenshot.empty()))
+				{
+					std::printf("\nAI autoplay, %d turns:\n", opt.turns);
+					host::SamplingProfiler profiler;
+					if (opt.profile)
+						profiler.start();
+					const auto tPlay = std::chrono::steady_clock::now();
+					session.autoPlay(opt.turns, [&](int turn) {
+						if (turn == opt.saveAt && !opt.save.empty())
+						{
+							session.saveGame(opt.save);
+							std::printf("  saved %s at turn %d\n", opt.save.filename().string().c_str(), turn);
+						}
+					});
+					std::printf("  %.2fs\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - tPlay).count());
+					if (opt.profile)
+					{
+						profiler.stop();
+						profiler.report(stdout, 40);
+						if (!opt.profileOut.empty())
+							profiler.writeFolded(opt.profileOut);
+					}
+				}
+				if (played.view)
+					runMapView(played, assets, session, utility, menuWindow ? &*menuWindow : nullptr);
+				if (!opt.save.empty() && opt.saveAt < 0)
+					stage("save game", [&] {
+						session.saveGame(opt.save);
+						return true;
+					});
 			}
-			if (played.view)
-				runMapView(played, assets, session, utility, menuWindow ? &*menuWindow : nullptr);
-			if (!opt.save.empty() && opt.saveAt < 0)
-				stage("save game", [&] {
-					session.saveGame(opt.save);
-					return true;
-				});
+			catch (const std::exception& e)
+			{
+#ifdef __linux__
+				if (!played.pitbossJoin.empty() && played.pitbossCheckSeconds == 0 && opt.viewSeconds <= 0)
+				{
+					host::pb::disconnect();
+					std::fprintf(stderr, "PitBoss: %s\n", e.what());
+					g_relaunch = std::vector<std::wstring>{ L"--menu", L"--menu-page", L"pitboss", L"--menu-message", fs::path(e.what()).wstring() };
+				}
+				else
+#endif
+					throw;
+			}
 		}
 
 		if (!opt.exec.empty())

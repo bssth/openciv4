@@ -31,6 +31,8 @@ namespace oc4::host
 		{
 			uint32_t number = 0;
 			std::vector<Bytes> commands;
+			int pitbossTicks = -1;
+			uint32_t connected = 0;
 		};
 
 		// What a player who joins gets: the seat, the human seats, the game.
@@ -43,7 +45,8 @@ namespace oc4::host
 
 		static Net& get();
 
-		bool active() const { return m_active; }
+		bool active() const;
+		bool pitboss() const;
 		bool isHost() const { return m_host; }
 
 		// The host: the port, then the others as they come (meanwhile `waiting` now and then, with
