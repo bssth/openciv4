@@ -285,7 +285,7 @@ add_executable(oc4core
 	$<$<PLATFORM_ID:Windows>:apps/oc4core/oc4core.rc>
 )
 # The scripts in python/ are compiled into the engine as byte arrays.
-foreach(_py IN ITEMS oc4engine:kOc4EnginePy oc4screens:kOc4ScreensPy oc4menu:kOc4MenuPy oc4turnlog:kOc4TurnLogPy oc4options:kOc4OptionsPy oc4wb:kOc4WbPy)
+foreach(_py IN ITEMS oc4engine:kOc4EnginePy oc4screens:kOc4ScreensPy oc4menu:kOc4MenuPy oc4turnlog:kOc4TurnLogPy oc4options:kOc4OptionsPy oc4wb:kOc4WbPy oc4winreg:kOc4WinregPy)
 	string(REPLACE ":" ";" _py "${_py}")
 	list(GET _py 0 _py_name)
 	list(GET _py 1 _py_symbol)
