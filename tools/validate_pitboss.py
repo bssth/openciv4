@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--civ4", required=True, type=Path)
-    parser.add_argument("--build", type=Path, default=ROOT / "build/linux-release")
+    parser.add_argument("--build", type=Path, default=ROOT / "build/linux-headless")
     parser.add_argument("--out", type=Path, default=ROOT / "build/pitboss-validation")
     parser.add_argument("--mod", default="")
     args = parser.parse_args()

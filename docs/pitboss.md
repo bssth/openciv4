@@ -10,6 +10,10 @@ this Linux feature build, the same game-core revision and identical XML/Python r
 and map scripts. Original BtS clients cannot connect. The vanilla BtS 3.19 core and
 data mods such as Next War are supported; custom C++ cores remain unsupported.
 
+Updating the pinned game core changes the compatibility fingerprint. Update clients
+and server together. Checkpoints from an older core revision need their matching
+old build; checkpoint migration between core revisions is not implemented.
+
 ## Linux prerequisites
 
 The full engine integration depends on [Linux runtime PR #32](https://github.com/bssth/openciv4/pull/32).
@@ -38,9 +42,10 @@ and macOS builds.
 
 ## Start a game
 
-The commands below assume a complete Linux engine build as described above, with
-its executable at `build/linux-release/bin/oc4core`. Each machine needs its own
-installed game assets. The server uses OpenSSL Crypto at build/runtime, but starting
+The commands below assume the `linux-headless` preset from PR #40, with the runtime
+prerequisite applied and its executable at `build/linux-headless/bin/oc4core`.
+Each machine needs its own installed game assets. The server uses OpenSSL Crypto
+at build/runtime, but starting
 it does not initialize SDL or Vulkan.
 
 Copy [pitboss.ini.example](pitboss.ini.example) outside the checkout and set `civ4`
@@ -54,9 +59,9 @@ Set a password for every configured human seat while the server is stopped. The
 commands prompt without terminal echo; passwords are not command-line arguments:
 
 ```sh
-build/linux-release/bin/oc4core --pitboss-password /path/to/private/pitboss-state 0
-build/linux-release/bin/oc4core --pitboss-password /path/to/private/pitboss-state 1
-build/linux-release/bin/oc4core --pitboss /path/to/pitboss.ini
+build/linux-headless/bin/oc4core --pitboss-password /path/to/private/pitboss-state 0
+build/linux-headless/bin/oc4core --pitboss-password /path/to/private/pitboss-state 1
+build/linux-headless/bin/oc4core --pitboss /path/to/pitboss.ini
 ```
 
 The default listen address is loopback and the default TCP port is 2056. To use a
@@ -79,7 +84,7 @@ claims an unused civilization. The password is masked and is not saved in the pr
 The command-line equivalent prompts for the password:
 
 ```sh
-build/linux-release/bin/oc4core --civ4 /path/to/Civ4 \
+build/linux-headless/bin/oc4core --civ4 /path/to/Civ4 \
   --pitboss-join 192.168.1.10:2056 --seat 0
 ```
 
@@ -96,11 +101,11 @@ Administration uses a Unix socket inside the owner-only state directory. No TCP
 administration port or separate admin password is exposed. Use the same Linux user:
 
 ```sh
-build/linux-release/bin/oc4core --pitboss-admin /path/to/private/pitboss-state status
-build/linux-release/bin/oc4core --pitboss-admin /path/to/private/pitboss-state pause
-build/linux-release/bin/oc4core --pitboss-admin /path/to/private/pitboss-state resume
-build/linux-release/bin/oc4core --pitboss-admin /path/to/private/pitboss-state save
-build/linux-release/bin/oc4core --pitboss-admin /path/to/private/pitboss-state stop
+build/linux-headless/bin/oc4core --pitboss-admin /path/to/private/pitboss-state status
+build/linux-headless/bin/oc4core --pitboss-admin /path/to/private/pitboss-state pause
+build/linux-headless/bin/oc4core --pitboss-admin /path/to/private/pitboss-state resume
+build/linux-headless/bin/oc4core --pitboss-admin /path/to/private/pitboss-state save
+build/linux-headless/bin/oc4core --pitboss-admin /path/to/private/pitboss-state stop
 ```
 
 | Command | Effect |

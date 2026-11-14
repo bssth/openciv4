@@ -5,7 +5,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=%h/git/openciv4/build/linux-release/bin/oc4core --pitboss %h/.config/openciv4/pitboss.ini
+ExecStart=%h/git/openciv4/build/linux-headless/bin/oc4core --pitboss %h/.config/openciv4/pitboss.ini
 Environment=OC4_DOCUMENTS=%h/.local/state/openciv4/pitboss/documents
 UMask=0077
 Restart=on-failure
