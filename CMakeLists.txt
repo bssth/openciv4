@@ -337,17 +337,18 @@ add_custom_command(TARGET oc4core POST_BUILD
 endif()
 # ---------------------------------------------------------------- tests
 enable_testing()
+add_executable(hash_map_test tests/hash_map_test.cpp)
+target_include_directories(hash_map_test PRIVATE gamecore/compat)
+target_link_libraries(hash_map_test PRIVATE oc4_options)
+add_test(NAME hash_map COMMAND hash_map_test)
+set_target_properties(hash_map_test PROPERTIES FOLDER "tests")
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	add_executable(pitboss_test tests/pitboss_test.cpp)
 	target_link_libraries(pitboss_test PRIVATE oc4_pitboss)
 	add_test(NAME pitboss COMMAND pitboss_test)
 	set_tests_properties(pitboss PROPERTIES TIMEOUT 65)
 endif()
-add_executable(hash_map_test tests/hash_map_test.cpp)
-target_include_directories(hash_map_test PRIVATE gamecore/compat)
-target_link_libraries(hash_map_test PRIVATE oc4_options)
-add_test(NAME hash_map COMMAND hash_map_test)
-set_target_properties(hash_map_test PROPERTIES FOLDER "tests")
 
 add_executable(ui_scale_test tests/ui_scale_test.cpp)
 target_include_directories(ui_scale_test PRIVATE src)

@@ -346,8 +346,6 @@ namespace
 			else
 				throw std::runtime_error("unknown option");
 		}
-		if (argc <= 1)
-			o.menu = true; // (started as a game is: its menu)
 #ifdef __linux__
 		if (!o.pitbossConfig.empty())
 		{
@@ -371,6 +369,8 @@ namespace
 			o.view = o.play = false;
 		}
 #endif
+		if (argc <= 1)
+			o.menu = true; // (started as a game is: its menu)
 		if (o.civ4Root.empty())
 			o.civ4Root = findCiv4();
 		if (o.civ4Root.empty())
