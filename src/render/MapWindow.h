@@ -283,6 +283,7 @@ namespace oc4::render
 				float alpha = 1;
 				bool border = false;
 				bool fill = false; // the whole plot coloured (a globe layer's)
+				bool hatched = false; // (borders) as the original's AreaBorder texture: rounded, a glow inside, hatched
 			};
 			struct Sign
 			{

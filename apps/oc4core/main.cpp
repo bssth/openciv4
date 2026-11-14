@@ -1345,7 +1345,9 @@ namespace
 				for (const auto& m : marks)
 				{
 					const auto [x, y] = m.core ? host::windowPlot({ m.x, m.y }) : std::pair{ m.x, m.y };
-					shownMarks.marks.push_back({ x, y, m.layer, { m.r, m.g, m.b }, m.a, m.border });
+					// (the WorldBuilder's plot and brush in the original's area border style)
+					const bool hatched = m.border && (m.layer == AREA_BORDER_LAYER_HIGHLIGHT_PLOT || m.layer == AREA_BORDER_LAYER_WORLD_BUILDER);
+					shownMarks.marks.push_back({ x, y, m.layer, { m.r, m.g, m.b }, m.a, m.border, false, hatched });
 				}
 				for (const auto& s : signs)
 				{
