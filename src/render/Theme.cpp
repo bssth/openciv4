@@ -764,29 +764,31 @@ namespace oc4::render
 				}
 		}
 
-		// A skin's layers: one that inherits takes the other skin's, and the one after it (with no
-		// flags of its own) changes their last.
+		// A skin's layers: one that inherits takes the other skin's, and the ones after it (with
+		// no flags of their own) change those in turn, the first the first ("layer {}" one it
+		// keeps): a checked box's rollover changes its box and keeps its mark.
 		Skin skin(const Style* s, const Value* v, int depth = 0)
 		{
 			Skin out;
 			v = resolve(s, v);
 			if (!v || v->kind != Value::Kind::Skin || depth > 8)
 				return out;
-			bool inherited = false;
+			size_t next = 0, end = 0; // the inherited layers still to change
 			for (const RawLayer& raw : v->layers)
 			{
 				if (const auto it = raw.find("Inherit"); it != raw.end())
 				{
 					Skin from = skin(s, &it->second, depth + 1);
-					inherited = !from.empty();
+					next = out.size();
 					out.insert(out.end(), from.begin(), from.end());
+					end = out.size();
 				}
-				else if (inherited && !raw.contains("LayerFlags"))
-					apply(s, raw, out.back());
+				else if (next < end && !raw.contains("LayerFlags"))
+					apply(s, raw, out[next++]);
 				else
 				{
 					apply(s, raw, out.emplace_back());
-					inherited = false;
+					next = end = 0;
 				}
 			}
 			std::erase_if(out, [](const Layer& l) { return !l.image && !l.center && l.middle != Layer::Middle::Fill; });

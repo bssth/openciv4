@@ -31,7 +31,7 @@
 // opens it, Esc closes it), or with --own-interface the window's simple one.
 // --keys are typed in on your turns then (letters and Space as keys, '^', '@' and '+' before
 // one hold Ctrl, Alt and Shift, '>' ends the turn, '~' is Esc, "(x,y)" right clicks that plot,
-// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e" and "%t" type an arrow, Return or Tab into the window, "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
+// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e", "%t" and "%b" type an arrow, Return, Tab or Backspace into the window, "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
 // popup nothing answers gets its first, 'text' goes into its next edit box, "{Name}" or
 // "{Name/part}" clicks the interface's widget so named, "^{Name}" with Ctrl held, "?{Name}" rests
 // the mouse on it); with
@@ -42,7 +42,8 @@
 // --menu (and no options at all) opens the window on a temporary main menu: a new game, with
 // the leader, map script, world and difficulty to choose, or a saved one, played as with
 // --play then (its leading "{Name}" --keys click the menu's widgets: MenuNew, MenuLaunch, ...;
-// "{MenuLeader}{MenuLeader/3}" opens a pull down and picks its 4th item).
+// "{MenuLeader}{MenuLeader/3}" opens a pull down and picks its 4th item; "<x,y>" clicks that
+// pixel, 'text' types into the edit box clicked).
 //
 // Starts Python, publishes the DLL to it, initialises CvGlobals and loads all XML the
 // way the original engine does. With --turns it then starts a new game on a map
@@ -386,6 +387,7 @@ namespace
 		case 'r': return render::key::Right;
 		case 'e': return render::key::Return;
 		case 't': return render::key::Tab;
+		case 'b': return render::key::Back;
 		default: return 0;
 		}
 	}
@@ -1686,6 +1688,21 @@ namespace
 				keys.erase(0, 2);
 				typed = now;
 			}
+			// (a scripted menu: "<x,y>" clicks that pixel as the mouse does; 'text' is typed)
+			if (int px = 0, py = 0; keys.starts_with('<') && now - typed > std::chrono::milliseconds(400) &&
+				keys.find('>') != std::string::npos && std::sscanf(keys.c_str() + 1, "%d,%d", &px, &py) == 2)
+			{
+				window.mouseClick(px, py);
+				keys.erase(0, keys.find('>') + 1);
+				typed = now;
+			}
+			if (keys.starts_with('\'') && now - typed > std::chrono::milliseconds(400))
+				if (const size_t end = keys.find('\'', 1); end != std::string::npos)
+				{
+					window.typeText(keys.substr(1, end - 1));
+					keys.erase(0, end + 1);
+					typed = now;
+				}
 			// (a scripted menu: "{Name}" clicks that widget)
 			if (keys.starts_with('{') && now - typed > std::chrono::milliseconds(400))
 				if (const size_t end = keys.find('}'); end != std::string::npos)

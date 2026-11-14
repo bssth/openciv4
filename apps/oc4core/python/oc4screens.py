@@ -32,6 +32,7 @@ _drop = [None, 0]       # the pull down whose list is open (file id, name), and 
 _areas = []             # what scrolls under the mouse, back to front: (x0, y0, x1, y1, file id, name, step, down, sideways)
 _bars = {}              # the scroll bars: (file id, name, part) -> (x0, y0, x1, y1)
 _dropRects = {}         # where each pull down is: (file id, name) -> (x0, y0, x1, y1)
+_editFocus = [None]     # the edit box typed into: (file id, name), or None
 
 
 def _changed():
@@ -1654,7 +1655,10 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 	flags = w.flags
 	if kind == 'text' and w.mode == 'rel':
 		flags = (flags & ~(_FONT_CENTER | _FONT_RIGHT)) | _FONT_LEFT
-	out.append((base + (-1,), kind, x, y, x + width, y + height, clip, w.style if w.style else w.pstyle, w.text, w.tex, w.tex2, w.font, flags,
+	text = w.text
+	if kind == 'edit' and _editFocus[0] == (s.id, w.name):
+		text = text + u'|' # (the caret: typed into)
+	out.append((base + (-1,), kind, x, y, x + width, y + height, clip, w.style if w.style else w.pstyle, text, w.tex, w.tex2, w.font, flags,
 		w.state, w.enabled, w.hittest, color, w.wt, w.d1, w.d2, w.opt, w.z, w.seq))
 	if w.children:
 		inner, left, top = clip, x, y
@@ -1826,6 +1830,48 @@ def openDropdown(fileId, name):
 	"""A click on a pull down opens its list, or closes it when it is open."""
 	key = (int(fileId), _str(name))
 	_drop[0], _drop[1] = (None if _drop[0] == key else key), 0
+	_changed()
+
+
+def _focusedEdit():
+	if _editFocus[0] is None:
+		return None
+	s = _screens.get(_editFocus[0][0])
+	w = s.get(_editFocus[0][1]) if s is not None else None
+	return w if w is not None and w.kind == 'edit' and w.enabled and s.shown else None
+
+
+def focusEdit(fileId, name):
+	"""A click on an edit box: the keys type into it (on anything else: into none)."""
+	s = _screens.get(int(fileId))
+	w = s.get(_str(name)) if s is not None else None
+	key = (int(fileId), _str(name)) if w is not None and w.kind == 'edit' and w.enabled else None
+	if key != _editFocus[0]:
+		_editFocus[0] = key
+		_changed()
+
+
+def editFocused():
+	"""Whether an edit box takes the keys."""
+	return _focusedEdit() is not None
+
+
+def typeIntoEdit(text):
+	"""Typed while an edit box has the keys: characters go in, Backspace takes the last out,
+	Enter or Esc ends the typing."""
+	w = _focusedEdit()
+	if w is None:
+		_editFocus[0] = None
+		return
+	value = w.text
+	for c in _text(text):
+		if c == u'\b':
+			value = value[:-1]
+		elif c in (u'\r', u'\x1b'):
+			_editFocus[0] = None
+		elif c >= u' ':
+			value += c
+	_set(w, 'text', value)
 	_changed()
 
 

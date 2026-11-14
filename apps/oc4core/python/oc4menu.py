@@ -356,6 +356,9 @@ def _writeCustomFile(c):
 	try:
 		import json
 		data = dict(c)
+		# (not how many play: each game starts from the world size's own count)
+		data.pop('touched', None)
+		data['slots'] = [dict([(k, v) for k, v in slot.items() if k != 'status']) for slot in c['slots']]
 		data['mapOptions'] = dict([(m, dict([(str(k), v) for k, v in o.items()])) for m, o in c['mapOptions'].items()])
 		f = open(path, 'wb')
 		try:
@@ -483,15 +486,12 @@ def _customDefaults():
 				if not isinstance(s, dict):
 					continue
 				slot = c['slots'][p]
-				if p > 0 and s.get('status') in ('ai', 'closed'):
-					slot['status'] = s['status']
 				if _type(gc.getNumCivilizationInfos(), gc.getCivilizationInfo, s.get('civ'), -1) >= 0:
 					slot['civ'] = s['civ']
 				if _type(gc.getNumLeaderHeadInfos(), gc.getLeaderHeadInfo, s.get('leader'), -1) >= 0:
 					slot['leader'] = s['leader']
 				if isinstance(s.get('team'), int) and 0 <= s['team'] < len(c['slots']):
 					slot['team'] = s['team']
-			c['touched'] = bool(saved.get('touched'))
 		if isinstance(saved.get('startPoints'), int) and saved['startPoints'] >= 0:
 			c['startPoints'] = saved['startPoints']
 	return c
@@ -528,6 +528,29 @@ def _civLeaders(civType, anyCiv):
 			out.append((gc.getLeaderHeadInfo(l).getDescription(), gc.getLeaderHeadInfo(l).getType()))
 	out.sort()
 	return out
+
+
+def _leadersOf(civTypes):
+	"""(name, type) of the leaders of those civilizations, by name."""
+	gc = _gc()
+	civs = [_type(gc.getNumCivilizationInfos(), gc.getCivilizationInfo, t, -1) for t in civTypes]
+	out = []
+	for l in range(gc.getNumLeaderHeadInfos()):
+		if [c for c in civs if c >= 0 and gc.getCivilizationInfo(c).isLeaders(l)]:
+			out.append((gc.getLeaderHeadInfo(l).getDescription(), gc.getLeaderHeadInfo(l).getType()))
+	out.sort()
+	return out
+
+
+def _civOfLeader(leaderType, civTypes):
+	"""The first of those civilizations the leader leads, or ''."""
+	gc = _gc()
+	l = _type(gc.getNumLeaderHeadInfos(), gc.getLeaderHeadInfo, leaderType, -1)
+	for t in civTypes:
+		c = _type(gc.getNumCivilizationInfos(), gc.getCivilizationInfo, t, -1)
+		if l >= 0 and c >= 0 and gc.getCivilizationInfo(c).isLeaders(l):
+			return t
+	return ''
 
 
 def _leadAnyCiv(c):
@@ -615,6 +638,9 @@ def _customPage(screen, W, H):
 		leaders = [(random, '')]
 		if slot['civ'] or anyCiv:
 			leaders += _civLeaders(slot['civ'], anyCiv)
+		else:
+			# (a leader first: all the slot's civilizations' leaders, and choosing one chooses its civilization)
+			leaders += _leadersOf([t for n, t in (p == 0 and human or ai)])
 		_pullDown(screen, 'CGLeader%d' % p, cols[3], dy, widths[3], leaders, slot['leader'])
 		items['CGLeader%d' % p] = [d for t, d in leaders]
 		if p == 0:
@@ -671,9 +697,12 @@ def _customPage(screen, W, H):
 
 	# Options: Advanced Start's points, then the check boxes (two columns if one is too long).
 	ox = bx[1] + 16
-	_label(screen, 'CGStartPointsLabel', u'Advanced Start Base Points:', bx[1] + bwidths[1] - 100, ctop + 3, 2, 1 << 1)
+	advancedStart = 'GAMEOPTION_ADVANCED_START' in c['options']
+	pointsLabel = u'Advanced Start Base Points:'
+	_label(screen, 'CGStartPointsLabel', advancedStart and pointsLabel or grey(pointsLabel), bx[1] + bwidths[1] - 100, ctop + 3, 2, 1 << 1)
 	screen.addEditBoxGFC('CGStartPoints', bx[1] + bwidths[1] - 90, ctop, 70, 26, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1, _cpe.FontTypes.GAME_FONT)
 	screen.setEditBoxString('CGStartPoints', u'%d' % c.get('startPoints', 600))
+	screen.enable('CGStartPoints', advancedStart)
 	otop = ctop + 40
 	avail = bbottom - otop - 8
 	columns = (len(options) * (box + 6) > avail) and 2 or 1
@@ -763,6 +792,11 @@ def _customChanged(function, id):
 		c['touched'] = True
 	if c['size'] != size and not c['touched']:
 		_openSlots(c, _defaultPlayers(c['size']))
+	if function == 'CGLeader' and not _leadAnyCiv(c):
+		# (a leader chosen with the civilization at random: the leader's civilization)
+		slot = c['slots'][id]
+		if slot['leader'] and not slot['civ']:
+			slot['civ'] = _civOfLeader(slot['leader'], [t for n, t in _civs(id == 0)])
 	# (a leader the civilization cannot have, now: at random)
 	anyCiv = _leadAnyCiv(c)
 	for slot in c['slots']:
