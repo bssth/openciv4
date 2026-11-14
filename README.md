@@ -17,6 +17,9 @@ is rebuilt for x64.
 
 Discussion: [CivFanatics thread](https://forums.civfanatics.com/threads/openciv4-clean-room-x64-engine-reimplementation.705223/).
 
+[Headless Linux setup and validation](docs/linux-headless.md) provides a dependency
+bootstrap, a Clang/Ninja preset and asset-free CI checks alongside the Linux runtime work.
+
 ## Playing
 
 Download the zip of the latest [release](https://github.com/bssth/openciv4/releases), unpack it
