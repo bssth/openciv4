@@ -14,6 +14,7 @@
 #include "CvGlobals.h"
 #include "CvInfos.h"
 #include "CvInitCore.h"
+#include "CyArgsList.h"
 #include "CvMap.h"
 #include "CvMapGenerator.h"
 #include "CvPlayerAI.h"
@@ -124,15 +125,45 @@ namespace oc4::host
 		ic.setTurnTimer(static_cast<TurnTimerTypes>(GC.getDefineINT("STANDARD_TURNTIMER")));
 		ic.setCalendar(static_cast<CalendarTypes>(GC.getDefineINT("STANDARD_CALENDAR")));
 
+		// The map script's options, after setMapScriptName gave them their defaults.
+		for (const auto& [option, value] : s.mapOptions)
+		{
+			if (option < 0 || option >= ic.getNumCustomMapOptions())
+				throw std::runtime_error(std::format("{} has {} map options, not option {}", s.mapScript, ic.getNumCustomMapOptions(), option));
+			CyArgsList args;
+			args.add(option);
+			long values = 0;
+			if (m_python.callFunction(s.mapScript.c_str(), "getNumCustomMapOptionValues", args.makeFunctionArgs(), &values) &&
+				(value < 0 || value >= values))
+				throw std::runtime_error(std::format("{}'s map option {} has {} values, not value {}", s.mapScript, option, values, value));
+			ic.setCustomMapOption(option, static_cast<CustomMapOptionTypes>(value));
+		}
+
+		for (const auto& [name, on] : s.options)
+			ic.setOption(static_cast<GameOptionTypes>(infoType(name)), on);
+
 		const int numVictories = GC.getNumVictoryInfos();
 		std::unique_ptr<bool[]> victories(new bool[size_t(numVictories)]);
-		std::fill_n(victories.get(), numVictories, true);
+		std::fill_n(victories.get(), numVictories, s.victories.empty());
+		for (const std::string& name : s.victories)
+			if (name != "NONE")
+				victories[size_t(infoType(name))] = true;
 		ic.setVictories(numVictories, victories.get());
 
 		ic.setSyncRandSeed(s.seed);
 		ic.setMapRandSeed(s.seed * 7919u + 13u);
 
-		// Players: 0 is the (watching) human, the rest AI with distinct playable civs.
+		// Players: 0 is the (watching) human, the rest AI with distinct playable civs; the
+		// slots asked for differ from that (closed, a civilization, leader or team of their own).
+		for (const auto& [slot, set] : s.slots)
+		{
+			if (slot < 0 || slot >= maxCivPlayers())
+				throw std::runtime_error(std::format("slot {} is not one of 0 to {}", slot, maxCivPlayers() - 1));
+			if ((slot == 0) != (set.status == SlotSetting::Status::Human))
+				throw std::runtime_error(std::format("slot {}: the human plays slot 0, the others are AI or closed", slot));
+			if (set.team >= maxCivPlayers())
+				throw std::runtime_error(std::format("slot {}: team {} is not one of 0 to {}", slot, set.team, maxCivPlayers() - 1));
+		}
 		SetupRandom rng(s.seed);
 		const int barbarianCiv = GC.getDefineINT("BARBARIAN_CIVILIZATION");
 		std::vector<int> civs;
@@ -141,35 +172,80 @@ namespace oc4::host
 				civs.push_back(c);
 		for (size_t i = civs.size(); i > 1; --i)
 			std::swap(civs[i - 1], civs[size_t(rng.next(int(i)))]);
-		// (a civilization chosen: the human's, the others as they came)
-		const int chosenCiv = s.civilization.empty() ? -1 : infoType(s.civilization);
-		const int chosenLeader = s.leader.empty() ? -1 : infoType(s.leader);
-		if (chosenCiv >= 0)
-		{
-			std::erase(civs, chosenCiv);
-			civs.insert(civs.begin(), chosenCiv);
-		}
+		const auto slotSetting = [&](int p) -> const SlotSetting* {
+			const auto it = s.slots.find(p);
+			return it == s.slots.end() ? nullptr : &it->second;
+		};
+		// (the civilizations chosen leave the random ones; the human's from --civ unless its slot says)
+		std::vector<int> chosenCivs(size_t(maxCivPlayers()), -1);
+		chosenCivs[0] = s.civilization.empty() ? -1 : infoType(s.civilization);
+		for (const auto& [slot, set] : s.slots)
+			if (!set.civilization.empty())
+				chosenCivs[size_t(slot)] = infoType(set.civilization);
+		for (const int civ : chosenCivs)
+			if (civ >= 0)
+				std::erase(civs, civ);
 
 		const WorldSizeTypes worldSize = ic.getWorldSize();
 		int numPlayers = s.players > 0 ? s.players : GC.getWorldInfo(worldSize).getDefaultPlayers();
-		numPlayers = std::clamp(numPlayers, 2, std::min<int>(maxCivPlayers(), int(civs.size())));
+		// (the slots: the usual ones, and beyond them those asked to be AI)
+		int numSlots = numPlayers;
+		for (const auto& [slot, set] : s.slots)
+			if (set.status != SlotSetting::Status::Closed)
+				numSlots = std::max(numSlots, slot + 1);
+		const auto isOpen = [&](int p) {
+			const SlotSetting* set = slotSetting(p);
+			return set ? set->status != SlotSetting::Status::Closed : p < numPlayers;
+		};
+		int randomNeeded = 0, open = 0;
+		for (int p = 0; p < numSlots; ++p)
+			if (isOpen(p))
+				++open, randomNeeded += chosenCivs[size_t(p)] < 0;
+		if (s.slots.empty())
+		{
+			// (as many as there are civilizations, at least two)
+			const int available = int(civs.size()) + (chosenCivs[0] >= 0 ? 1 : 0);
+			numPlayers = numSlots = std::clamp(numPlayers, 2, std::min<int>(maxCivPlayers(), available));
+		}
+		else
+		{
+			if (numSlots > maxCivPlayers())
+				throw std::runtime_error(std::format("{} players, but there are {} slots", numSlots, maxCivPlayers()));
+			if (open < 2)
+				throw std::runtime_error("a game needs the human and at least one AI");
+			if (randomNeeded > int(civs.size()))
+				throw std::runtime_error(std::format("{} random civilizations wanted, {} left to choose from", randomNeeded, civs.size()));
+		}
 
+		const bool leadAnyCiv = ic.getOption(GAMEOPTION_LEAD_ANY_CIV);
+		const int barbarianLeader = GC.getDefineINT("BARBARIAN_LEADER");
 		const HandicapTypes humanHandicap = static_cast<HandicapTypes>(infoType(s.handicap));
 		const HandicapTypes aiHandicap = static_cast<HandicapTypes>(GC.getDefineINT("AI_HANDICAP"));
-		for (int p = 0; p < numPlayers; ++p)
+		size_t nextCiv = 0;
+		for (int p = 0; p < numSlots; ++p)
 		{
-			const auto civ = static_cast<CivilizationTypes>(civs[size_t(p)]);
+			const PlayerTypes id = static_cast<PlayerTypes>(p);
+			if (!isOpen(p))
+			{
+				ic.setSlotStatus(id, SS_CLOSED);
+				continue;
+			}
+			const SlotSetting* set = slotSetting(p);
+			const auto civ = static_cast<CivilizationTypes>(chosenCivs[size_t(p)] >= 0 ? chosenCivs[size_t(p)] : civs[nextCiv++]);
 			const CvCivilizationInfo& civInfo = GC.getCivilizationInfo(civ);
 			std::vector<int> leaders;
 			for (int l = 0; l < GC.getNumLeaderHeadInfos(); ++l)
-				if (civInfo.isLeaders(l))
+				if (leadAnyCiv ? l != barbarianLeader : civInfo.isLeaders(l))
 					leaders.push_back(l);
-			const PlayerTypes id = static_cast<PlayerTypes>(p);
+			const std::string& leaderName = set && !set->leader.empty() ? set->leader : p == 0 ? s.leader : std::string();
+			const int chosenLeader = leaderName.empty() ? -1 : infoType(leaderName);
+			if (set && !set->leader.empty() && std::ranges::find(leaders, chosenLeader) == leaders.end())
+				throw std::runtime_error(std::format("slot {}: {} does not lead {}", p, set->leader, civInfo.getType()));
 			ic.setSlotStatus(id, p == 0 ? SS_TAKEN : SS_COMPUTER);
 			ic.setCiv(id, civ);
-			const bool chosen = p == 0 && chosenLeader >= 0 && std::ranges::find(leaders, chosenLeader) != leaders.end();
+			const bool chosen = chosenLeader >= 0 && std::ranges::find(leaders, chosenLeader) != leaders.end();
 			ic.setLeader(id, static_cast<LeaderHeadTypes>(chosen ? chosenLeader : leaders.empty() ? 0 : leaders[size_t(rng.next(int(leaders.size())))]));
-			ic.setTeam(id, static_cast<TeamTypes>(p));
+			ic.setTeam(id, static_cast<TeamTypes>(set && set->team >= 0 ? set->team : p));
 			ic.setHandicap(id, p == 0 ? humanHandicap : aiHandicap);
 			ic.setColor(id, static_cast<PlayerColorTypes>(civInfo.getDefaultPlayerColor()));
 			ic.setPlayableCiv(id, civInfo.isPlayable());

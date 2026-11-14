@@ -2,11 +2,20 @@
 //
 //   oc4core [--civ4 <root>] [--mod <Mods\\Name> | <mod folder>] [--python-home <dir>] [--log-dir <dir>]
 //           [--turns N [--map Continents] [--size SMALL] [--players N] [--seed N]]
+//           [--option GAMEOPTION_X[=0|1]]... [--victories VICTORY_A,VICTORY_B | none] [--map-option N=V]...
+//           [--slot N=human|ai|closed[:CIV[:LEADER[:TEAM]]]]...
 //           [--load <file.CivBeyondSwordSave>] [--save <file.CivBeyondSwordSave> [--save-at TURN]]
 //           [--profile] [--profile-out <stacks.folded>] [--rand-log] [--exec <script.py>] [--exec-first <script.py>]
 //           [--menu | --view | --play [--screenshot <file.png>] [--view-size WxH] [--ui-scale PERCENT] [--show-fps] [--wasd-pan] [--auto-end-turn] [--no-edge-scroll] [--look X,Y[,distance in plots]] [--keys <window keys>]
 //            [--view-seconds S]]
 //           [--host PORT [--humans N] | --join HOST:PORT]
+//
+// A new game's setup beyond the world: --option turns a game option on (=0: off; else the
+// XML's default), --victories the only victory conditions (else all), --map-option sets the
+// map script's option N to its value V (both from 0), --slot changes a player slot (0 the
+// human's, the others AI; an empty part is random, the team its own). The prefixes
+// GAMEOPTION_, VICTORY_, CIVILIZATION_ and LEADER_ may be left out. The menu's new game
+// takes those the menu does not choose.
 //
 // --log-dir enables the DLL's logs (xml.log, ...), like LoggingEnabled = 1 in CivilizationIV.ini;
 // --rand-log adds every synchronised random number to MessageControl.log there.
@@ -251,6 +260,20 @@ namespace
 				o.game.worldSize = "WORLDSIZE_" + next().string();
 			else if (a == L"--players")
 				o.game.players = std::stoi(next().wstring());
+			else if (a == L"--option")
+				o.game.options.push_back(host::setup::parseOption(next().string()));
+			else if (a == L"--victories")
+				o.game.victories = host::setup::parseVictories(next().string());
+			else if (a == L"--map-option")
+			{
+				const auto [option, value] = host::setup::parseMapOption(next().string());
+				o.game.mapOptions.insert_or_assign(option, value);
+			}
+			else if (a == L"--slot")
+			{
+				auto [slot, set] = host::setup::parseSlot(next().string());
+				o.game.slots.insert_or_assign(slot, std::move(set));
+			}
 			else if (a == L"--load")
 				o.load = next();
 			else if (a == L"--host")
@@ -2032,7 +2055,19 @@ int wmain(int argc, wchar_t** argv)
 					}
 					if (choice->kind == host::MenuChoice::Kind::NewGame)
 					{
+						// (what the command line chose and the menu does not: as chosen there)
+						const host::NewGameSettings asked = played.game;
 						played.game = choice->game;
+						if (played.game.players == 0)
+							played.game.players = asked.players;
+						if (played.game.options.empty())
+							played.game.options = asked.options;
+						if (played.game.victories.empty())
+							played.game.victories = asked.victories;
+						if (played.game.mapOptions.empty() && played.game.mapScript == asked.mapScript)
+							played.game.mapOptions = asked.mapOptions;
+						if (played.game.slots.empty())
+							played.game.slots = asked.slots;
 						break;
 					}
 					if (choice->kind == host::MenuChoice::Kind::Mod)

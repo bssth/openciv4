@@ -794,6 +794,39 @@ if _walls:
 				text("leader", choice.game.leader);
 				if (d.contains("seed"))
 					choice.game.seed = d["seed"].cast<unsigned>();
+				if (d.contains("players"))
+					choice.game.players = d["players"].cast<int>();
+				// {GAMEOPTION_...: on}, [VICTORY_...], {option: value}, {slot: {status, civ, leader, team}}
+				if (d.contains("options"))
+					for (const auto& [name, on] : d["options"].cast<py::dict>())
+						choice.game.options.emplace_back(name.cast<std::string>(), on.cast<bool>());
+				if (d.contains("victories"))
+				{
+					for (const py::handle v : d["victories"])
+						choice.game.victories.push_back(v.cast<std::string>());
+					if (choice.game.victories.empty())
+						choice.game.victories.push_back("NONE");
+				}
+				if (d.contains("mapOptions"))
+					for (const auto& [option, value] : d["mapOptions"].cast<py::dict>())
+						choice.game.mapOptions[option.cast<int>()] = value.cast<int>();
+				if (d.contains("slots"))
+					for (const auto& [slot, value] : d["slots"].cast<py::dict>())
+					{
+						const py::dict v = value.cast<py::dict>();
+						SlotSetting set;
+						const std::string status = v.contains("status") ? v["status"].cast<std::string>() : "ai";
+						set.status = status == "human" ? SlotSetting::Status::Human
+							: status == "closed"       ? SlotSetting::Status::Closed
+													   : SlotSetting::Status::AI;
+						if (v.contains("civ"))
+							set.civilization = v["civ"].cast<std::string>();
+						if (v.contains("leader"))
+							set.leader = v["leader"].cast<std::string>();
+						if (v.contains("team"))
+							set.team = v["team"].cast<int>();
+						choice.game.slots[slot.cast<int>()] = std::move(set);
+					}
 				if (d.contains("host"))
 					choice.host = d["host"].cast<int>();
 			}

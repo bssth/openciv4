@@ -76,7 +76,10 @@ def close():
 
 def takeChoice():
 	"""None while the player chooses; then ('new', {settings}), ('load', utf-8 path, humans to host for or 0),
-	('join', address), ('mod', its folder) or ('exit',)."""
+	('join', address), ('mod', its folder) or ('exit',).
+	A new game's settings may also hold 'players' (a count), 'options' ({'GAMEOPTION_...': on}),
+	'victories' (['VICTORY_...'], those on), 'mapOptions' ({option: value}) and 'slots'
+	({slot: {'status': 'human'|'ai'|'closed', 'civ', 'leader', 'team'}}); left out, the usual."""
 	c = _state['choice']
 	_state['choice'] = None
 	return c
