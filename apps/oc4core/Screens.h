@@ -47,6 +47,7 @@ namespace oc4::host
 	{
 		std::vector<int> terrain, feature, improvement;
 		std::vector<std::vector<int>> city;
+		std::vector<std::vector<int>> leaderPeaceMusic; // [leader][era]: a 2D script, -1: none
 	};
 	SoundscapePlaces soundscapePlaces(Utility& utility);
 

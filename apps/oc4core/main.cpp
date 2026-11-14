@@ -601,9 +601,10 @@ namespace
 					const CvPlayerAI& player = CvPlayerAI::getPlayerNonInl(owner);
 					const LeaderHeadTypes leader = player.getLeaderType();
 					const EraTypes era = player.getCurrentEra();
-					if (leader == NO_LEADER || era < 0)
+					if (leader < 0 || size_t(leader) >= scapes.leaderPeaceMusic.size() || era < 0)
 						continue;
-					const int script = GC.getLeaderHeadInfo(leader).getDiploPeaceMusicScriptIds(int(era));
+					const auto& eras = scapes.leaderPeaceMusic[size_t(leader)];
+					const int script = size_t(era) < eras.size() ? eras[size_t(era)] : -1;
 					if (script < 0)
 						continue;
 					auto it = std::find_if(music.begin(), music.end(), [&](const auto& m) { return m.first == script; });
