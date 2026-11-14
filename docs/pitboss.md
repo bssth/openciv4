@@ -19,6 +19,7 @@ old build; checkpoint migration between core revisions is not implemented.
 The full engine integration depends on [Linux runtime PR #32](https://github.com/bssth/openciv4/pull/32).
 [Headless setup and regression PR #40](https://github.com/bssth/openciv4/pull/40)
 adds reproducible dependencies, presets, native library naming and Linux CI.
+Graphical clients also need the separate [Vulkan uniform-layout fix #44](https://github.com/bssth/openciv4/pull/44).
 The SDK include/formatting portability fixes are already upstream; the separate
 [map-init logging fix](https://github.com/bssth/openciv4-dll/pull/13) changes only
 a diagnostic. None of those changes are duplicated in this PitBoss-only proposal.
@@ -45,8 +46,7 @@ and macOS builds.
 The commands below assume the `linux-headless` preset from PR #40, with the runtime
 prerequisite applied and its executable at `build/linux-headless/bin/oc4core`.
 Each machine needs its own installed game assets. The server uses OpenSSL Crypto
-at build/runtime, but starting
-it does not initialize SDL or Vulkan.
+at build/runtime, but starting it does not initialize SDL or Vulkan.
 
 Copy [pitboss.ini.example](pitboss.ini.example) outside the checkout and set `civ4`
 to your installation root and `state_dir` to a private directory. Configure the human
@@ -199,11 +199,28 @@ credentials and runtime saves are created in a private temporary directory.
 that loads the snapshot, follows frames and verifies checksums for that duration.
 It exits unsuccessfully on disconnect or desynchronization.
 
-The complete BtS/Next War two-client runs, graphical login, timed turns during
-diplomacy, unchanged 100-turn single-player checksums, and sanitizer checks were
-performed on the Linux fork at `aab50c8`. The rebased upstream proposal has separate
-Linux transport validation, and its Windows build/CTest passed in
-[upstream CI](https://github.com/bssth/openciv4/actions/runs/43587617244).
-Those checks do not establish full Linux gameplay or macOS compatibility for this
-branch. Full Linux integration on the prerequisite stack and an original-game save
-fixture still need validation before this proposal is ready.
+The refreshed upstream integration checkout combines engine `10de692`, runtime
+PR #32 at `ec06495`, headless PR #40 at `d675ab1`, this PitBoss branch and shader
+fix #44 at `631d299`. It uses the unchanged upstream SDK `7eb1d6b` and a private
+shared UCS-4 Python 2.7 runtime. This validation does not use fork-only engine or
+SDK changes. The branches merge together without conflicts.
+
+The prerequisite baseline passes 14 CTests; adding PitBoss and #44 passes all 15.
+Every Fractal/Standard/seed-7 checksum agrees before and after for 100 turns,
+ending at `D7D43800`. Repeated autoplay, the baseline's turn-50 save and a new save
+all reproduce the same checksums. Next War saves/reloads with both mod-path slash
+styles. Real BtS and Next War two-client runs pass research/end-turn orders, late
+joins/rejoins, offline turn expiry, paused and journal recovery after SIGKILL,
+bad-password and invalid actor/task rejection, and graceful shutdown. Standalone
+transport tests also pass AddressSanitizer and UndefinedBehaviorSanitizer.
+
+Three-turn rendered/headless runs agree, and menu launch renders the original
+Python interface without Vulkan validation errors. Native SDL checks cover typing,
+select-all, backspace, Tab and password masking; menu login reaches a real server
+and follows timed turns without desynchronizing. These checks use the same PR
+stack under Xvfb with Mesa software Vulkan and Khronos validation enabled.
+
+An original-game save fixture, fresh native Windows/macOS builds and integration
+of the prerequisite PRs still need validation/review before this proposal is ready.
+The earlier timed-turn check with diplomacy open was performed on the working fork;
+that particular check has not been repeated on this PR stack.
