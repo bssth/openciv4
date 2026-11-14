@@ -570,7 +570,8 @@ namespace
 		// The leaders' music where the camera looks, in the game's first era (the original's):
 		// each civilization's share of the land around (the plots its borders hold as the
 		// player knows them, the nearer the more), its leader's peace music of its era; heard
-		// only from close by: full at the nearest, gone a third of the way up.
+		// only from close by: full at the nearest, gone a third of the way up. (Not 1:1 with the
+		// original: the zoom range, the area weighed and the fades are by ear, close but not the same.)
 		const auto territoryMusicHere = [&]() {
 			std::vector<std::pair<int, float>> music;
 			const PlayerTypes active = game.getActivePlayer();
