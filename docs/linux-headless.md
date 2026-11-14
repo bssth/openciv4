@@ -69,11 +69,17 @@ original-game save compatibility, and graphical/hardware/audio checks remain loc
 validation tasks. Native Windows/macOS checks use the existing workflows.
 
 Local validation used Fedora x86-64, Clang 22, OpenSSL 3.5.9 and the private UCS-4
-Python build. The Linux runtime PR at `ec06495` passed 12 existing CTests before
-these changes; with this branch applied, all 14 passed without a display. A
-100-turn Fractal/Standard/seed-7 run retained every baseline checksum, ending at
-`D7D43800`. The baseline's turn-50 save resumed with identical checksums through
-turn 100. Next War started, saved and reloaded with both mod-path slash styles.
-These combined checks also included the separate SDK map-init logging-format fix;
-the engine PR does not change the SDK gitlink. Fresh dependency setup and a repeat
-using its completed cache both succeeded. No game files are included in CI.
+Python build. The refreshed validation checkout combines upstream `10de692`, Linux
+runtime PR #32 at `ec06495` and this branch. All 14 CTests pass without a display.
+The SDK is unchanged upstream `7eb1d6b`; the separate map-log fix is not required.
+Fresh dependency setup and reuse of its completed cache were previously checked;
+the refreshed engine build uses that verified source cache and Python prefix.
+
+Adding the refreshed PitBoss PR #29 and Vulkan layout fix #44 to this checkout
+passes 15 CTests. All 100 Fractal/Standard/seed-7 checksums agree before and after
+those additions, ending at `D7D43800`. The baseline's turn-50 save and the new build's
+own save both resume identically through turn 100; repeated autoplay also agrees.
+Next War starts, saves and reloads with both mod-path slash styles. Real two-client
+BtS and Next War PitBoss runs pass, including timer expiry, reconnects, authentication
+and command rejection, pause and crash recovery. These are local integration checks
+using an owned installation; no game files are included in CI.
