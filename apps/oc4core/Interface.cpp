@@ -422,7 +422,13 @@ namespace oc4::host
 		m_dirty.set();
 		try
 		{
+			// (the tool palettes start afresh each time, as the executable makes them anew)
+			auto wb = py::module_::import("oc4wb");
+			if (bTurnOn)
+				wb.attr("reset")();
 			py::module_::import("CvScreensInterface").attr(bTurnOn ? "showWorldBuilderScreen" : "hideWorldBuilderScreen")();
+			if (!bTurnOn)
+				wb.attr("reset")();
 		}
 		catch (py::error_already_set& e)
 		{
