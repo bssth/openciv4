@@ -1163,8 +1163,13 @@ namespace
 					}
 					clicks.clear();
 					utility.engine().clear(AREA_BORDER_LAYER_HIGHLIGHT_PLOT, true);
+					// (in green, as the original's and the script's own big brush, COLOR_GREEN)
 					if (const py::object h = si.attr("WorldBuilderGetHighlightPlot")(py::make_tuple(wbScreen)); py::len(h) >= 2)
-						utility.engine().mark({ h[py::int_(0)].cast<int>(), h[py::int_(1)].cast<int>(), 1, 1, 1, 0.9f, AREA_BORDER_LAYER_HIGHLIGHT_PLOT, true, false });
+					{
+						const ColorTypes green = ColorTypes(GC.getInfoTypeForString("COLOR_GREEN"));
+						const NiColorA c = green >= 0 ? GC.getColorInfo(green).getColor() : NiColorA(0, 1, 0, 1);
+						utility.engine().mark({ h[py::int_(0)].cast<int>(), h[py::int_(1)].cast<int>(), c.r, c.g, c.b, 0.9f, AREA_BORDER_LAYER_HIGHLIGHT_PLOT, true, false });
+					}
 				}
 				catch (py::error_already_set& e)
 				{
@@ -1259,7 +1264,8 @@ namespace
 			// shows it (the game core's interface pathfinder, the turns each plot is reached in).
 			const CvUnit* pathHead = ui.getHeadSelectedUnit();
 			const std::pair<const void*, int> from{ pathHead, pathHead ? pathHead->getX() * 4096 + pathHead->getY() : -1 };
-			if (const auto target = player.isTurnActive() ? window.pathTarget() : std::nullopt; target != pathShown || (target && from != pathFrom))
+			// (none in the WorldBuilder, where the right button takes away what is on a plot)
+			if (const auto target = player.isTurnActive() && !ui.worldBuilder() ? window.pathTarget() : std::nullopt; target != pathShown || (target && from != pathFrom))
 			{
 				pathShown = target;
 				pathFrom = from;
@@ -1411,7 +1417,8 @@ namespace
 						walls.push_back(host::windowPlot(c));
 					capture.setGreatWallCities(std::move(walls));
 				}
-				window.setMap(capture.capture(&ui));
+				// (in the WorldBuilder no unit shows as selected, as the original's)
+				window.setMap(capture.capture(ui.worldBuilder() ? nullptr : &ui));
 				if (sounds.started())
 					sounds.setSoundscape(soundscapeHere());
 				std::string state = game.getGameState() == GAMESTATE_OVER ? "the game is over" : !player.isAlive() ? "you have been defeated"
