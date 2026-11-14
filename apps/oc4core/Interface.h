@@ -26,6 +26,7 @@ namespace oc4::host
 	class Interface : public stubs::InterfaceIFace
 	{
 	public:
+		bool isNetStatsVisible() override { return false; }
 		// Selection
 		CvPlot* getSelectionPlot() override;
 		CvUnit* getSelectionUnit(int iIndex) override;

@@ -45,6 +45,10 @@ port a mod's game core: [openciv4-dll/docs/PORTING.md](https://github.com/bssth/
   game cores ported to x64. BUG 4.4 runs as it is; with BULL 1.2, its game core, ported
   ([BULL-x64](https://github.com/MortenLyhr/BULL-x64), so far built and played on macOS only).
 * **Multiplayer** over the network (`--host`, `--join`), early.
+* **PitBoss (experimental, Linux only)**: dedicated hosting with simultaneous timed
+  turns, assigned password-protected seats, reconnects, local administration and
+  durable recovery. See [the operator guide and Linux prerequisites](docs/pitboss.md).
+  Uses an OpenCiv4-only protocol; original BtS clients cannot connect.
 
 Not yet: the original's main menu (a simpler one stands in), the minimap's modes, the globe
 view, some animations, Linux and macOS (the window, input, sound and text are already on SDL3

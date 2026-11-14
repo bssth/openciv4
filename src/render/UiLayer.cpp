@@ -454,7 +454,7 @@ namespace oc4::render
 				o.resetShadow();
 				if (it.kind == Kind::Dropdown && !combo)
 					o.text(L"\x25BE", x1 - 14, y0 + h / 2 - 9, 13, kText, alpha);
-				if (!themed && w > 0 && it.text.empty() && it.texture.empty())
+				if (!themed && it.kind != Kind::Edit && w > 0 && it.text.empty() && it.texture.empty())
 					o.text(styleWord(it.style), (x0 + x1) / 2, y0 + h / 2 - 8, 12, kText, alpha, true, Overlay::Align::Center);
 				break;
 			}

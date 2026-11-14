@@ -1,0 +1,22 @@
+name: PitBoss transport
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  linux-transport:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libssl-dev
+      - name: Build transport and persistence tests without game assets or SDK
+        run: |
+          cmake -S tests/pitboss -B build/pitboss-transport -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/pitboss-transport --parallel 2
+      - name: Test
+        run: ctest --test-dir build/pitboss-transport --output-on-failure

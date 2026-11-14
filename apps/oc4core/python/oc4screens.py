@@ -1245,6 +1245,11 @@ class CyGInterfaceScreen(object):
 		w = self._s.get(szName)
 		return w.text if w is not None else u''
 
+	def setEditBoxPassword(self, szName):
+		w = self._s.get(szName)
+		if w is not None:
+			_set(w, 'style', 'password')
+
 	def setEditBoxMaxCharCount(self, *args): pass
 	def setEditBoxTextColor(self, *args): pass
 
@@ -1654,7 +1659,8 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 	flags = w.flags
 	if kind == 'text' and w.mode == 'rel':
 		flags = (flags & ~(_FONT_CENTER | _FONT_RIGHT)) | _FONT_LEFT
-	out.append((base + (-1,), kind, x, y, x + width, y + height, clip, w.style if w.style else w.pstyle, w.text, w.tex, w.tex2, w.font, flags,
+	text = u'*' * len(w.text) if kind == 'edit' and w.style == 'password' else w.text
+	out.append((base + (-1,), kind, x, y, x + width, y + height, clip, w.style if w.style else w.pstyle, text, w.tex, w.tex2, w.font, flags,
 		w.state, w.enabled, w.hittest, color, w.wt, w.d1, w.d2, w.opt, w.z, w.seq))
 	if w.children:
 		inner, left, top = clip, x, y
