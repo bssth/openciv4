@@ -411,12 +411,14 @@ class CyGInterfaceScreen(object):
 		if not self._s.shown:
 			self._s.shown = True
 			_changed()
+			_screenMusic(self._s, True)
 
 	def hideScreen(self):
 		if self._s.shown:
 			self._s.shown = False
 			_forget(self._s)
 			_changed()
+			_screenMusic(self._s, False)
 			oc4host.screen_closed(self._s.id)
 
 	def isActive(self):
@@ -1950,6 +1952,25 @@ def hide(fileId):
 		s.shown = False
 		_forget(s)
 		_changed()
+		_screenMusic(s, False)
+
+
+def _screenMusic(s, shown):
+	"""A screen with music of its own: the Dawn of Man plays our leader's diplomacy music (its
+	peace theme for the era we are in, after its intro), as the original does, until it closes."""
+	if s.name != 'CvDawnOfMan':
+		return
+	if not shown:
+		oc4host.audio_talk_music(-1, -1)
+		return
+	try:
+		gc = _cpe.CyGlobalContext()
+		us = gc.getPlayer(_cpe.CyGame().getActivePlayer())
+		leader = gc.getLeaderHeadInfo(us.getLeaderType())
+		era = us.getCurrentEra()
+		oc4host.audio_talk_music(leader.getDiploPeaceIntroMusicScriptIds(era), leader.getDiploPeaceMusicScriptIds(era))
+	except Exception:
+		pass
 
 
 def _forget(s):
