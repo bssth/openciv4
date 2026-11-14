@@ -87,6 +87,16 @@ namespace oc4::render
 		bool operator==(const ModelArt&) const = default;
 	};
 
+	// A piece the plot LSystem (CIV4PlotLSystem.xml) lays out on a plot: a model (into
+	// MapSnapshot::models), or one node of it laid on the ground (a farm's crops), at an
+	// offset from the plot's centre (plots), turned (radians, counterclockwise).
+	struct PlotPiece
+	{
+		int model = -1;
+		std::string node; // empty: the whole model, standing
+		float x = 0, y = 0, yaw = 0, scale = 1;
+	};
+
 	// A generic house of the city LSystem (CIV4CityLSystem.xml): one node of a NIF that
 	// holds a set of them ("1x1_01"), covering width x height lots of the city's layout.
 	struct CityHouseArt
@@ -129,6 +139,8 @@ namespace oc4::render
 		bool water = false, hills = false, peak = false;
 		bool revealed = true, visible = true; // to the active team
 		bool riverSouth = false, riverEast = false; // a river along the plot's south / east edge
+		uint8_t bonusState = 0; // the resource's look (CvPlot::getVisibleBonusState): 1 not improved, 2 improved, 3 improved and worked
+		int16_t layout = -1; // what the plot LSystem lays out on it instead of the improvement's art: into MapSnapshot::plotLayouts
 	};
 
 	struct UnitView
@@ -242,6 +254,8 @@ namespace oc4::render
 		// cityHouses), the layout's size in plots and its turn (CIV4DetailManager).
 		std::vector<CityHouseArt> cityHouses;
 		std::vector<std::vector<int>> houseSets;
+		// What the plot LSystem lays out on plots (PlotView::layout): farms.
+		std::vector<std::vector<PlotPiece>> plotLayouts;
 		float cityLayoutSize = 0.72f, cityTwist = -0.7853982f;
 
 		// The map. World units as the game's (PLOT_SIZE per plot); heights of hills and peaks
