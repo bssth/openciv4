@@ -435,6 +435,14 @@ namespace oc4::host
 		s.wrapY = map.isWrapY();
 		s.minimapCentered = game.getActivePlayer() == NO_PLAYER || game.shouldCenterMinimap();
 		s.plotSize = GC.getPLOT_SIZE();
+		s.cameraFov = defineOr("FIELD_OF_VIEW", 42);
+		s.cameraMinDistance = defineOr("CAMERA_MIN_DISTANCE", 700);
+		s.cameraStartDistance = defineOr("CAMERA_START_DISTANCE", 2200);
+		s.cameraTopDistance = defineOr("CAMERA_SMALLEST_MAX_DISTANCE", 7000);
+		s.cameraCityDistance = defineOr("CAMERA_CITY_ZOOM_IN_DISTANCE", 3500);
+		// (the pitches are negative there: below the horizon)
+		s.cameraLowerPitch = std::abs(GC.getDefineFLOAT("CAMERA_LOWER_PITCH")) > 0 ? std::abs(GC.getDefineFLOAT("CAMERA_LOWER_PITCH")) : 28;
+		s.cameraUpperPitch = std::abs(GC.getDefineFLOAT("CAMERA_UPPER_PITCH")) > 0 ? std::abs(GC.getDefineFLOAT("CAMERA_UPPER_PITCH")) : 90;
 		const int landscape = GC.getActiveLandscapeID();
 		if (landscape >= 0 && landscape < GC.getNumLandscapeInfos())
 		{

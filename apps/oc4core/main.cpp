@@ -141,7 +141,7 @@ namespace
 		bool noEdgeScroll = false; // the mouse at the window's edge does not scroll the map (the same)
 		int uiScale = -1; // the interface's, in percent, 0 the window's density (-1: the profile's)
 		int lookX = -1, lookY = -1;
-		float lookDistance = 9;
+		float lookDistance = -1; // (below 0: the game's start distance)
 		double viewSeconds = 0; // development: close the window after this long
 		std::string viewKeys;   // window keys pressed at the start (G grid, V fog of war, ...)
 		int helpX = -1, helpY = -1; // development: print the plot help of this plot
@@ -1390,7 +1390,7 @@ namespace
 			{
 				if (city)
 					cityScreen = { city->getX(), city->getY() };
-				window.lookAt(cityScreen.first, cityScreen.second, city ? 5.0f : 9.0f);
+				window.lookAt(cityScreen.first, cityScreen.second, city ? std::max(GC.getDefineFLOAT("CAMERA_CITY_ZOOM_IN_DISTANCE") / GC.getPLOT_SIZE(), 5.0f) : -1.0f);
 				if (!city)
 					cityScreen = { -1, -1 };
 				if (log)
