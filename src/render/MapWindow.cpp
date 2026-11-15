@@ -1015,14 +1015,15 @@ namespace oc4::render
 			overlay->quad(ix, iy, { 1, 1, 1 }, 1);
 		}
 
-		void onKey(unsigned k)
+		void onKey(unsigned k, std::optional<SDL_Keymod> eventModifiers = {})
 		{
 			auto& o = view->options;
 			const auto [shift, ctrl, alt] = heldModifiers();
 			if (editing && !popup.active())
 			{
 				using Kind = MapWindow::TextInput::Kind;
-				const bool shortcut = ctrl || (SDL_GetModState() & SDL_KMOD_GUI) != 0;
+				const SDL_Keymod mods = eventModifiers.value_or(SDL_GetModState());
+				const bool shortcut = (mods & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0;
 				if (shortcut && k == 'A') textInput.push_back({ Kind::SelectAll });
 				if (shortcut && k == 'V')
 				{
@@ -1031,7 +1032,7 @@ namespace oc4::render
 				}
 				if (k == key::Back) textInput.push_back({ Kind::Backspace });
 				if (k == key::Return || k == key::Escape) textInput.push_back({ Kind::Finish });
-				if (k == key::Tab) textInput.push_back({ Kind::Tab, {}, shift });
+				if (k == key::Tab) textInput.push_back({ Kind::Tab, {}, (mods & SDL_KMOD_SHIFT) != 0 });
 				return;
 			}
 			// A popup takes the keys (Esc closes it, Enter is its OK).
@@ -1178,7 +1179,11 @@ namespace oc4::render
 			{
 				if (std::abs(x - downX) + std::abs(y - downY) < 5)
 					if (const auto click = ui.release(x, y, mods.shift, mods.ctrl, mods.alt))
+					{
+						// Later text events in the same SDL batch belong to this edit box.
+						editing = !click->right && ui.items()[size_t(click->item)].kind == UiItem::Kind::Edit;
 						uiClicks.push_back(*click);
+					}
 				return;
 			}
 			// On the action bar: its buttons.
@@ -2128,7 +2133,7 @@ namespace oc4::render
 			case SDL_EVENT_KEY_DOWN:
 				// (Alt+F4 closes, through SDL's close request)
 				if (const unsigned k = keyOfSdl(e.key.key))
-					onKey(k);
+					onKey(k, e.key.mod);
 				break;
 			case SDL_EVENT_TEXT_INPUT: // (typed into a popup's edit box)
 				if (popup.active())
@@ -2273,7 +2278,6 @@ namespace oc4::render
 	void MapWindow::setEditing(bool editing)
 	{
 		m->editing = editing;
-		if (!editing) m->textInput.clear();
 	}
 	std::vector<MapWindow::TextInput> MapWindow::takeTextInput() { return std::exchange(m->textInput, {}); }
 	void MapWindow::setActions(const std::vector<ActionButton>& actions)
