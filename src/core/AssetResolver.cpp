@@ -80,6 +80,12 @@ namespace oc4
 		std::ranges::sort(packs);
 		for (const auto& p : packs)
 			layer.archives.push_back(std::make_unique<FpkArchive>(p));
+#if !defined(_WIN32) && !defined(__APPLE__)
+		for (auto it = fs::recursive_directory_iterator(assetsDir, fs::directory_options::skip_permission_denied, ec);
+			it != fs::recursive_directory_iterator(); it.increment(ec))
+			if (!ec && it->is_regular_file())
+				layer.files.try_emplace(makeAssetKey(utf8GenericPath(it->path().lexically_relative(assetsDir))), it->path());
+#endif
 		m_layers.push_back(std::move(layer));
 		m_found->byKey.clear();
 	}
@@ -97,8 +103,13 @@ namespace oc4
 		for (size_t i = 0; i < m_layers.size() && !found; ++i)
 		{
 			const Layer& layer = m_layers[i];
+#if !defined(_WIN32) && !defined(__APPLE__)
+			if (const auto f = layer.files.find(key); f != layer.files.end())
+				found = AssetLocation{ key, i, f->second, nullptr, nullptr };
+#else
 			if (const fs::path p = layer.root / fs::path(key); isFile(p))
 				found = AssetLocation{ key, i, p, nullptr, nullptr };
+#endif
 			for (size_t a = 0; a < layer.archives.size() && !found; ++a)
 				if (const auto* entry = layer.archives[a]->find(key))
 					found = AssetLocation{ key, i, {}, layer.archives[a].get(), entry };

@@ -32,6 +32,9 @@ namespace oc4::render
 		float fovY = 0.75f;
 
 		Vec3 eye() const;
+		// The screen's up in the world: towards where the camera looks along the ground, so that
+		// it still holds looking straight down.
+		Vec3 up() const;
 	};
 
 	struct RenderStats

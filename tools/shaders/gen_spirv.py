@@ -73,7 +73,10 @@ def translate(tmp, file, entry, stage):
     run(*compile_args, "-o", original, hlsl)
 
     paired = tmp / f"{entry}.hlsl"
-    paired.write_text(own_slot_samplers(gen_msl.SOURCES[file]), encoding="utf-8")
+    # HLSL permits uint3 at byte 52; Vulkan's standard uniform layout requires
+    # 16-byte vector alignment. Scalar padding preserves the host's byte layout.
+    source = gen_msl.SOURCES[file].replace("uint3 terrainPad;", "uint terrainPad0; uint terrainPad1; uint terrainPad2;")
+    paired.write_text(own_slot_samplers(source), encoding="utf-8")
     separate = tmp / f"{entry}.separate.spv"
     run(*compile_args, "-o", separate, paired)
     images = sorted({(i["set"], i["binding"]) for i in reflect(separate).get("separate_images", [])})
@@ -83,7 +86,7 @@ def translate(tmp, file, entry, stage):
     else:
         spv.write_bytes(separate.read_bytes())
     spv.write_bytes(ordered_variables(spv.read_bytes()))
-    run("spirv-val", "--target-env", "vulkan1.1", spv)
+    run("spirv-val", "--target-env", "vulkan1.0", spv)
     check(entry, textures, uniforms, reflect(original), reflect(spv))
     return spv.read_bytes()
 

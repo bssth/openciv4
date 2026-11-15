@@ -216,7 +216,10 @@ namespace oc4::host
 		bool isFocusedWidget() override { return false; }
 		bool isFocused() override { return false; }
 		bool isScoresVisible() override { return false; }
-		bool noTechSplash() override { return true; }
+		// The tech splash (the scripts' CvTechSplashScreen, with the tech's quote): only with the
+		// game's screens up (Screens::start); without them the game core plays the short sound instead.
+		bool techSplash = false;
+		bool noTechSplash() override { return !techSplash; }
 		bool isInAdvancedStart() const override { return false; }
 		CvPlot* getLookAtPlot() override { return nullptr; }
 		CvPlot* getGotoPlot() override { return m_gotoPlot; }

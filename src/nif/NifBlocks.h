@@ -35,8 +35,10 @@ namespace oc4::nif
 	{
 		float time = 0;
 		T value{};
-		T forward{};
-		T backward{};
+		// Quadratic keys store the incoming tangent first, then the outgoing one
+		// (nifxml calls them Forward/Backward, which reads backwards).
+		T inTangent{};
+		T outTangent{};
 		std::array<float, 3> tbc{};
 	};
 

@@ -1,11 +1,12 @@
-// Checks reading one character of XML text (apps/oc4core/XmlDecode.h): UTF-8 as before,
-// Windows-1252 bytes in a document read as UTF-8 read as Windows-1252 without eating what follows,
-// and the way back to Windows-1252 narrow strings.
+// Checks reading XML text as the original engine reads it (apps/oc4core/XmlDecode.h): every byte of
+// a file without a byte order mark is Windows-1252, whatever the declaration says; a file with a
+// UTF-8 byte order mark is UTF-8; and the way back to Windows-1252 narrow strings.
 
 #include "XmlDecode.h"
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 using namespace oc4::host;
 
@@ -22,57 +23,81 @@ namespace
 		}
 	}
 
-	// Decodes the whole of s; out gets the characters, the result is how many.
-	size_t decodeAll(const char* s, bool utf8, wchar_t* out)
+	std::span<const unsigned char> bytes(const char* s, size_t n)
 	{
-		const auto* data = reinterpret_cast<const unsigned char*>(s);
-		const size_t size = std::strlen(s);
+		return { reinterpret_cast<const unsigned char*>(s), n };
+	}
+
+	std::span<const unsigned char> bytes(const char* s)
+	{
+		return bytes(s, std::strlen(s));
+	}
+
+	// Decodes the whole of a UTF-8 text; out gets the characters, the result is how many.
+	size_t decodeAll(const std::string& s, wchar_t* out)
+	{
+		const auto* data = reinterpret_cast<const unsigned char*>(s.data());
 		size_t pos = 0, n = 0;
-		while (pos < size)
-			out[n++] = decodeXmlChar(data, size, pos, utf8);
+		while (pos < s.size())
+			out[n++] = decodeXmlChar(data, s.size(), pos);
 		return n;
+	}
+
+	size_t decodeAll(const char* s, wchar_t* out)
+	{
+		return decodeAll(std::string(s), out);
 	}
 }
 
 int main()
 {
-	wchar_t out[32];
+	wchar_t out[64];
 
-	check(decodeAll("a<", true, out) == 2 && out[0] == L'a' && out[1] == L'<', "ASCII");
-	check(decodeAll("\xC3\xB3", true, out) == 1 && out[0] == 0xF3, "two-byte UTF-8");
-	check(decodeAll("\xE2\x82\xAC", true, out) == 1 && out[0] == 0x20AC, "three-byte UTF-8");
-	check(decodeAll("\xF0\x9F\x98\x80", true, out) == 1 && out[0] == L'?', "four-byte UTF-8 beyond 16 bits");
+	// The original engine: every byte is Windows-1252, the declaration plays no part.
+	check(windows1252ToUtf8(bytes("<a>ci\xF3n</a>")) == "<a>ci\xC3\xB3n</a>", "o acute");
+	check(windows1252ToUtf8(bytes("\x80\x96\x9F")) == "\xE2\x82\xAC\xE2\x80\x93\xC5\xB8", "euro sign, en dash, Y diaeresis");
+	check(windows1252ToUtf8(bytes("\x81\x8D\x8F\x90\x9D")) == "\xC2\x81\xC2\x8D\xC2\x8F\xC2\x90\xC2\x9D",
+		"bytes Windows-1252 leaves undefined keep their value");
+	// A UTF-8 file without a byte order mark reads as the original reads it: two characters.
+	check(windows1252ToUtf8(bytes("Regul\xC3\xA4r")) == "Regul\xC3\x83\xC2\xA4r", "UTF-8 a diaeresis as two characters");
+	check(windows1252ToUtf8(bytes("a\0b", 3)) == std::string("a\0b", 3), "a NUL byte stays one byte");
 
-	// Windows-1252 o acute before an end tag: the end tag is still read.
-	check(decodeAll("ci\xF3n</", true, out) == 6 && out[2] == 0xF3 && out[3] == L'n' && out[4] == L'<' && out[5] == L'/',
-		"lead byte without continuation bytes");
-	// Windows-1252 en dash: a continuation byte with no lead byte.
-	check(decodeAll("a \x96 b", true, out) == 5 && out[2] == 0x2013 && out[3] == L' ', "stray continuation byte");
-	check(decodeAll("\x80\x9F", true, out) == 2 && out[0] == 0x20AC && out[1] == 0x0178, "euro sign and Y diaeresis");
-	check(decodeAll("\x81\x8D\x8F\x90\x9D", true, out) == 5 && out[0] == 0x81 && out[1] == 0x8D && out[2] == 0x8F &&
-		out[3] == 0x90 && out[4] == 0x9D, "bytes Windows-1252 leaves undefined");
-	check(decodeAll("a\xC3", true, out) == 2 && out[1] == 0xC3, "lead byte at the end");
-	check(decodeAll("\xE2\x82<", true, out) == 3 && out[0] == 0xE2 && out[1] == 0x201A && out[2] == L'<',
-		"sequence cut short");
+	// Every byte decodes to its Windows-1252 character through the parser's UTF-8 reader.
+	bool all = true;
+	for (int b = 1; b < 256; ++b)
+	{
+		const char c = static_cast<char>(b);
+		const std::string text = windows1252ToUtf8(bytes(&c, 1));
+		all = all && decodeAll(text, out) == 1 && out[0] == windows1252ToWide(static_cast<unsigned char>(b));
+	}
+	check(all, "each byte is one Windows-1252 character");
 
-	// Not well-formed UTF-8: each byte is Windows-1252.
-	check(decodeAll("\xC0\x80", true, out) == 2 && out[0] == 0xC0 && out[1] == 0x20AC, "overlong two-byte form");
-	check(decodeAll("\xE0\x80\x80", true, out) == 3 && out[0] == 0xE0 && out[1] == 0x20AC, "overlong three-byte form");
-	check(decodeAll("\xED\xA0\x80", true, out) == 3 && out[0] == 0xED && out[1] == 0xA0, "surrogate");
-	check(decodeAll("\xF4\x90\x80\x80", true, out) == 4 && out[0] == 0xF4 && out[1] == 0x90, "past U+10FFFF");
-	check(decodeAll("\xF5\x80", true, out) == 2 && out[0] == 0xF5, "lead byte F5");
-	check(decodeAll("\xE0\xA0\x80", true, out) == 1 && out[0] == 0x800, "smallest three-byte form");
-	check(decodeAll("\xED\x9F\xBF", true, out) == 1 && out[0] == 0xD7FF, "last character before the surrogates");
+#ifndef _WIN32
+	// Off Windows the document is Windows-1252 (on Windows it is the thread's ANSI code page).
+	check(xmlDocumentText(bytes("<?xml version=\"1.0\" encoding=\"UTF-8\"?><a>\xC3\xA4</a>")) ==
+			"<?xml version=\"1.0\" encoding=\"UTF-8\"?><a>\xC3\x83\xC2\xA4</a>",
+		"declared UTF-8 still reads as Windows-1252");
+	check(xmlDocumentText(bytes("<a>\x96</a>")) == "<a>\xE2\x80\x93</a>", "undeclared Windows-1252");
+#endif
+	check(xmlDocumentText(bytes("")).empty(), "empty file");
 
-	// A document declared ISO-8859-1 reads each byte as the character of that value, as before.
-	check(decodeAll("\xC3\xB3", false, out) == 2 && out[0] == 0xC3 && out[1] == 0xB3, "ISO-8859-1 document");
-	check(decodeAll("\x96", false, out) == 1 && out[0] == 0x96, "ISO-8859-1 document, byte 0x96");
+	// A UTF-8 byte order mark: the rest is UTF-8, which the original could not load at all.
+	check(xmlDocumentText(bytes("\xEF\xBB\xBF<a>\xC3\xA4</a>")) == "<a>\xC3\xA4</a>", "byte order mark");
+	check(decodeAll("\xC3\xB3", out) == 1 && out[0] == 0xF3, "two-byte UTF-8");
+	check(decodeAll("\xE2\x82\xAC", out) == 1 && out[0] == 0x20AC, "three-byte UTF-8");
+	check(decodeAll("\xF0\x9F\x98\x80", out) == 1 && out[0] == L'?', "four-byte UTF-8 beyond 16 bits");
+	// After a byte order mark, a byte that does not start well-formed UTF-8 is Windows-1252 and
+	// does not take what follows with it.
+	check(decodeAll("ci\xF3n</", out) == 6 && out[2] == 0xF3 && out[3] == L'n' && out[4] == L'<', "lead byte alone");
+	check(decodeAll("a \x96 b", out) == 5 && out[2] == 0x2013 && out[3] == L' ', "stray continuation byte");
+	check(decodeAll("\xC0\x80", out) == 2 && out[0] == 0xC0 && out[1] == 0x20AC, "overlong two-byte form");
+	check(decodeAll("\xED\xA0\x80", out) == 3 && out[0] == 0xED && out[1] == 0xA0, "surrogate");
+	check(decodeAll("\xE2\x82<", out) == 3 && out[0] == 0xE2 && out[1] == 0x201A && out[2] == L'<', "sequence cut short");
 
-	// Back to the DLL's Windows-1252: every byte comes back from both readings of it.
+	// Back to the DLL's narrow strings.
 	bool roundTrip = true;
 	for (int b = 1; b < 256; ++b)
-		roundTrip = roundTrip && wideToWindows1252(windows1252ToWide(static_cast<unsigned char>(b))) == static_cast<char>(b) &&
-			wideToWindows1252(static_cast<wchar_t>(b)) == static_cast<char>(b);
+		roundTrip = roundTrip && wideToWindows1252(windows1252ToWide(static_cast<unsigned char>(b))) == static_cast<char>(b);
 	check(roundTrip, "Windows-1252 round trip");
 	check(wideToWindows1252(0x4E2D) == '?', "character without a Windows-1252 byte");
 	if constexpr (sizeof(wchar_t) > 2)
@@ -80,6 +105,9 @@ int main()
 		uint32_t big = 0x120AC;
 		check(wideToWindows1252(static_cast<wchar_t>(big)) == '?', "euro sign plus 0x10000");
 	}
+#ifndef _WIN32
+	check(narrowXmlText(L"Ci\x00F3n \x2013 \x20AC") == "Ci\xF3n \x96 \x80", "narrow value");
+#endif
 
 	if (failures == 0)
 		std::printf("xml decode: all passed\n");

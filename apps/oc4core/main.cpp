@@ -141,7 +141,7 @@ namespace
 		bool noEdgeScroll = false; // the mouse at the window's edge does not scroll the map (the same)
 		int uiScale = -1; // the interface's, in percent, 0 the window's density (-1: the profile's)
 		int lookX = -1, lookY = -1;
-		float lookDistance = 9;
+		float lookDistance = -1; // (below 0: the game's start distance)
 		double viewSeconds = 0; // development: close the window after this long
 		std::string viewKeys;   // window keys pressed at the start (G grid, V fog of war, ...)
 		int helpX = -1, helpY = -1; // development: print the plot help of this plot
@@ -1256,6 +1256,10 @@ namespace
 			{
 				if (player.isTurnActive() || utility.diplomacy().active())
 					press(key);
+				// (out of its turn Esc still closes the screen on top: an advisor opened while the
+				// others move)
+				else if (key.key == render::key::Escape)
+					screens.escape();
 				changed = true;
 			}
 			if (const auto a = window.takeActionClick(); a && size_t(*a) < actionIds.size())
@@ -1386,27 +1390,35 @@ namespace
 				}
 			}
 			changed = changed || game.getGameTurn() != turn;
+			// The city screen flies down to look straight down at the city; closed, back out to
+			// where the camera was. (the next city's screen flies over to that one)
+			if (const CvCity* city = ui.isCityScreenUp() ? ui.getHeadSelectedCity() : nullptr;
+				city ? std::pair{ city->getX(), city->getY() } != cityScreen : cityScreen.first >= 0)
+			{
+				const bool toggled = (city != nullptr) != (cityScreen.first >= 0);
+				if (city)
+				{
+					cityScreen = { city->getX(), city->getY() };
+					window.enterCityView(cityScreen.first, cityScreen.second);
+				}
+				else
+				{
+					window.leaveCityView();
+					cityScreen = { -1, -1 };
+				}
+				if (log && toggled)
+				{
+					const auto at = Clock::now();
+					std::printf("  city screen %s after %lld frames in %.2f s\n", city ? "up" : "closed", frames - cityFrames, std::chrono::duration<double>(at - cityToggled).count());
+					cityFrames = frames, cityToggled = at;
+				}
+			}
 			if (ui.lookAtX >= 0)
 			{
 				// (a scripted game told where to look keeps looking there)
 				if (opt.lookX < 0 || opt.viewSeconds <= 0)
 					window.centerOn(ui.lookAtX, ui.lookAtY);
 				ui.lookAtX = ui.lookAtY = -1;
-			}
-			// The city screen looks at the city from close by; closed, from the usual distance.
-			if (const CvCity* city = ui.isCityScreenUp() ? ui.getHeadSelectedCity() : nullptr; (city != nullptr) != (cityScreen.first >= 0))
-			{
-				if (city)
-					cityScreen = { city->getX(), city->getY() };
-				window.lookAt(cityScreen.first, cityScreen.second, city ? 5.0f : 9.0f);
-				if (!city)
-					cityScreen = { -1, -1 };
-				if (log)
-				{
-					const auto at = Clock::now();
-					std::printf("  city screen %s after %lld frames in %.2f s\n", city ? "up" : "closed", frames - cityFrames, std::chrono::duration<double>(at - cityToggled).count());
-					cityFrames = frames, cityToggled = at;
-				}
 			}
 			const auto now = Clock::now();
 				if (changed || now - captured > std::chrono::milliseconds(200))

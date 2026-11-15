@@ -199,6 +199,19 @@ namespace oc4::render
 		return -1;
 	}
 
+	bool UiLayer::onMainMinimap(int x, int y) const
+	{
+		for (size_t i = m_items.size(); i-- > 0;)
+			if (const Item& it = m_items[i]; inside(it, x, y))
+			{
+				if (it.kind == Kind::Minimap)
+					return it.style != "__screenmap";
+				if (it.interactive || it.blocks)
+					return false;
+			}
+		return false;
+	}
+
 	bool UiLayer::solid(int x, int y) const
 	{
 		for (const Item& it : m_items)

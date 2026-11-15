@@ -40,11 +40,6 @@ namespace oc4::host
 				doc->type = XmlNode::Type::Document;
 				try
 				{
-					if (m_size >= 3 && m_data[0] == 0xEF && m_data[1] == 0xBB && m_data[2] == 0xBF)
-					{
-						m_pos = 3;
-						m_utf8 = true;
-					}
 					parseContent(*doc, true);
 				}
 				catch (const std::exception& e)
@@ -77,8 +72,8 @@ namespace oc4::host
 					++m_pos;
 			}
 
-			// Decodes one character of the document encoding.
-			wchar_t decodeChar() { return decodeXmlChar(m_data, m_size, m_pos, m_utf8); }
+			// Decodes one character of the document, which xmlDocumentText has made UTF-8.
+			wchar_t decodeChar() { return decodeXmlChar(m_data, m_size, m_pos); }
 
 			std::string name()
 			{
@@ -142,17 +137,8 @@ namespace oc4::host
 
 			void declaration()
 			{
-				// <?xml version="1.0" encoding="ISO-8859-1"?>
-				const size_t end = findAfter("?>");
-				const std::string decl(reinterpret_cast<const char*>(m_data + m_pos), end - m_pos);
-				if (decl.starts_with("<?xml"))
-				{
-					std::string lower;
-					for (char c : decl)
-						lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-					m_utf8 = lower.find("utf-8") != std::string::npos || lower.find("encoding") == std::string::npos;
-				}
-				m_pos = end;
+				// <?xml version="1.0" encoding="ISO-8859-1"?>: the encoding is not used (XmlDecode.h).
+				m_pos = findAfter("?>");
 			}
 
 			size_t findAfter(const char* terminator) const
@@ -283,19 +269,13 @@ namespace oc4::host
 			const unsigned char* m_data;
 			size_t m_size;
 			size_t m_pos = 0;
-			bool m_utf8 = true;
 		};
 
 		// ---------------------------------------------------------------- helpers
 
 		std::string narrow(const std::wstring& w)
 		{
-			// The DLL's narrow strings are Windows-1252.
-			std::string s;
-			s.reserve(w.size());
-			for (wchar_t c : w)
-				s.push_back(wideToWindows1252(c));
-			return s;
+			return narrowXmlText(w);
 		}
 
 		XmlNode* elementCursor(FXml* xml)
@@ -316,7 +296,9 @@ namespace oc4::host
 
 	std::unique_ptr<XmlNode> parseXml(std::span<const std::byte> data, std::string& error)
 	{
-		return Parser(data).run(error);
+		// Error positions count bytes of this UTF-8 text, not of the file.
+		const std::string text = xmlDocumentText({ reinterpret_cast<const unsigned char*>(data.data()), data.size() });
+		return Parser(std::as_bytes(std::span(text))).run(error);
 	}
 
 	// ------------------------------------------------------------------ schema

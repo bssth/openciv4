@@ -253,6 +253,12 @@ namespace oc4::render
 		// how big the world is nor where in it the team is.
 		bool minimapCentered = true;
 		float plotSize = 120, hillScale = 0.13f, peakScale = 0.44f;
+		// The camera (GlobalDefines, CAMERA_*): its field of view across the screen (FIELD_OF_VIEW,
+		// which BUG's slider sets), its distances from the ground it looks at, and the pitches it
+		// tilts between, in degrees below the horizon: the lower one at the closest zoom, the upper
+		// one (straight down) from the smallest of the farthest zooms out.
+		float cameraFov = 42, cameraMinDistance = 700, cameraStartDistance = 2200, cameraTopDistance = 7000, cameraCityDistance = 3500;
+		float cameraLowerPitch = 28, cameraUpperPitch = 90;
 		std::vector<PlotView> plots; // x + y * width
 		std::vector<PlayerView> players;
 		std::vector<UnitView> units;

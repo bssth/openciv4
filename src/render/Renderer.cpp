@@ -52,9 +52,15 @@ namespace oc4::render
 
 		bool useVulkan()
 		{
+#if !defined(_WIN32) && !defined(__APPLE__)
+			return true; // Linux: Vulkan is the only GPU backend with shaders
+#else
 			const char* gpu = std::getenv("OC4_GPU");
 			return gpu && std::strcmp(gpu, "vulkan") == 0;
+#endif
 		}
+#elif !defined(_WIN32) && !defined(__APPLE__)
+#error "Linux draws through Vulkan only: configure with -DOC4_SPIRV_SHADERS=ON"
 #endif
 		constexpr char kShaderBody[] = R"hlsl(
 
@@ -437,6 +443,12 @@ float4 PSOverlay(Out p) : SV_Target
 		return target + Vec3{ cp * std::cos(yaw), cp * std::sin(yaw), std::sin(pitch) } * distance;
 	}
 
+	Vec3 Camera::up() const
+	{
+		const float sp = std::sin(pitch);
+		return { -sp * std::cos(yaw), -sp * std::sin(yaw), std::cos(pitch) };
+	}
+
 	Renderer::Renderer(SDL_Window* window, uint32_t width, uint32_t height) : m_window(window), m_width(width), m_height(height)
 	{
 		static_assert(sizeof(FrameConstants) == sizeof(m_frame));
@@ -455,8 +467,10 @@ float4 PSOverlay(Out p) : SV_Target
 #endif
 #ifdef __APPLE__
 		m_device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_MSL, debug, nullptr);
-#else
+#elif defined(_WIN32)
 		m_device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_DXBC, debug, nullptr);
+#else
+		m_device = nullptr; // (unreachable: useVulkan() is always true on Linux)
 #endif
 		if (!m_device)
 			fail("SDL_CreateGPUDevice");
@@ -576,6 +590,10 @@ float4 PSOverlay(Out p) : SV_Target
 		ci.code_size = std::strlen(msl->source);
 		ci.entrypoint = entry;
 		ci.format = SDL_GPU_SHADERFORMAT_MSL;
+#elif !defined(_WIN32)
+		(void)source;
+		SDL_GPUShaderCreateInfo ci{}; // (unreachable: useVulkan() is always true on Linux)
+		throw std::runtime_error(std::format("{} {}: Linux draws through Vulkan only", name, entry));
 #else
 		const bool vertex = stage == SDL_GPU_SHADERSTAGE_VERTEX;
 		const D3D_SHADER_MACRO defines[] = { { "UNIFORMS", vertex ? "space1" : "space3" }, { nullptr, nullptr } };
@@ -1075,8 +1093,9 @@ float4 PSOverlay(Out p) : SV_Target
 		const Camera& camera = m_camera;
 		const Vec3 eye = camera.eye();
 		const float nearZ = std::max(0.01f, camera.distance * 0.01f);
+		const Vec3 up = camera.up();
 		const XMMATRIX view = XMMatrixLookAtRH(XMVectorSet(eye.x, eye.y, eye.z, 1),
-			XMVectorSet(camera.target.x, camera.target.y, camera.target.z, 1), XMVectorSet(0, 0, 1, 0));
+			XMVectorSet(camera.target.x, camera.target.y, camera.target.z, 1), XMVectorSet(up.x, up.y, up.z, 0));
 		const XMMATRIX proj = XMMatrixPerspectiveFovRH(camera.fovY, float(m_width) / float(m_height), nearZ, camera.distance * 20 + 1000);
 
 		FrameConstants fc{};

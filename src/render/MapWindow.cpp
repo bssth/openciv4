@@ -126,6 +126,21 @@ namespace oc4::render
 		std::unique_ptr<Overlay> overlay;
 		Camera camera;
 		float tilt = 0; // the user's change of the zoom-dependent pitch
+		float zoomTo = 0; // the distance a zoom glides to (0: none)
+		// A flight of the camera from one view to another (into the city screen and out again).
+		struct View
+		{
+			Vec3 target;
+			float distance = 0, pitch = 0, yaw = 0, tilt = 0;
+		};
+		struct Glide
+		{
+			View from, to;
+			float t = 0, seconds = 0;
+		};
+		std::optional<Glide> glide;
+		bool cityView = false;      // straight down at a city (its screen is up)
+		std::optional<View> beforeCity; // where the camera was when the city screen came up
 		bool open = true, running = false, turnRequest = false, framed = false;
 		std::string status, title;
 		int mouseX = -1, mouseY = -1; // (in the interface's units, as the screens are)
@@ -255,18 +270,45 @@ namespace oc4::render
 
 		float plot() const { return view->plotSize(); }
 
-		// The game's camera tilts towards straight down as it zooms out.
+		// The game's camera tilts from its lower pitch at the closest zoom to straight down at
+		// CAMERA_SMALLEST_MAX_DISTANCE, evenly with the distance: zooming in, the eye comes down
+		// towards the ground on a curve rather than straight at what it looks at.
 		void updatePitch()
 		{
-			const float t = std::clamp((camera.distance / plot() - 8) / 60, 0.0f, 1.0f);
-			camera.pitch = std::clamp(0.85f + 0.55f * t + tilt, 0.2f, 1.55f);
+			if (cityView)
+			{
+				camera.pitch = std::numbers::pi_v<float> / 2;
+				return;
+			}
+			const MapSnapshot& m = view->map();
+			const float span = std::max(m.cameraTopDistance - m.cameraMinDistance, 1.0f);
+			const float t = std::clamp((camera.distance - m.cameraMinDistance) / span, 0.0f, 1.0f);
+			const float degrees = m.cameraLowerPitch + (m.cameraUpperPitch - m.cameraLowerPitch) * t;
+			camera.pitch = std::clamp(degrees * 3.14159265f / 180 + tilt, 0.2f, 1.55f);
+		}
+
+		// FIELD_OF_VIEW is across the screen: a wide window sees more of the map to the sides, not
+		// a taller slice of it.
+		void fitFov()
+		{
+			const float aspect = float(renderer->width()) / std::max(float(renderer->height()), 1.0f);
+			const float across = std::clamp(view->map().cameraFov, 10.0f, 120.0f) * 3.14159265f / 180;
+			camera.fovY = 2 * std::atan(std::tan(across / 2) / std::max(aspect, 0.1f));
+		}
+
+		float closestZoom() const { return std::max(view->map().cameraMinDistance, plot()); }
+		float farthestZoom() const
+		{
+			const Vec3 size = view->worldSize();
+			return std::max(std::max(size.x, size.y) * 1.5f + plot(), view->map().cameraTopDistance);
 		}
 
 		XMMATRIX viewProjection() const
 		{
 			const Vec3 eye = camera.eye();
+			const Vec3 up = camera.up();
 			const XMMATRIX v = XMMatrixLookAtRH(XMVectorSet(eye.x, eye.y, eye.z, 1), XMVectorSet(camera.target.x, camera.target.y, camera.target.z, 1),
-				XMVectorSet(0, 0, 1, 0));
+				XMVectorSet(up.x, up.y, up.z, 0));
 			const XMMATRIX p = XMMatrixPerspectiveFovRH(camera.fovY, float(renderer->width()) / float(renderer->height()),
 				std::max(0.01f, camera.distance * 0.01f), camera.distance * 20 + 1000);
 			return v * p;
@@ -316,10 +358,86 @@ namespace oc4::render
 			camera.target.z = 0;
 		}
 
-		void lookAt(int x, int y, float distance = 9)
+		View currentView() const { return { camera.target, camera.distance, camera.pitch, camera.yaw, tilt }; }
+
+		// The camera flies to the view: closer or farther evenly by ratio (a zoom), across the
+		// shorter way round a wrapping map, turning the shorter way, easing in and out.
+		void glideTo(const View& to, float seconds = 0.6f)
 		{
+			Glide g{ currentView(), to, 0, seconds };
+			const Vec3 size = view->worldSize();
+			if (view->map().wrapX && size.x > 0)
+				while (std::abs(g.to.target.x - g.from.target.x) > size.x / 2)
+					g.to.target.x += g.to.target.x < g.from.target.x ? size.x : -size.x;
+			if (view->map().wrapY && size.y > 0)
+				while (std::abs(g.to.target.y - g.from.target.y) > size.y / 2)
+					g.to.target.y += g.to.target.y < g.from.target.y ? size.y : -size.y;
+			constexpr float pi = std::numbers::pi_v<float>;
+			g.to.yaw = g.from.yaw + std::remainder(g.to.yaw - g.from.yaw, 2 * pi);
+			zoomTo = 0;
+			glide = g;
+		}
+
+		void easeGlide(float dt)
+		{
+			if (!glide)
+				return;
+			Glide& g = *glide;
+			g.t = std::min(g.t + dt / std::max(g.seconds, 0.01f), 1.0f);
+			const float k = g.t * g.t * (3 - 2 * g.t);
+			const auto mix = [k](float a, float b) { return a + (b - a) * k; };
+			camera.target = { mix(g.from.target.x, g.to.target.x), mix(g.from.target.y, g.to.target.y), 0 };
+			camera.distance = g.from.distance * std::pow(g.to.distance / std::max(g.from.distance, 1.0f), k);
+			camera.pitch = mix(g.from.pitch, g.to.pitch);
+			camera.yaw = mix(g.from.yaw, g.to.yaw);
+			tilt = g.to.tilt;
+			if (g.t >= 1)
+			{
+				glide.reset();
+				updatePitch();
+			}
+			keepOnMap();
+		}
+
+		// The city screen: straight down at the city from CAMERA_CITY_ZOOM_IN_DISTANCE, north up;
+		// another city's screen flies over to it.
+		void enterCityView(int x, int y)
+		{
+			if (!cityView)
+				beforeCity = glide ? glide->to : currentView();
+			cityView = true;
+			View to{ { (float(x) + 0.5f) * plot(), (float(y) + 0.5f) * plot(), 0 }, std::max(view->map().cameraCityDistance, 5 * plot()),
+				std::numbers::pi_v<float> / 2, -std::numbers::pi_v<float> / 2, 0 };
+			glideTo(to);
+		}
+
+		// Out of the city screen: back to where the camera was.
+		void leaveCityView()
+		{
+			if (!cityView)
+				return;
+			cityView = false;
+			if (beforeCity)
+				glideTo(*beforeCity);
+			beforeCity.reset();
+		}
+
+		// (distance in plots; below 0: the game's, CAMERA_START_DISTANCE)
+		void lookAt(int x, int y, float distance = -1)
+		{
+			// (on its way somewhere, the camera goes there instead)
+			if (glide && !cityView)
+			{
+				glide->to.target = { (float(x) + 0.5f) * plot(), (float(y) + 0.5f) * plot(), 0 };
+				if (distance >= 0)
+					glide->to.distance = distance * plot();
+				return;
+			}
+			if (cityView)
+				return; // (the city screen's view holds while it is up)
 			camera.target = { (float(x) + 0.5f) * plot(), (float(y) + 0.5f) * plot(), 0 };
-			camera.distance = distance * plot();
+			camera.distance = distance < 0 ? view->map().cameraStartDistance : distance * plot();
+			zoomTo = 0;
 			updatePitch();
 			keepOnMap();
 		}
@@ -329,7 +447,9 @@ namespace oc4::render
 			const Vec3 size = view->worldSize();
 			const float aspect = float(renderer->width()) / float(renderer->height());
 			camera.target = { size.x / 2, size.y / 2, 0 };
+			fitFov();
 			camera.distance = std::max(size.x / aspect, size.y) / (2 * std::tan(camera.fovY / 2)) * 1.05f;
+			zoomTo = 0;
 			tilt = 0;
 			updatePitch();
 		}
@@ -1019,6 +1139,16 @@ namespace oc4::render
 				downOnPopup = true;
 				return;
 			}
+			// On the main interface's minimap: the camera goes there (and follows while held), as the
+			// original's (where the team's map is not centred yet, the minimap and the camera's leash
+			// keep the map's edges hidden).
+			if (down && left && !popup.active() && ui.active() && onMinimap(x, y) && ui.onMainMinimap(x, y))
+			{
+				SDL_CaptureMouse(true);
+				minimapDrag = true;
+				jumpFromMinimap(x, y);
+				return;
+			}
 			// On the game's screens: theirs (a click on a widget, or nothing for the map).
 			if (down && ui.active() && ui.solid(x, y)) // (a popup up too: both take clicks, as the original's)
 			{
@@ -1111,10 +1241,21 @@ namespace oc4::render
 		}
 
 		// The camera closer by so many notches of the wheel.
+		// (the camera glides there, as the game's does: easeZoom each frame)
 		void zoomBy(float notches)
 		{
-			const Vec3 size = view->worldSize();
-			camera.distance = std::clamp(camera.distance * std::pow(0.85f, notches), 1.5f * plot(), std::max(size.x, size.y) * 1.5f + plot());
+			const float from = zoomTo > 0 ? zoomTo : camera.distance;
+			zoomTo = std::clamp(from * std::pow(0.85f, notches), closestZoom(), farthestZoom());
+		}
+
+		void easeZoom(float dt)
+		{
+			if (zoomTo <= 0)
+				return;
+			const float k = 1 - std::exp(-dt / 0.08f);
+			camera.distance += (zoomTo - camera.distance) * k;
+			if (std::abs(zoomTo - camera.distance) < 0.5f)
+				camera.distance = zoomTo, zoomTo = 0;
 			updatePitch();
 		}
 
@@ -1314,6 +1455,7 @@ namespace oc4::render
 		{
 			const GlobeShape g = globeShape();
 			renderer->setGlobe(g.x, g.y, g.radius, g.wrapWidth);
+			fitFov();
 			// (beyond the map: black as the ground not seen, until the team's map is centred)
 			renderer->beginFrame(camera, view->seenBounds() ? Vec3{ 0, 0, 0 } : Vec3{ 0.05f, 0.07f, 0.10f });
 			view->draw();
@@ -1943,6 +2085,8 @@ namespace oc4::render
 			clock += dt;
 			handlePad(dt);
 			handleHeldKeys(dt);
+			easeZoom(dt);
+			easeGlide(dt);
 			view->update(dt);
 			for (auto& [nif, h] : heads)
 				h.head->update(dt);
@@ -2072,6 +2216,8 @@ namespace oc4::render
 	}
 
 	void MapWindow::lookAt(int x, int y, float distanceInPlots) { m->lookAt(x, y, distanceInPlots); }
+	void MapWindow::enterCityView(int x, int y) { m->enterCityView(x, y); }
+	void MapWindow::leaveCityView() { m->leaveCityView(); }
 	void MapWindow::centerOn(int x, int y)
 	{
 		m->lookAt(x, y, m->camera.distance / m->plot());
@@ -2169,7 +2315,9 @@ namespace oc4::render
 			// (the globe from far enough to see it whole: its radius is the map's width once round)
 			const Vec3 size = m->view->worldSize();
 			m->camera.target = { m->camera.target.x, size.y / 2, 0 };
-			m->camera.distance = size.x / (2 * 3.14159265f) * 3.4f;
+			m->fitFov();
+			m->camera.distance = size.x / (2 * 3.14159265f) * 1.334f / std::tan(m->camera.fovY / 2);
+			m->zoomTo = 0;
 			m->tilt = 0;
 			m->updatePitch();
 		}
@@ -2177,6 +2325,7 @@ namespace oc4::render
 		{
 			m->camera.target = m->globeFrom;
 			m->camera.distance = m->globeFromDistance;
+			m->zoomTo = 0;
 			m->tilt = m->globeFromTilt;
 			m->updatePitch();
 			m->keepOnMap();
