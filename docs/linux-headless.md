@@ -1,9 +1,7 @@
 # Headless Linux builds and checks
 
-This build/validation work complements [the Linux runtime PR](https://github.com/bssth/openciv4/pull/32).
-It adds reproducible dependency setup, a Clang/Ninja preset and asset-free CI coverage.
-The runtime changes in that PR are a prerequisite. No renderer changes or SDK pin
-changes are included here.
+This guide covers dependency setup, the Clang/Ninja Linux preset and asset-free
+tests. The engine can run headless commands without a display or audio device.
 
 ## Build
 
@@ -27,7 +25,7 @@ change system Python, fetch game assets or modify SDK sources. Its cache and out
 stay under the ignored `external/` directory.
 
 The executable still links the engine's SDL/FreeType renderer and audio code. The
-preset enables the existing SPIR-V support because the Linux renderer requires it
+preset enables the existing SPIR-V support for the Linux renderer
 at compile time. Headless commands do not open a window or audio device; shader
 regeneration tools, a display server and a Vulkan device are not needed for these
 commands or tests. Graphical Linux validation belongs to the runtime/renderer work.
@@ -52,9 +50,11 @@ env -u DISPLAY -u WAYLAND_DISPLAY OC4_DOCUMENTS="$PWD/build/linux-validation/doc
 ```
 
 Compare every turn's sync checksum, then repeat the original 100-turn command.
-For data mods, both `--mod 'Mods/Next War'` and the Windows spelling
+For installed data mods, both `--mod 'Mods/Next War'` and the Windows spelling
 `--mod 'Mods\Next War'` resolve to the installed directory. Save metadata retains
-Windows separators, so reloading finds the same mod.
+Windows separators, so reloading finds the same mod. The same installed-mod name
+is passed to the game core as `Mods\Next War\`; filesystem lookup continues to use
+the normalized native path.
 
 ## Test scope
 
@@ -67,24 +67,3 @@ It also checks rejection of a truncated container. Neither test includes game da
 The CI job runs the engine's CTest suite without game assets. Owned-game autoplay,
 original-game save compatibility, and graphical/hardware/audio checks remain local
 validation tasks. Native Windows/macOS checks use the existing workflows.
-
-Local validation used Fedora x86-64, Clang 22, OpenSSL 3.5.9 and the private UCS-4
-Python build. The refreshed validation checkout combines upstream `10de692`, Linux
-runtime PR #32 at `ec06495` and this branch. All 14 CTests pass without a display.
-The SDK is unchanged upstream `7eb1d6b`; the separate map-log fix is not required.
-Fresh dependency setup and reuse of its completed cache were previously checked;
-the refreshed engine build uses that verified source cache and Python prefix.
-
-Adding the refreshed PitBoss PR #29 and Vulkan layout fix #44 to this checkout
-passes 15 CTests. All 100 Fractal/Standard/seed-7 checksums agree before and after
-those additions, ending at `D7D43800`. The baseline's turn-50 save and the new build's
-own save both resume identically through turn 100; repeated autoplay also agrees.
-Next War starts, saves and reloads with both mod-path slash styles. Real two-client
-BtS and Next War PitBoss runs pass, including timer expiry, reconnects, authentication
-and command rejection, pause and crash recovery. These are local integration checks
-using an owned installation; no game files are included in CI.
-
-The native Windows build and all 14 CTests pass in
-[fork CI](https://github.com/foofly/openciv4/actions/runs/43641935265). Path tests
-compare filesystem identity, so case-insensitive lookups can retain their requested
-spelling. The Ubuntu job installs the XTest headers needed to build SDL's X11 backend.

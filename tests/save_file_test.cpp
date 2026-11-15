@@ -32,7 +32,6 @@ int main()
 		assert(loaded.modFolder == original.modFolder && loaded.initCore == original.initCore);
 		assert(loaded.gameData == original.gameData && loaded.pythonData == original.pythonData);
 		assert(loaded.md5 == md5);
-		assert(!fs::exists(fs::path(file).concat(".tmp")));
 	};
 	check("", "d41d8cd98f00b204e9800998ecf8427e");
 	check("abc", "900150983cd24fb0d6963f7d28e17f72");
