@@ -3468,7 +3468,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 			shape[i] = uint8_t((p.water ? 1 : 0) | (p.hills ? 2 : 0) | (p.peak ? 4 : 0) | (p.riverSouth ? 8 : 0) | (p.riverEast ? 16 : 0));
 			featureKey[i] = int32_t(p.feature) << 8 | p.featureVariety;
 			decorKey[i] = uint64_t(uint16_t(p.improvement)) | uint64_t(uint16_t(p.bonus)) << 16 | uint64_t(uint16_t(p.route)) << 32 |
-				uint64_t(p.riverSouth) << 48 | uint64_t(p.riverEast) << 49;
+				uint64_t(p.riverSouth) << 48 | uint64_t(p.riverEast) << 49 |
+				uint64_t((p.riverWEDirection + 1) & 7) << 50 | uint64_t((p.riverNSDirection + 1) & 7) << 53;
 		}
 		const bool reshaped = resized || shape != m->shape;
 		const bool refeatured = reshaped || newArt || featureKey != m->featureKey;

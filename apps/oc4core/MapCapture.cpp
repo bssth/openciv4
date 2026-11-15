@@ -536,6 +536,8 @@ namespace oc4::host
 			v.peak = plot->isPeak();
 			v.riverSouth = plot->isNOfRiver();
 			v.riverEast = plot->isWOfRiver();
+			v.riverWEDirection = int(plot->getRiverWEDirection());
+			v.riverNSDirection = int(plot->getRiverNSDirection());
 			v.revealed = active == NO_TEAM || plot->isRevealed(active, false);
 			v.visible = active == NO_TEAM || plot->isVisible(active, false);
 			if (v.revealed)

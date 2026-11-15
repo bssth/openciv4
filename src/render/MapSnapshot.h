@@ -129,6 +129,7 @@ namespace oc4::render
 		bool water = false, hills = false, peak = false;
 		bool revealed = true, visible = true; // to the active team
 		bool riverSouth = false, riverEast = false; // a river along the plot's south / east edge
+		int riverWEDirection = -1, riverNSDirection = -1; // CardinalDirectionTypes: N=0, E=1, S=2, W=3
 	};
 
 	struct UnitView
