@@ -1632,13 +1632,21 @@ namespace oc4::render
 				}
 				else
 				{
-					float cx = 0, cy = 0, ex = 0, ey = 0;
-					if (groundToScreen((float(m.x) + 0.5f) * S, (float(m.y) + 0.5f) * S, 3, cx, cy) &&
-						groundToScreen((float(m.x) + 0.85f) * S, (float(m.y) + 0.5f) * S, 3, ex, ey))
+					// Project a circle on the plot: round from above, foreshortened with the camera.
+					std::vector<std::array<float, 2>> points;
+					for (int k = 0; k < 64; ++k)
 					{
-						const float rx = std::abs(ex - cx), ry = rx * 0.6f;
-						overlay->ellipse(cx, cy, rx, ry, { 0, 0, 0 }, 0.4f * m.alpha, 5);
-						overlay->ellipse(cx, cy, rx, ry, m.color, std::min(1.0f, m.alpha + 0.2f), 2.5f);
+						const float a = 2 * std::numbers::pi_v<float> * float(k) / 64;
+						float sx = 0, sy = 0;
+						if (!groundToScreen((float(m.x) + 0.5f + 0.45f * std::cos(a)) * S,
+							(float(m.y) + 0.5f + 0.45f * std::sin(a)) * S, 3, sx, sy))
+							break;
+						points.push_back({ sx, sy });
+					}
+					if (points.size() == 64)
+					{
+						overlay->outline(points, { 0, 0, 0 }, 0.4f * m.alpha, 5);
+						overlay->outline(points, m.color, std::min(1.0f, m.alpha + 0.2f), 2.5f);
 					}
 				}
 			}
@@ -1654,11 +1662,11 @@ namespace oc4::render
 			}
 		}
 
-		// The game's layers over the plots near the camera: the yields (as many symbols as the
-		// plot gives, a row each), the resources' icons, the units' icons over their stacks.
+		// The game's layers over the plots near the camera: yields grouped into stacks by type,
+		// the resources' icons, and the units' icons over their stacks.
 		void drawLayers()
 		{
-			if (!layers.yields && !layers.resources && !layers.units)
+			if (!cityView && !layers.yields && !layers.resources && !layers.units)
 				return;
 			const auto& map = view->map();
 			if (map.width <= 0 || camera.distance > 32 * plot())
@@ -1693,26 +1701,28 @@ namespace oc4::render
 							overlay->rect(sx - r - 2, sy - r - 2 - 18 * zoom, sx + r + 2, sy + r + 2 - 18 * zoom, { 0, 0, 0 }, 0.55f, 4);
 							overlay->image(ic->key, ic->bgra, ic->width, ic->height, 1, sx - r, sy - r - 18 * zoom, sx + r, sy + r - 18 * zoom);
 						}
-					if (layers.yields)
+					if (cityView ? p.cityWorkable : layers.yields)
 					{
-						// (a row a yield, as many of its symbol as it gives: five and more as a number)
-						const float size = 11 * zoom;
-						float ry = sy - size * 0.5f * float(int(p.yields[0] > 0) + int(p.yields[1] > 0) + int(p.yields[2] > 0)) * 1.1f;
+						const float size = 64 * zoom, step = size * 0.7f;
+						const int stackSize = std::max(map.maxYieldStack, 1);
+						int groups = 0;
+						for (int k = 0; k < 3; ++k)
+							groups += (int(p.yields[k]) + stackSize - 1) / stackSize;
+						float gx = sx - step * float(groups - 1) / 2;
 						for (int k = 0; k < 3; ++k)
 						{
-							const int n = p.yields[k];
-							if (n <= 0 || yieldSymbols[size_t(k)].empty())
-								continue;
-							std::wstring row;
-							if (n >= 5)
-								row = std::to_wstring(n) + yieldSymbols[size_t(k)];
-							else
-								for (int i = 0; i < n; ++i)
-									row += yieldSymbols[size_t(k)];
-							// (in the yields' colours: the font's stand-ins have none of their own)
-							static const Color kYield[3] = { { 0.55f, 0.95f, 0.35f }, { 0.75f, 0.8f, 0.95f }, { 1, 0.85f, 0.2f } };
-							overlay->richText(row, sx, ry, size, true, kYield[k], 1, Overlay::Align::Center);
-							ry += size * 1.1f;
+							for (int left = p.yields[k]; left > 0; left -= stackSize, gx += step)
+							{
+								const int count = std::min(left, stackSize);
+								const auto& icons = map.yieldIcons[size_t(k)];
+								const ButtonArt::Icon* ic = size_t(count) <= icons.size() ? art.icon(icons[size_t(count - 1)]) : nullptr;
+								if (ic)
+									overlay->image(ic->key, ic->bgra, ic->width, ic->height, 1, gx - size / 2, sy - size / 2, gx + size / 2, sy + size / 2);
+								else // a mod without stack artwork: overlap its game-font symbols instead
+									for (int i = 0; i < count; ++i)
+										overlay->richText(yieldSymbols[size_t(k)], gx + (float(i) - float(count - 1) / 2) * size * 0.12f,
+											sy - size * 0.4f + float(i) * size * 0.1f, size * 0.65f, false, { 1, 1, 1 }, 1, Overlay::Align::Center);
+							}
 						}
 					}
 				}

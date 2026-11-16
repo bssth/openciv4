@@ -39,6 +39,8 @@ namespace oc4::render
 		void frame(float x0, float y0, float x1, float y1, Color color, float alpha, float radius = 0, float width = 1);
 		void circle(float x, float y, float radius, Color color, float alpha);
 		void ellipse(float x, float y, float rx, float ry, Color color, float alpha, float width = 1);
+		// A closed outline through screen-space points.
+		void outline(const std::vector<std::array<float, 2>>& points, Color color, float alpha, float width = 1);
 		void line(float x0, float y0, float x1, float y1, Color color, float alpha, float width = 1);
 		// A filled four-cornered shape (its corners in order).
 		void quad(const float x[4], const float y[4], Color color, float alpha);
