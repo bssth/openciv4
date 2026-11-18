@@ -366,6 +366,12 @@ namespace oc4::render
 			strokeClosed(ellipsePoints(x, y, rx, ry), lineWidth, premultiplied(color, alpha));
 	}
 
+	void Overlay::outline(const std::vector<std::array<float, 2>>& points, Color color, float alpha, float width)
+	{
+		if (m_drawing && points.size() >= 3 && width > 0)
+			strokeClosed(points, width, premultiplied(color, alpha));
+	}
+
 	void Overlay::line(float x0, float y0, float x1, float y1, Color color, float alpha, float lineWidth)
 	{
 		const float len = std::hypot(x1 - x0, y1 - y0);

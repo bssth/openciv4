@@ -3,6 +3,8 @@
 #include "GameFont.h"
 #include "Interface.h"
 #include "Xml.h"
+#include "nif/NifBlocks.h"
+#include "nif/NifFile.h"
 
 #include "CvGameCoreDLL.h"
 #include "CvArtFileMgr.h"
@@ -18,6 +20,8 @@
 #include "CvPlot.h"
 #include "CvSelectionGroup.h"
 #include "CvUnit.h"
+
+#include <pybind11/pybind11.h>
 
 #include <windows.h>
 
@@ -226,6 +230,7 @@ namespace oc4::host
 			CvRouteModelInfo& info = GC.getRouteModelInfo(r);
 			s.routes.push_back({ int(info.getRouteType()), text(info.getModelFile()), directionMask(info.getConnectString()), numbers(info.getRotateString()) });
 		}
+		loadYieldArt();
 		loadCityLSystem();
 		loadAttachables(s);
 
@@ -274,6 +279,58 @@ namespace oc4::host
 				s.greatWallSegment = a;
 			else if (a.type == "ART_GREAT_WALL_POST")
 				s.greatWallPost = a;
+	}
+
+	void MapCapture::loadYieldArt()
+	{
+		auto& s = m_snapshot;
+		s.yieldIcons = {};
+		s.maxYieldStack = std::max(1, GC.getDefineINT("MAX_YIELD_STACK"));
+		static const char* const types[3] = { "YIELD_FOOD", "YIELD_PRODUCTION", "YIELD_COMMERCE" };
+		const auto loc = m_assets.locate("xml/terrain/civ4yieldinfos.xml");
+		if (!loc)
+			return;
+		std::string error;
+		const auto doc = parseXml(m_assets.read(*loc), error);
+		if (!doc)
+			return;
+		std::vector<const XmlNode*> nodes{ doc.get() };
+		while (!nodes.empty())
+		{
+			const XmlNode* n = nodes.back();
+			nodes.pop_back();
+			for (const auto& child : n->children)
+				nodes.push_back(child.get());
+			if (n->name != "YieldInfo")
+				continue;
+			const XmlNode* type = n->firstChildElement("Type"), *paths = n->firstChildElement("SymbolPaths");
+			if (!type || !paths)
+				continue;
+			for (int k = 0; k < 3; ++k)
+			{
+				if (utf8(type->text.c_str()) != types[k])
+					continue;
+				for (const auto& path : paths->children)
+				{
+					if (path->name != "SymbolPath")
+						continue;
+					std::string texture;
+					if (const auto model = m_assets.locate(utf8(path->text.c_str())))
+					{
+						// The game's yield symbols are billboard quads with the whole stack in their texture.
+						const auto file = nif::parseFile(m_assets.read(*model));
+						for (const auto& block : file.blocks)
+							if (const auto* source = dynamic_cast<const nif::NiSourceTexture*>(block.get()); source && source->external)
+								if (const auto image = m_assets.locateTexture(*model, source->fileName))
+								{
+									texture = image->key;
+									break;
+								}
+					}
+					s.yieldIcons[size_t(k)].push_back(std::move(texture));
+				}
+			}
+		}
 	}
 
 	void MapCapture::loadArtList(std::vector<render::MapSnapshot::Attachable>& out, const char* file, const char* element)
@@ -473,6 +530,27 @@ namespace oc4::host
 		}
 
 		const TeamTypes active = game.getActiveTeam();
+		const CvCity* selectedCity = selection && gDLL->getInterfaceIFace()->isCityScreenUp() ? gDLL->getInterfaceIFace()->getHeadSelectedCity() : nullptr;
+		std::vector<bool> cityWorkable(size_t(s.width) * size_t(s.height), false);
+		if (selectedCity)
+		{
+			// canWork is part of the DLL's Python API, but not its exported C++ interface.
+			namespace py = pybind11;
+			try
+			{
+				const auto city = py::module_::import("CvPythonExtensions").attr("CyGlobalContext")().attr("getPlayer")(int(selectedCity->getOwner())).attr("getCity")(selectedCity->getID());
+				for (int i = 0; i < NUM_CITY_PLOTS; ++i)
+				{
+					const auto p = city.attr("getCityIndexPlot")(i);
+					if (p.attr("isNone")().cast<bool>() || !city.attr("canWork")(p).cast<bool>())
+						continue;
+					const int x = p.attr("getX")().cast<int>(), y = p.attr("getY")().cast<int>();
+					if (x >= 0 && x < s.width && y >= 0 && y < s.height)
+						cityWorkable[size_t(x) + size_t(y) * size_t(s.width)] = true;
+				}
+			}
+			catch (const py::error_already_set& e) { std::fprintf(stderr, "[oc4core] city yields: %s\n", e.what()); }
+		}
 		const auto actions = Entities::actions();
 		// The Great Wall's edges: its owner's plots on the landmass, against land not its own.
 		s.greatWall.clear();
@@ -538,6 +616,7 @@ namespace oc4::host
 			v.riverEast = plot->isWOfRiver();
 			v.revealed = active == NO_TEAM || plot->isRevealed(active, false);
 			v.visible = active == NO_TEAM || plot->isVisible(active, false);
+			v.cityWorkable = cityWorkable[size_t(plot->getX()) + size_t(plot->getY()) * size_t(s.width)];
 			if (v.revealed)
 				for (int y = 0; y < 3; ++y)
 					v.yields[y] = uint8_t(std::clamp(plot->getYield(static_cast<YieldTypes>(y)), 0, 255));
