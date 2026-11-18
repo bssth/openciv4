@@ -46,6 +46,7 @@ namespace oc4::host
 		int modelIndex(const void* art, const char* nif, const char* kfm, float scale, const char* shadow = nullptr, const char* shadowNode = nullptr,
 			float shadowScale = 1);
 		void loadCityLSystem();
+		void loadFlagScale();
 		void loadAttachables(render::MapSnapshot& s);
 	public:
 		// The cities with the Great Wall (their plots, the map's): the wall along their owners'

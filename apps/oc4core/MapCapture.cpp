@@ -227,6 +227,7 @@ namespace oc4::host
 			s.routes.push_back({ int(info.getRouteType()), text(info.getModelFile()), directionMask(info.getConnectString()), numbers(info.getRotateString()) });
 		}
 		loadCityLSystem();
+		loadFlagScale();
 		loadAttachables(s);
 
 		s.rivers.clear();
@@ -245,6 +246,40 @@ namespace oc4::host
 			s.rivers.push_back(std::move(art));
 		}
 		m_haveArt = true;
+	}
+
+	// Flags have their own zoom-dependent scale, separate from UNIT_SCALE. Mods may replace it.
+	void MapCapture::loadFlagScale()
+	{
+		const auto loc = m_assets.locate("xml/misc/civ4detailmanager.xml");
+		if (!loc)
+			return;
+		std::string error;
+		const auto doc = parseXml(m_assets.read(*loc), error);
+		if (!doc)
+			return;
+		for (const auto& node : doc->children)
+			if (node->type == XmlNode::Type::Element)
+				for (const auto& fader : node->children)
+				{
+					const XmlNode* name = fader->type == XmlNode::Type::Element && fader->name == "Fader" ? fader->firstChildElement("Name") : nullptr;
+					if (!name || name->text != L"FLAG_SCALE")
+						continue;
+					std::vector<std::pair<float, float>> keys;
+					for (const auto& key : fader->children)
+						if (key->type == XmlNode::Type::Element && key->name == "Key")
+						{
+							float distance = 0, scale = 0;
+							if (std::swscanf(key->text.c_str(), L"%f , %f", &distance, &scale) == 2 && distance >= 0 && scale > 0)
+								keys.emplace_back(distance, scale);
+						}
+					if (!keys.empty())
+					{
+						std::ranges::sort(keys);
+						m_snapshot.flagScale = std::move(keys);
+					}
+					return;
+				}
 	}
 
 	int MapCapture::modelIndex(const void* art, const char* nif, const char* kfm, float scale, const char* shadow, const char* shadowNode, float shadowScale)
@@ -440,6 +475,13 @@ namespace oc4::host
 		s.cameraStartDistance = defineOr("CAMERA_START_DISTANCE", 2200);
 		s.cameraTopDistance = defineOr("CAMERA_SMALLEST_MAX_DISTANCE", 7000);
 		s.cameraCityDistance = defineOr("CAMERA_CITY_ZOOM_IN_DISTANCE", 3500);
+		s.flagOffset = { GC.getDefineFLOAT("FLAG_OFFSET_X"), GC.getDefineFLOAT("FLAG_OFFSET_Y") };
+		const auto miscModel = [&](const char* tag) {
+			const CvArtInfoMisc* art = ARTFILEMGR.getMiscArtInfo(tag);
+			return art ? modelIndex(art, art->getNIF(), art->getKFM(), art->getScale()) : -1;
+		};
+		s.flagGlow = miscModel("ART_UNITGROUP_FLAG_GLOW");
+		const int medieval = GC.getInfoTypeForString("ERA_MEDIEVAL", true), industrial = GC.getInfoTypeForString("ERA_INDUSTRIAL", true);
 		// (the pitches are negative there: below the horizon)
 		s.cameraLowerPitch = std::abs(GC.getDefineFLOAT("CAMERA_LOWER_PITCH")) > 0 ? std::abs(GC.getDefineFLOAT("CAMERA_LOWER_PITCH")) : 28;
 		s.cameraUpperPitch = std::abs(GC.getDefineFLOAT("CAMERA_UPPER_PITCH")) > 0 ? std::abs(GC.getDefineFLOAT("CAMERA_UPPER_PITCH")) : 90;
@@ -465,6 +507,11 @@ namespace oc4::host
 				continue;
 			v.primary = colorOf(pl.getPlayerColor(), true);
 			v.secondary = colorOf(pl.getPlayerColor(), false);
+			v.flagDecal = utf8(pl.getFlagDecal().c_str());
+			v.whiteFlag = pl.isWhiteFlag();
+			const int era = pl.getCurrentEra();
+			v.flagModel = miscModel(industrial >= 0 && era >= industrial ? "ART_UNITGROUP_FLAG_MODERN" :
+				medieval >= 0 && era >= medieval ? "ART_UNITGROUP_FLAG_MEDIEVAL" : "ART_UNITGROUP_FLAG_ANCIENT");
 			v.name = utf8(pl.getName());
 			v.civilization = utf8(pl.getCivilizationShortDescription());
 			v.score = game.getPlayerScore(static_cast<PlayerTypes>(p));

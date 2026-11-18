@@ -73,7 +73,7 @@ cbuffer Object : register(b1, UNIFORMS)
 	float4 world[3];    // rigid items: 3x4 rows, p' = (dot(row0,p), dot(row1,p), dot(row2,p))
 	float4 baseUv[2];   // 2x3 rows: uv' = (dot(row0.xyz, (u,v,1)), dot(row1.xyz, (u,v,1)))
 	float4 decalUv[2];
-	uint flags;         // bit0 base map, bit1 alpha test, bits2-3 vertex color mode, bit4 lit, bit5 decal, bit6 team colour base, bit7 skinned, bit8 on the ground, bit11 a leader's shading
+	uint flags;         // bit0 base map, bit1 alpha test, bits2-3 vertex color mode, bit4 lit, bit5 decal, bit6 team colour base, bit7 skinned, bit8 on ground, bit11 leader, bit12 flag
 	uint alphaFunc;
 	float alphaRef;
 	uint treesCut;      // a forest piece (its vertices' red: the tree, 1-based): trees 1..32 by bit not drawn
@@ -294,7 +294,9 @@ float4 PSMain(PSIn i, bool front : SV_IsFrontFace) : SV_Target
 	if (flags & 32)
 	{
 		float4 decal = decalMap.Sample(decalSampler, uvXform(decalUv, i.uv));
-		base.rgb = lerp(base.rgb, decal.rgb, decal.a);
+		// Flags keep the cloth's shading and cutout alpha; their decal is the composed
+		// civilization colours. Other models use their usual decal-over-base blend.
+		base.rgb = (flags & 4096) ? base.rgb * decal.rgb : lerp(base.rgb, decal.rgb, decal.a);
 	}
 	c *= base;
 	if ((flags & 2) && !passes(alphaFunc, round(c.a * 255.0), alphaRef))
@@ -970,7 +972,8 @@ float4 PSOverlay(Out p) : SV_Target
 		return texture(assets, *loc, stats);
 	}
 
-	std::unique_ptr<GpuModel> Renderer::upload(const scene::Model& model, const AssetResolver& assets, const AssetLocation& modelLocation)
+	std::unique_ptr<GpuModel> Renderer::upload(const scene::Model& model, const AssetResolver& assets, const AssetLocation& modelLocation,
+		const GpuImage* decalOverride)
 	{
 		auto gpu = std::make_unique<GpuModel>();
 		RenderStats& stats = gpu->m_stats;
@@ -995,7 +998,7 @@ float4 PSOverlay(Out p) : SV_Target
 			if (!item.material.baseTexture.empty() && !item.material.baseIsTeamColor)
 				mesh.texture = texture(assets, modelLocation, item.material.baseTexture, &stats);
 			if (!item.material.decalTexture.empty())
-				mesh.decal = texture(assets, modelLocation, item.material.decalTexture, &stats);
+				mesh.decal = decalOverride ? decalOverride : texture(assets, modelLocation, item.material.decalTexture, &stats);
 			// (a leader's maps: all four, or its usual look)
 			const std::string* maps[] = { &item.material.envMap, &item.material.normalMap, &item.material.specularMap, &item.material.envMask };
 			if (std::ranges::all_of(maps, [](const std::string* s) { return !s->empty(); }))
@@ -1047,7 +1050,8 @@ float4 PSOverlay(Out p) : SV_Target
 		writeRows(mesh.node >= 0 && size_t(mesh.node) < world.size() ? world[size_t(mesh.node)] : Affine{}, oc.world);
 		oc.flags = (mesh.texture ? 1u : 0u) | (m.alphaTest ? 2u : 0u) | ((m.vertexColorMode & 3u) << 2) | (m.lightingMode ? 16u : 0u) |
 			(mesh.decal ? 32u : 0u) | (m.baseIsTeamColor ? 64u : 0u) | (mesh.skinned ? 128u : 0u) | (onGround ? 256u : 0u) |
-			(m_inView && m_viewOnNothing && !m.alphaBlend ? 1024u : 0u) | (mesh.leader[0] ? 2048u : 0u);
+			(m_inView && m_viewOnNothing && !m.alphaBlend ? 1024u : 0u) | (mesh.leader[0] ? 2048u : 0u) |
+			(m.shaderName.starts_with("TFlagShader") ? 4096u : 0u);
 		oc.alphaFunc = static_cast<uint32_t>(m.alphaFunc);
 		oc.alphaRef = m.alphaRef;
 		oc.treesCut = m.treesCut;

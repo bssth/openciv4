@@ -395,6 +395,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 	{
 		bool ok = false;
 		scene::Model model;
+		std::shared_ptr<GpuImage> flagDecal; // runtime colours; outlives the GPU model's texture references
 		std::unique_ptr<GpuModel> gpu;
 		std::optional<anim::Sequence> idle, run; // event codes 1000, 1010
 		// Fortifying, then fortified: melee (1020, 1021) and ranged (1030, 1031), as the
@@ -457,7 +458,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 
 	struct MapView::Impl
 	{
-		Impl(Renderer& r, const AssetResolver& a) : renderer(r), assets(a) { createPipeline(); }
+		Impl(Renderer& r, const AssetResolver& a) : renderer(r), assets(a), flagArt(a) { createPipeline(); }
 		~Impl()
 		{
 			SDL_ReleaseGPUGraphicsPipeline(renderer.device(), terrainPipeline);
@@ -508,6 +509,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 
 		Renderer& renderer;
 		const AssetResolver& assets;
+		ButtonArt flagArt;
 		MapSnapshot map;
 		bool hasMap = false;
 		uint64_t artGeneration = ~0ull;
@@ -1017,12 +1019,12 @@ float4 PSTerrain(PSIn i) : SV_Target
 			lm.water = std::move(w);
 		}
 
-		LoadedModel* model(const std::string& nif, const std::string& kfm)
+		LoadedModel* model(const std::string& nif, const std::string& kfm, const ButtonArt::Icon* flag = nullptr)
 		{
 			if (nif.empty())
 				return nullptr;
 			const std::string key = makeAssetKey(nif);
-			auto& slot = models[key + '|' + makeAssetKey(kfm)];
+			auto& slot = models[key + '|' + makeAssetKey(kfm) + (flag ? '|' + std::to_string(flag->key) : "")];
 			if (slot)
 				return slot->ok ? slot.get() : nullptr;
 			slot = std::make_unique<LoadedModel>();
@@ -1068,7 +1070,12 @@ float4 PSTerrain(PSIn i) : SV_Target
 						node.hidden = true;
 				}
 				findWater(*file, lm, *loc);
-				lm.gpu = renderer.upload(lm.model, assets, *loc);
+				if (flag)
+				{
+					const std::span<const uint8_t> bytes(flag->bgra);
+					lm.flagDecal = renderer.createTexture(flag->width, flag->height, 1, 1, TextureFormat::BGRA8, std::span(&bytes, 1));
+				}
+				lm.gpu = renderer.upload(lm.model, assets, *loc, lm.flagDecal.get());
 				for (const auto& missing : lm.gpu->stats().missing)
 					problem(std::format("{}: texture {}", nif, missing));
 				lm.bindLocals = lm.model.bindLocals();
@@ -1112,7 +1119,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 					const int parent = nodes[i].parent;
 					lm.top[i] = parent < 0 || int(i) <= spread || parent == spread ? int(i) : lm.top[size_t(parent)];
 				}
-				loadIdle(lm, *loc, kfm);
+				loadIdle(lm, *loc, kfm, flag ? 3276800u : 1000u);
 				lm.ok = true;
 			}
 			catch (const std::exception& e)
@@ -1123,7 +1130,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 		}
 
 		// The idle animation (event 1000) from the art's KFM, or the one next to the model.
-		void loadIdle(LoadedModel& lm, const AssetLocation& nifLocation, const std::string& kfm)
+		void loadIdle(LoadedModel& lm, const AssetLocation& nifLocation, const std::string& kfm, uint32_t idleCode = 1000u)
 		{
 			std::string kfmKey = makeAssetKey(kfm);
 			if (kfmKey.empty())
@@ -1134,7 +1141,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			try
 			{
 				const nif::KfmFile file = nif::parseKfm(assets.read(*loc));
-				std::vector<std::pair<uint32_t, std::optional<anim::Sequence>*>> wanted{ { 1000u, &lm.idle }, { 1010u, &lm.run }, { 1020u, &lm.fortify[0] },
+				std::vector<std::pair<uint32_t, std::optional<anim::Sequence>*>> wanted{ { idleCode, &lm.idle }, { 1010u, &lm.run }, { 1020u, &lm.fortify[0] },
 					{ 1021u, &lm.fortified[0] }, { 1030u, &lm.fortify[1] }, { 1031u, &lm.fortified[1] } };
 				for (uint32_t set = 0; set < 3; ++set)
 					for (uint32_t kind = 0; kind < 2; ++kind)
@@ -2718,6 +2725,85 @@ float4 PSTerrain(PSIn i) : SV_Target
 			return std::round((renderer.camera().target.x - x) / w) * w;
 		}
 
+		Vec3 flagPosition(const UnitView& u) const
+		{
+			const uint64_t key = uint64_t(uint32_t(u.owner)) << 32 | uint32_t(u.id);
+			Vec3 at{ (float(u.x) + 0.5f) * S(), (float(u.y) + 0.5f) * S(), 0 };
+			if (const auto it = unitPositions.find(key); it != unitPositions.end())
+				at = it->second;
+			const float yaw = renderer.camera().yaw, extent = S() * 0.5f;
+			at += Vec3{ -std::sin(yaw), std::cos(yaw), 0 } * (map.flagOffset.x * extent);
+			at += Vec3{ -std::cos(yaw), -std::sin(yaw), 0 } * (map.flagOffset.y * extent);
+			at.z = ground(at.x, at.y);
+			at.x += wrapOffset(at.x);
+			return at;
+		}
+
+		struct FlagDraw { Vec3 top, clothBottom; };
+		std::map<int, FlagDraw> flagDraws; // projected by the overlay for health and stack counts
+
+		float flagZoom() const
+		{
+			const auto& keys = map.flagScale;
+			if (keys.empty())
+				return 1;
+			const float distance = renderer.camera().distance;
+			const auto upper = std::ranges::upper_bound(keys, distance, {}, &std::pair<float, float>::first);
+			if (upper == keys.begin())
+				return upper->second;
+			if (upper == keys.end())
+				return keys.back().second;
+			const auto& lower = *std::prev(upper);
+			const float t = (distance - lower.first) / std::max(upper->first - lower.first, 1.0f);
+			return lower.second + (upper->second - lower.second) * t;
+		}
+
+		void drawFlags(const Frustum& frustum)
+		{
+			flagDraws.clear();
+			// BtS drops the flags at its last zoom step, where the camera reaches its minimum.
+			if (renderer.camera().distance <= map.cameraMinDistance + 0.5f || renderer.camera().distance >= 22 * S())
+				return;
+			for (const UnitView& u : map.units)
+			{
+				const int plot = u.x + u.y * map.width;
+				if ((fog && !map.plots[size_t(plot)].visible) || u.shownOwner < 0 || size_t(u.shownOwner) >= map.players.size())
+					continue;
+				const PlayerView& owner = map.players[size_t(u.shownOwner)];
+				const Vec3 at = flagPosition(u);
+				if (owner.flagModel < 0 || size_t(owner.flagModel) >= map.models.size() || !frustum.sphere(at, 2 * S()))
+					continue;
+				const ModelArt& art = map.models[size_t(owner.flagModel)];
+				const auto* decal = flagArt.flag(owner.flagDecal, owner.primary, owner.secondary, owner.whiteFlag);
+				LoadedModel* lm = decal ? model(art.nif, art.kfm, decal) : nullptr;
+				if (!lm || lm->bounds.empty())
+					continue;
+				const float scale = art.scale * flagZoom();
+				const Affine place = placement(at + Vec3{ 0, 0, -lm->bounds.min.z * scale },
+					renderer.camera().yaw + std::numbers::pi_v<float> / 2, scale);
+				if (u.selected && map.flagGlow >= 0 && size_t(map.flagGlow) < map.models.size())
+				{
+					const ModelArt& glow = map.models[size_t(map.flagGlow)];
+					if (LoadedModel* g = model(glow.nif, glow.kfm))
+					{
+						std::vector<Affine> world;
+						for (const auto& w : g->bindWorld)
+							world.push_back(place * w);
+						renderer.draw(*g->gpu, world, g->bindVisible);
+					}
+				}
+				anim::Pose pose = anim::Pose::bind(lm->model);
+				if (lm->idle && !frozen)
+					lm->idle->apply(time + unitFloat(hash(u.x, u.y, u.id)) * lm->idle->duration(), pose);
+				auto world = lm->model.worldTransforms(pose.locals);
+				for (auto& w : world)
+					w = place * w;
+				renderer.draw(*lm->gpu, world, lm->model.visibility(pose.hidden));
+				const float height = lm->bounds.max.z - lm->bounds.min.z;
+				flagDraws[plot] = { place.point({ 0, 0, lm->bounds.max.z }), place.point({ 0, 0, lm->bounds.max.z - height * 0.47f }) };
+			}
+		}
+
 		void drawTerrain(const Frustum& frustum, const MapView::Options& options)
 		{
 			if (!vb || !atlasTex || !plotTex || !detailTex || !decalTex || !cellTex || !borderTex)
@@ -3578,10 +3664,13 @@ float4 PSTerrain(PSIn i) : SV_Target
 		if (options.cities)
 			m->drawInstances(m->cities, frustum);
 		m->figureHits.clear();
+		m->flagDraws.clear();
 		if (options.units)
 		{
 			m->drawInstances(m->units, frustum, true);
 			m->ringsDrawn = m->drawRings();
+			if (options.flags)
+				m->drawFlags(frustum);
 		}
 		m->drawBursts(frustum);
 		// (the particles of what is no longer drawn: gone)
@@ -3654,8 +3743,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 			y = (1 - (vp[4] * p.x + vp[5] * p.y + vp[6] * p.z + vp[7]) / cw) * 0.5f * H;
 			return x > -50 && x < W + 50 && y > -50 && y < H + 50;
 		};
-		// The units' flags: the owner's colours, health, how many are on the plot.
-		if (options.flags && options.units && distance < 22)
+		// The units' flags: the visible owner's decal and colours, health, and stack count.
+		if (options.flags && options.units && distance < 22 && m->renderer.camera().distance > m->map.cameraMinDistance + 0.5f)
 			for (const UnitView& u : m->map.units)
 			{
 				const int plot = u.x + u.y * m->map.width;
@@ -3680,16 +3769,30 @@ float4 PSTerrain(PSIn i) : SV_Target
 						overlay.ellipse(gx, gy, rx, ry, { 0.3f, 1, 0.4f }, pulse, 2.2f);
 					}
 				}
-				p.z = m->ground(p.x, p.y) + 0.3f * m->S() * m->figureZoom();
+				p.z = m->ground(p.x, p.y);
+				p.z += 0.3f * m->S() * m->figureZoom();
 				float x = 0, y = 0;
 				if (!toScreen(p, x, y))
 					continue;
 				const PlayerView* owner = u.shownOwner >= 0 && size_t(u.shownOwner) < m->map.players.size() ? &m->map.players[size_t(u.shownOwner)] : nullptr;
 				const Color primary = owner ? owner->primary : Color{}, secondary = owner ? owner->secondary : Color{ 0, 0, 0 };
-				const float fw = 9 * scale, fh = 12 * scale;
-				overlay.line(x - fw / 2, y - fh, x - fw / 2, y + fh * 0.6f, { 0.15f, 0.12f, 0.1f }, 0.9f, 1.2f);
-				overlay.rect(x - fw / 2, y - fh, x + fw / 2, y, primary, 0.95f);
-				overlay.frame(x - fw / 2, y - fh, x + fw / 2, y, secondary, 0.95f, 0, 1.2f);
+				const float flagScale = scale * std::clamp(18 / std::max(distance, 1.0f), 0.8f, 2.0f);
+				const float fw = 24 * flagScale, fh = 30 * flagScale;
+				float topY = y - fh;
+				if (const auto it = m->flagDraws.find(plot); it != m->flagDraws.end())
+				{
+					float topX = 0;
+					if (!toScreen(it->second.clothBottom, x, y) || !toScreen(it->second.top, topX, topY))
+						continue;
+				}
+				else
+				{
+					// Mods without usable flag models can still show the civilization's emblem.
+					if (const ButtonArt::Icon* flag = owner ? m->flagArt.flag(owner->flagDecal, primary, secondary, owner->whiteFlag) : nullptr)
+						overlay.image(flag->key, flag->bgra, flag->width, flag->height, 1, x - fw / 2, y - fh, x + fw / 2, y);
+					else
+						overlay.rect(x - fw / 2, y - fh, x + fw / 2, y, primary, 0.95f);
+				}
 				const float health = std::clamp(u.health, 0.0f, 1.0f);
 				if (options.healthBars)
 				{
@@ -3697,7 +3800,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 					overlay.rect(x - fw / 2, y + 1, x - fw / 2 + fw * health, y + 3.5f * scale, { 1 - health, 0.3f + 0.6f * health, 0.15f }, 0.95f);
 				}
 				if (u.count > 1)
-					overlay.text(std::to_wstring(u.count), x + fw / 2 + 2, y - fh - 1, 10 * scale, { 1, 1, 1 }, 0.95f, true);
+					overlay.text(std::to_wstring(u.count), x + fw / 2 + 2, topY - 1, 10 * scale, { 1, 1, 1 }, 0.95f, true);
 			}
 		for (const CityView& c : m->map.cities)
 		{

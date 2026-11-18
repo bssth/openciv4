@@ -185,7 +185,10 @@ float3 globeBend(float3 p)
 		uint32_t width() const { return m_width; }
 		uint32_t height() const { return m_height; }
 
-		std::unique_ptr<GpuModel> upload(const scene::Model& model, const AssetResolver& assets, const AssetLocation& modelLocation);
+		// decalOverride replaces the model's decal maps (runtime civilization flags); its owner
+		// must keep the image alive while the uploaded model is used.
+		std::unique_ptr<GpuModel> upload(const scene::Model& model, const AssetResolver& assets, const AssetLocation& modelLocation,
+			const GpuImage* decalOverride = nullptr);
 
 		void beginFrame(const Camera& camera, Vec3 clearColor = { 0.18f, 0.22f, 0.27f });
 		// world / visible: one entry per model node (scene::Model::worldTransforms / visibility).

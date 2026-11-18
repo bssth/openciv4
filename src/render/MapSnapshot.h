@@ -114,6 +114,9 @@ namespace oc4::render
 	struct PlayerView
 	{
 		Color primary, secondary;
+		std::string flagDecal;
+		bool whiteFlag = false; // a full-colour flag instead of a two-colour alpha mask
+		int flagModel = -1; // era's flag model and animation, into MapSnapshot::models
 		bool alive = false;
 		std::string name, civilization;
 		int score = 0, cities = 0;
@@ -210,6 +213,10 @@ namespace oc4::render
 	{
 		// Content (art); `artGeneration` changes when it does.
 		uint64_t artGeneration = 0;
+		int flagGlow = -1; // selected unit's flag highlight, into models
+		struct { float x = -0.667f, y = 0; } flagOffset; // GlobalDefines, relative to half a plot
+		// CIV4DetailManager's FLAG_SCALE: camera distance, model scale multiplier.
+		std::vector<std::pair<float, float>> flagScale{ { 700, 0.6f }, { 1500, 0.7f }, { 3000, 0.9f }, { 5000, 1.2f } };
 		std::vector<TerrainArt> terrains;  // by TerrainTypes
 		int hillTerrain = -1, peakTerrain = -1; // graphical terrains drawn over hills and peaks
 		std::vector<FeatureArt> features; // by FeatureTypes

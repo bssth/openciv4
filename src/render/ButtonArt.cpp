@@ -2,9 +2,11 @@
 
 #include "core/FileUtil.h"
 #include "gfx/DdsImage.h"
+#include "render/MapSnapshot.h"
 
 #include <algorithm>
 #include <cstdlib>
+#include <cmath>
 #include <filesystem>
 
 namespace oc4::render
@@ -12,6 +14,7 @@ namespace oc4::render
 	namespace
 	{
 		constexpr uint64_t kIconKeys = 1ull << 40; // overlay picture keys (0 is the minimap)
+		constexpr uint64_t kFlagKeys = 2ull << 40; // the map's flag art has its own ButtonArt cache
 		constexpr uint32_t kAtlasCell = 64;
 	}
 
@@ -48,6 +51,38 @@ namespace oc4::render
 			p = {};
 		}
 		return p.width ? &p : nullptr;
+	}
+
+	const ButtonArt::Icon* ButtonArt::flag(const std::string& art, const Color& primary, const Color& secondary, bool whiteFlag)
+	{
+		const auto pack = [](const Color& c) {
+			const auto channel = [](float v) { return uint32_t(std::lround(std::clamp(v, 0.0f, 1.0f) * 255)); };
+			return channel(c.b) | channel(c.g) << 8 | channel(c.r) << 16;
+		};
+		const uint32_t p = pack(primary), s = pack(secondary);
+		const auto key = std::tuple{ makeAssetKey(art), p, s, whiteFlag };
+		if (const auto it = m_flags.find(key); it != m_flags.end())
+			return it->second.width ? &it->second : nullptr;
+		Icon& icon = m_flags[key];
+		const Picture* source = picture(art);
+		if (!source)
+			return nullptr;
+		icon.width = source->width;
+		icon.height = source->height;
+		icon.bgra = source->bgra;
+		for (size_t i = 0; i + 3 < icon.bgra.size(); i += 4)
+		{
+			const unsigned a = icon.bgra[i + 3];
+			if (!whiteFlag)
+				for (unsigned c = 0; c < 3; ++c)
+				{
+					const unsigned colour = (((p >> (c * 8)) & 255) * (255 - a) + ((s >> (c * 8)) & 255) * a + 127) / 255;
+					icon.bgra[i + c] = uint8_t((unsigned(icon.bgra[i + c]) * colour + 127) / 255);
+				}
+			icon.bgra[i + 3] = 255; // the decal's alpha is a colour mask, not cloth transparency
+		}
+		icon.key = kFlagKeys + ++m_next;
+		return &icon;
 	}
 
 	void ButtonArt::setFontLayout(std::vector<FontGroup> groups)
