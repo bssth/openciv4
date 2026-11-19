@@ -821,6 +821,7 @@ if _walls:
 			printPythonError(e);
 		}
 		m_active = m_menu = false;
+		m_edit.reset();
 		m_items.clear();
 		m_version = -1;
 	}
@@ -1160,6 +1161,7 @@ if _walls:
 			info.name = narrow(key[1]);
 			info.part = key[2].cast<int>();
 			info.kind = kindName;
+			info.editable = item.kind == Kind::Edit && item.enabled && hitTest != HITTEST_NOHIT && item.x1 > item.x0 && item.y1 > item.y0;
 			info.widget = t[17].cast<int>();
 			info.data1 = t[18].cast<int>();
 			info.data2 = t[19].cast<int>();
@@ -1210,7 +1212,7 @@ if _walls:
 				item.text.clear();
 			}
 			const bool buttonLike = item.kind == Kind::ImageButton || item.kind == Kind::Button || item.kind == Kind::CheckBox ||
-				item.kind == Kind::Dropdown || item.kind == Kind::EndTurnButton || item.kind == Kind::Cell || item.kind == Kind::Scrollbar;
+				item.kind == Kind::Dropdown || item.kind == Kind::Edit || item.kind == Kind::EndTurnButton || item.kind == Kind::Cell || item.kind == Kind::Scrollbar;
 			// (a text, setText, is clicked as a button is: the scripts' "EXIT"s are texts)
 			item.mainInterface = !m_menu && info.screen == m_mainId;
 			item.interactive = hitTest != HITTEST_NOHIT && (buttonLike || item.kind == Kind::Text || item.kind == Kind::Movie || (info.widget >= 0 && info.widget != WIDGET_GENERAL) ||
@@ -1221,6 +1223,11 @@ if _walls:
 			items.push_back(std::move(item));
 			m_items.push_back(std::move(info));
 		}
+		if (m_edit && std::ranges::none_of(m_items, [&](const Item& item) {
+			return item.editable && item.screen == m_edit->screen && item.name == m_edit->name;
+		}))
+			m_edit.reset();
+		window.setEditing(m_edit.has_value());
 		window.setUi(std::move(items));
 		m_hovered = -2; // (the help again, the items are new)
 	}
@@ -1242,6 +1249,60 @@ if _walls:
 					std::printf("  mouse on %d/%s/%d\n", m_items[size_t(click.item)].screen, m_items[size_t(click.item)].name.c_str(), m_items[size_t(click.item)].part);
 				this->click(m_items[size_t(click.item)], click.right, click.shift, click.ctrl, click.alt);
 			}
+		try
+		{
+			auto screens = py::module_::import("oc4screens");
+			using Kind = render::MapWindow::TextInput::Kind;
+			for (const auto& input : window.takeTextInput())
+			{
+				if (!m_edit)
+					break;
+				if (input.kind == Kind::SelectAll)
+				{
+					m_editSelectAll = true;
+					continue;
+				}
+				if (input.kind == Kind::Finish)
+				{
+					m_edit.reset();
+					break;
+				}
+				if (input.kind == Kind::Tab)
+				{
+					m_editSelectAll = false;
+					const auto at = std::ranges::find_if(m_items, [&](const Item& i) { return i.screen == m_edit->screen && i.name == m_edit->name; });
+					if (at != m_items.end())
+						for (size_t n = 1; n <= m_items.size(); ++n)
+						{
+							const size_t index = size_t(at - m_items.begin());
+							const auto& next = m_items[(index + (input.shift ? m_items.size() - n : n)) % m_items.size()];
+							if (next.editable && next.screen == m_edit->screen) { m_edit = next; break; }
+						}
+					continue;
+				}
+				auto screen = screens.attr("CyGInterfaceScreen")("", m_edit->screen);
+				std::wstring text = toWide(screen.attr("getEditBoxString")(m_edit->name));
+				if (m_editSelectAll) { text.clear(); m_editSelectAll = false; }
+				if (input.kind == Kind::Backspace && !text.empty())
+				{
+					const wchar_t last = text.back();
+					text.pop_back();
+					if constexpr (sizeof(wchar_t) == 2)
+						if (last >= 0xDC00 && last <= 0xDFFF && !text.empty() && text.back() >= 0xD800 && text.back() <= 0xDBFF)
+							text.pop_back(); // delete a complete UTF-16 character on Windows
+				}
+				if (input.kind == Kind::Text)
+					for (wchar_t c : input.text)
+						if (c >= 32 && c != 127 && text.size() < 1024)
+							text += c; // pasted control characters are never editing commands
+				if constexpr (sizeof(wchar_t) == 2)
+					if (!text.empty() && text.back() >= 0xD800 && text.back() <= 0xDBFF)
+						text.pop_back(); // the size limit must not split a surrogate pair
+				screen.attr("setEditBoxString")(m_edit->name, wide(text));
+			}
+		}
+		catch (py::error_already_set& e) { printPythonError(e); m_edit.reset(); }
+		window.setEditing(m_edit.has_value());
 	}
 
 	bool Screens::click(const std::string& name, int part, bool shift, bool ctrl, bool alt)
@@ -1270,6 +1331,10 @@ if _walls:
 
 	void Screens::click(const Item& it, bool right, bool shift, bool ctrl, bool alt)
 	{
+		m_edit.reset();
+		m_editSelectAll = false;
+		if (it.editable && !right)
+			m_edit = it; // focus also keeps the ordinary NOTIFY_CLICKED path below
 		// What the script hears: a click (NOTIFY_CLICKED, the part), or an item of a list
 		// chosen (NOTIFY_LISTBOX_ITEM_SELECTED, its index; a table's column as the mouse's x).
 		constexpr int kClicked = 0, kListItem = 11;

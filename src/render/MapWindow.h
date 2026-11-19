@@ -111,6 +111,16 @@ namespace oc4::render
 			bool shift = false, ctrl = false, alt = false;
 		};
 		std::vector<KeyPress> takeKeys();
+		// A screen's edit box has text input until it loses focus.
+		struct TextInput
+		{
+			enum class Kind { Text, Backspace, SelectAll, Tab, Finish };
+			Kind kind = Kind::Text;
+			std::wstring text;
+			bool shift = false;
+		};
+		void setEditing(bool editing);
+		std::vector<TextInput> takeTextInput();
 
 		// The selected units' actions (the game's action buttons): their icons along the bottom,
 		// dimmed when they cannot be done now. A click on one is the host's to take; the help for

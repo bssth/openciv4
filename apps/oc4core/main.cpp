@@ -1714,6 +1714,7 @@ namespace
 			std::printf("  saved %s\n", opt.screenshot.string().c_str());
 		}
 		screens.closeMenu();
+		window.setEditing(false);
 		window.setUi({});
 		window.setUiWheel({});
 		sounds.setTalkMusic(-1, -1);

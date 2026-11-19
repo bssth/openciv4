@@ -25,6 +25,7 @@
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_mouse.h>
+#include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_video.h>
 
 #include <windows.h>
@@ -181,6 +182,8 @@ namespace oc4::render
 		std::filesystem::path screenshotFolder;
 		std::vector<MapWindow::PlotClick> clicks;
 		std::vector<MapWindow::KeyPress> keys;
+		bool editing = false;
+		std::vector<MapWindow::TextInput> textInput;
 		std::vector<MapWindow::ActionButton> actions;
 		std::vector<std::array<float, 4>> actionRects; // where each was drawn
 		std::optional<int> actionClick;
@@ -1013,10 +1016,26 @@ namespace oc4::render
 			overlay->quad(ix, iy, { 1, 1, 1 }, 1);
 		}
 
-		void onKey(unsigned k)
+		void onKey(unsigned k, std::optional<SDL_Keymod> eventModifiers = {})
 		{
 			auto& o = view->options;
 			const auto [shift, ctrl, alt] = heldModifiers();
+			if (editing && !popup.active())
+			{
+				using Kind = MapWindow::TextInput::Kind;
+				const SDL_Keymod mods = eventModifiers.value_or(SDL_GetModState());
+				const bool shortcut = (mods & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0;
+				if (shortcut && k == 'A') textInput.push_back({ Kind::SelectAll });
+				if (shortcut && k == 'V')
+				{
+					char* clipboard = SDL_GetClipboardText();
+					if (clipboard) { textInput.push_back({ Kind::Text, widen(clipboard) }); SDL_free(clipboard); }
+				}
+				if (k == key::Back) textInput.push_back({ Kind::Backspace });
+				if (k == key::Return || k == key::Escape) textInput.push_back({ Kind::Finish });
+				if (k == key::Tab) textInput.push_back({ Kind::Tab, {}, (mods & SDL_KMOD_SHIFT) != 0 });
+				return;
+			}
 			// A popup takes the keys (Esc closes it, Enter is its OK).
 			if (popup.active() && !ctrl)
 			{
@@ -1161,7 +1180,11 @@ namespace oc4::render
 			{
 				if (std::abs(x - downX) + std::abs(y - downY) < 5)
 					if (const auto click = ui.release(x, y, mods.shift, mods.ctrl, mods.alt))
+					{
+						// Later text events in the same SDL batch belong to this edit box.
+						editing = !click->right && ui.items()[size_t(click->item)].kind == UiItem::Kind::Edit;
 						uiClicks.push_back(*click);
+					}
 				return;
 			}
 			// On the action bar: its buttons.
@@ -1268,7 +1291,7 @@ namespace oc4::render
 
 		void handleHeldKeys(float dt)
 		{
-			if (!window || SDL_GetKeyboardFocus() != window)
+			if (!window || SDL_GetKeyboardFocus() != window || editing)
 				return;
 			const auto held = keyHeld;
 			const float speed = camera.distance * 0.9f * dt;
@@ -2219,12 +2242,14 @@ namespace oc4::render
 			case SDL_EVENT_KEY_DOWN:
 				// (Alt+F4 closes, through SDL's close request)
 				if (const unsigned k = keyOfSdl(e.key.key))
-					onKey(k);
+					onKey(k, e.key.mod);
 				break;
 			case SDL_EVENT_TEXT_INPUT: // (typed into a popup's edit box)
 				if (popup.active())
 					for (const wchar_t c : widen(e.text.text))
 						popup.character(c);
+				else if (editing)
+					textInput.push_back({ MapWindow::TextInput::Kind::Text, widen(e.text.text) });
 				break;
 			case SDL_EVENT_MOUSE_MOTION:
 				padPointer = false; // (the mouse's own, or a finger: no drawn pointer)
@@ -2359,6 +2384,11 @@ namespace oc4::render
 	}
 	std::vector<MapWindow::PlotClick> MapWindow::takeClicks() { return std::exchange(m->clicks, {}); }
 	std::vector<MapWindow::KeyPress> MapWindow::takeKeys() { return std::exchange(m->keys, {}); }
+	void MapWindow::setEditing(bool editing)
+	{
+		m->editing = editing;
+	}
+	std::vector<MapWindow::TextInput> MapWindow::takeTextInput() { return std::exchange(m->textInput, {}); }
 	void MapWindow::setActions(const std::vector<ActionButton>& actions)
 	{
 		if (actions == m->actions)
