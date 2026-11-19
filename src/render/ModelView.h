@@ -27,8 +27,10 @@ namespace oc4::render
 	class ModelView
 	{
 	public:
+		// decal: in place of the model's decal maps (a flag's cloth in a player's colours); its
+		// owner keeps it while the view lives.
 		ModelView(Renderer& renderer, const AssetResolver& assets, const std::string& nif, const std::string& kfm, float xRotation, float zRotation,
-			float scale, bool animate, const std::string& layers = {});
+			float scale, bool animate, const std::string& layers = {}, const GpuImage* decal = nullptr);
 
 		bool loaded() const { return m_gpu != nullptr; }
 		void update(float dt);

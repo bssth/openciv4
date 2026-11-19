@@ -24,7 +24,7 @@ namespace oc4::render
 	}
 
 	ModelView::ModelView(Renderer& renderer, const AssetResolver& assets, const std::string& nif, const std::string& kfm, float xRotation,
-		float zRotation, float scale, bool animate, const std::string& layers)
+		float zRotation, float scale, bool animate, const std::string& layers, const GpuImage* decal)
 		: m_renderer(renderer), m_xRotation(xRotation), m_zRotation(zRotation), m_scale(scale > 0 ? scale : 1), m_animate(animate)
 	{
 		try
@@ -127,7 +127,7 @@ namespace oc4::render
 							break;
 						}
 			m_particles = Particles(m_model, 7);
-			m_gpu = renderer.upload(m_model, assets, *at);
+			m_gpu = renderer.upload(m_model, assets, *at, decal);
 		}
 		catch (const std::exception&)
 		{

@@ -817,12 +817,15 @@ class CyGInterfaceScreen(object):
 			pass
 		self._model(szName, art, info.getButton(), iX, iY, iWidth, iHeight, eWidgetType, iData1, iData2, fXRot, fZRot, fScale, bAnimate)
 	def addFlagWidgetGFC(self, szName, iX, iY, iWidth, iHeight, iOwner, eWidgetType=-1, iData1=-1, iData2=-1):
-		"""A player's flag (the main interface's by the minimap): its civilization's flag picture,
-		an emblem on a banner in the player's colour; a white flag's picture is the whole flag in
-		its own colours (its alpha is no mask: "opaque:")."""
+		"""A player's flag (the main interface's by the minimap): the host draws the flag model of
+		the player's era waving, in the player's colours with the civilization's emblem (text:
+		the player). Where it cannot, its civilization's flag picture, an emblem on a banner in
+		the player's colour; a white flag's picture is the whole flag in its own colours (its
+		alpha is no mask: "opaque:")."""
 		w = self._s.add(szName, 'flag')
 		w.x, w.y, w.w, w.h = int(iX), int(iY), int(iWidth), int(iHeight)
 		w.wt, w.d1, w.d2 = _int(eWidgetType), _int(iData1), _int(iData2)
+		w.text = u'%d' % _int(iOwner)
 		try:
 			gc = _cpe.CyGlobalContext()
 			player = gc.getPlayer(int(iOwner))

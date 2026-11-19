@@ -236,6 +236,10 @@ namespace oc4::render
 			// ... or its KFM's clips as layers ("camera=<node>;<event code>:<e|l|o>;...", see
 			// ModelView): the spaceship screen's launch pad.
 			std::string modelLayers;
+			// A player's flag (Flag): its era's flag model and KFM, waving, its cloth the decal
+			// (texture; "opaque:" a white flag's) in the item's colour and this one.
+			std::string flagNif, flagKfm;
+			Color flagSecondary{};
 		};
 		void setUi(std::vector<UiItem> items);
 		// A screen's own minimap (a UiItem::Minimap of style "__screenmap": the military advisor's,

@@ -230,6 +230,7 @@ namespace oc4::host
 		}
 		loadCityLSystem();
 		loadPlotLSystem();
+		loadFlagScale();
 		loadAttachables(s);
 
 		s.rivers.clear();
@@ -248,6 +249,61 @@ namespace oc4::host
 			s.rivers.push_back(std::move(art));
 		}
 		m_haveArt = true;
+	}
+
+	// Flags have their own zoom-dependent scale, separate from UNIT_SCALE; the health bars their
+	// size and place. Mods may replace them.
+	void MapCapture::loadFlagScale()
+	{
+		const auto loc = m_assets.locate("xml/misc/civ4detailmanager.xml");
+		if (!loc)
+			return;
+		std::string error;
+		const auto doc = parseXml(m_assets.read(*loc), error);
+		if (!doc)
+			return;
+		const std::pair<const wchar_t*, std::vector<std::pair<float, float>>*> wanted[] = { { L"FLAG_SCALE", &m_snapshot.flagScale },
+			{ L"UNIT_HEALTH_BILLBOARD_SCALE", &m_snapshot.healthScale }, { L"UNIT_HEALTH_BILLBOARD_Z", &m_snapshot.healthZ },
+			{ L"UNIT_HEALTH_BILLBOARD_RADIUS", &m_snapshot.healthRadius } };
+		for (const auto& node : doc->children)
+			if (node->type == XmlNode::Type::Element)
+				for (const auto& fader : node->children)
+				{
+					const XmlNode* name = fader->type == XmlNode::Type::Element && fader->name == "Fader" ? fader->firstChildElement("Name") : nullptr;
+					const auto target = name ? std::ranges::find(wanted, name->text, [](const auto& w) { return std::wstring_view(w.first); }) : std::end(wanted);
+					if (target == std::end(wanted))
+						continue;
+					const bool scale = target->second == &m_snapshot.flagScale || target->second == &m_snapshot.healthScale;
+					std::vector<std::pair<float, float>> keys;
+					for (const auto& key : fader->children)
+						if (key->type == XmlNode::Type::Element && key->name == "Key")
+						{
+							float distance = 0, value = 0;
+							if (std::swscanf(key->text.c_str(), L"%f , %f", &distance, &value) == 2 && distance >= 0 && (value > 0 || !scale))
+								keys.emplace_back(distance, value);
+						}
+					if (!keys.empty())
+					{
+						std::ranges::sort(keys);
+						*target->second = std::move(keys);
+					}
+				}
+	}
+
+	FlagArt flagArt(int player)
+	{
+		FlagArt f;
+		if (player < 0 || player >= GC.getMAX_PLAYERS())
+			return f;
+		const CvPlayerAI& pl = CvPlayerAI::getPlayerNonInl(static_cast<PlayerTypes>(player));
+		f.primary = colorOf(pl.getPlayerColor(), true);
+		f.secondary = colorOf(pl.getPlayerColor(), false);
+		f.decal = utf8(pl.getFlagDecal().c_str());
+		f.white = pl.isWhiteFlag();
+		const int era = pl.getCurrentEra(), medieval = GC.getInfoTypeForString("ERA_MEDIEVAL", true), industrial = GC.getInfoTypeForString("ERA_INDUSTRIAL", true);
+		f.model = ARTFILEMGR.getMiscArtInfo(industrial >= 0 && era >= industrial ? "ART_UNITGROUP_FLAG_MODERN" :
+			medieval >= 0 && era >= medieval ? "ART_UNITGROUP_FLAG_MEDIEVAL" : "ART_UNITGROUP_FLAG_ANCIENT");
+		return f;
 	}
 
 	int MapCapture::modelIndex(const void* art, const char* nif, const char* kfm, float scale, const char* shadow, const char* shadowNode, float shadowScale)
@@ -768,6 +824,15 @@ namespace oc4::host
 		s.cameraStartDistance = defineOr("CAMERA_START_DISTANCE", 2200);
 		s.cameraTopDistance = defineOr("CAMERA_SMALLEST_MAX_DISTANCE", 7000);
 		s.cameraCityDistance = defineOr("CAMERA_CITY_ZOOM_IN_DISTANCE", 3500);
+		s.flagOffset = { GC.getDefineFLOAT("FLAG_OFFSET_X"), GC.getDefineFLOAT("FLAG_OFFSET_Y") };
+		const auto miscModel = [&](const char* tag) {
+			const CvArtInfoMisc* art = ARTFILEMGR.getMiscArtInfo(tag);
+			return art ? modelIndex(art, art->getNIF(), art->getKFM(), art->getScale()) : -1;
+		};
+		s.flagGlow = miscModel("ART_UNITGROUP_FLAG_GLOW");
+		// (no art define names the flag's medallions: the engine's own files, as the original's)
+		static const char medallionsArt = 0;
+		s.flagMedallions = modelIndex(&medallionsArt, "Art/Units/Flag/Medallions.nif", "Art/Units/Flag/Medallions.kfm", 1);
 		// (the pitches are negative there: below the horizon)
 		s.cameraLowerPitch = std::abs(GC.getDefineFLOAT("CAMERA_LOWER_PITCH")) > 0 ? std::abs(GC.getDefineFLOAT("CAMERA_LOWER_PITCH")) : 28;
 		s.cameraUpperPitch = std::abs(GC.getDefineFLOAT("CAMERA_UPPER_PITCH")) > 0 ? std::abs(GC.getDefineFLOAT("CAMERA_UPPER_PITCH")) : 90;
@@ -791,8 +856,12 @@ namespace oc4::host
 			v.alive = pl.isAlive();
 			if (!v.alive)
 				continue;
-			v.primary = colorOf(pl.getPlayerColor(), true);
-			v.secondary = colorOf(pl.getPlayerColor(), false);
+			const FlagArt flag = flagArt(p);
+			v.primary = flag.primary;
+			v.secondary = flag.secondary;
+			v.flagDecal = flag.decal;
+			v.whiteFlag = flag.white;
+			v.flagModel = flag.model ? modelIndex(flag.model, flag.model->getNIF(), flag.model->getKFM(), flag.model->getScale()) : -1;
 			v.name = utf8(pl.getName());
 			v.civilization = utf8(pl.getCivilizationShortDescription());
 			v.score = game.getPlayerScore(static_cast<PlayerTypes>(p));
@@ -940,7 +1009,19 @@ namespace oc4::host
 							u.actionEffect = a.effect;
 						}
 					u.count = seenCount;
+					for (int k = 0; k < count && u.medallions.size() < 7; ++k)
+						if (const CvUnit* any = plot->getUnitByIndex(k); seen(any))
+							u.medallions.push_back(!selection || !selection->isSelected(any) || any->getOwner() != GC.getGame().getActivePlayer() ? 3
+								: !any->canMove() ? 2 : any->hasMoved() ? 4 : 1);
 					u.health = shown->maxHitPoints() > 0 ? float(shown->currHitPoints()) / float(shown->maxHitPoints()) : 1.0f;
+					// (the health bar's length, as the engine asks the DLL for it: the unit's strength
+					// now times CvUnit::getHealthBarModifier, HEALTH_BAR_WIDTH over twice the best land
+					// unit's strength; none for a unit without strength, nor before there is a best
+					// land unit: the modifier is then not finite. Only DllExport functions: the
+					// Windows DLL exports nothing else.)
+					if (const float modifier = shown->getHealthBarModifier(); std::isfinite(modifier))
+						u.healthBar = (shown->getDomainType() == DOMAIN_AIR ? shown->airCurrCombatStrFloat(nullptr) : shown->currCombatStrFloat(nullptr, nullptr)) *
+							modifier;
 					u.promotionReady = shown->isPromotionReady();
 					if (const char* button = shown->getButton())
 						u.button = button;

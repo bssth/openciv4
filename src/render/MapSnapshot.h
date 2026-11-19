@@ -124,6 +124,9 @@ namespace oc4::render
 	struct PlayerView
 	{
 		Color primary, secondary;
+		std::string flagDecal;
+		bool whiteFlag = false; // a full-colour flag instead of a two-colour alpha mask
+		int flagModel = -1; // era's flag model and animation, into MapSnapshot::models
 		bool alive = false;
 		std::string name, civilization;
 		int score = 0, cities = 0;
@@ -158,6 +161,7 @@ namespace oc4::render
 		std::vector<int> models; // one per figure of the formation, into MapSnapshot::models
 		int count = 1;           // units on the plot
 		float health = 1;
+		float healthBar = 0; // its health bar's length in the original's units (its strength now)
 		std::string button; // the shown unit's button art (the unit layer's icons)
 		bool selected = false;   // the player has selected units there
 		bool promotionReady = false; // enough experience and at least one promotion it can take
@@ -183,6 +187,9 @@ namespace oc4::render
 		int actionX = -1, actionY = -1;
 		std::string actionEffect;
 		bool air = false; // a plane: its missions are flown to their plot and back
+		// The flag's medallions: one a unit seen on the plot (up to 7), its state as
+		// Medallions.kfm's (1 can move, 2 cannot, 3 white: not selected, 4 moved, can go on).
+		std::vector<uint8_t> medallions;
 	};
 
 	// A battle the game shows (its CvBattleDefinition): the game holds it for `slices` of its
@@ -228,6 +235,18 @@ namespace oc4::render
 	{
 		// Content (art); `artGeneration` changes when it does.
 		uint64_t artGeneration = 0;
+		int flagGlow = -1; // selected unit's flag highlight, into models
+		// The medallions over a flag (Art/Units/Flag/Medallions.nif): one a unit on the plot, up to
+		// 7, white, or for the selected units how they can move; into models.
+		int flagMedallions = -1;
+		struct { float x = -0.667f, y = 0; } flagOffset; // GlobalDefines, relative to half a plot
+		// CIV4DetailManager's FLAG_SCALE: camera distance, model scale multiplier.
+		std::vector<std::pair<float, float>> flagScale{ { 700, 0.6f }, { 1500, 0.7f }, { 3000, 0.9f }, { 5000, 1.2f } };
+		// A unit's health bar (CIV4DetailManager's UNIT_HEALTH_BILLBOARD_* by camera distance): its
+		// scale (how thick it is), its height over the ground, and how far from the plot's middle
+		// towards the camera it stands (less: behind it).
+		std::vector<std::pair<float, float>> healthScale{ { 700, 3 }, { 2500, 2 } }, healthZ{ { 700, 80 }, { 5000, 70 } },
+			healthRadius{ { 700, 0 }, { 2000, -60 }, { 5000, -80 } };
 		std::vector<TerrainArt> terrains;  // by TerrainTypes
 		int hillTerrain = -1, peakTerrain = -1; // graphical terrains drawn over hills and peaks
 		std::vector<FeatureArt> features; // by FeatureTypes

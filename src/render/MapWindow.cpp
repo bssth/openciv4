@@ -227,6 +227,7 @@ namespace oc4::render
 		// The models the screens show on their own, by art and how they are turned.
 		struct Shown
 		{
+			std::shared_ptr<GpuImage> decal; // (a flag's cloth: outlives its view)
 			std::unique_ptr<ModelView> view;
 			const GpuImage* bitmap = nullptr;
 			bool used = false;
@@ -246,6 +247,9 @@ namespace oc4::render
 		std::vector<std::string> moviesDone;
 		static std::string modelKey(const UiItem& it)
 		{
+			if (it.kind == UiItem::Kind::Flag)
+				return std::format("flag|{}|{}|{}|{},{},{}|{},{},{}", it.flagNif, it.flagKfm, it.texture, it.color.r, it.color.g, it.color.b,
+					it.flagSecondary.r, it.flagSecondary.g, it.flagSecondary.b);
 			return std::format("{}|{}|{}|{}|{}|{}|{}", it.texture, it.texture2, it.modelTilt, it.modelTurn, it.modelScale, it.modelAnimated, it.modelLayers);
 		}
 		std::vector<MapWindow::UiClick> uiClicks;
@@ -1376,6 +1380,24 @@ namespace oc4::render
 				m.used = false;
 			for (const auto& it : ui.items())
 			{
+				if (it.kind == UiItem::Kind::Flag && !it.flagNif.empty())
+				{
+					// A player's flag: its era's flag model waving, its cloth the decal in the
+					// player's colours (as the map's flags).
+					Shown& m = models[modelKey(it)];
+					if (!m.view)
+					{
+						const bool white = it.texture.starts_with("opaque:");
+						if (const ButtonArt::Icon* cloth = art.flag(white ? it.texture.substr(7) : it.texture, it.color, it.flagSecondary, white))
+						{
+							const std::span<const uint8_t> bytes(cloth->bgra);
+							m.decal = renderer->createTexture(cloth->width, cloth->height, 1, 1, TextureFormat::BGRA8, std::span(&bytes, 1));
+						}
+						m.view = std::make_unique<ModelView>(*renderer, resolver, it.flagNif, it.flagKfm, 0.0f, 0.0f, 1.0f, true, std::string(), m.decal.get());
+					}
+					m.used = true;
+					continue;
+				}
 				if (it.kind != UiItem::Kind::Model || it.texture.empty())
 					continue;
 				Shown& m = models[modelKey(it)];
@@ -1450,7 +1472,7 @@ namespace oc4::render
 			for (auto& [key, m] : models)
 				m.bitmap = nullptr;
 			for (const auto& it : ui.items())
-				if (it.kind == UiItem::Kind::Model)
+				if (it.kind == UiItem::Kind::Model || (it.kind == UiItem::Kind::Flag && !it.flagNif.empty()))
 					if (const auto at = models.find(modelKey(it)); at != models.end() && at->second.view->loaded() && !at->second.bitmap)
 						at->second.bitmap = at->second.view->render(uint32_t(std::max(1.0f, (it.x1 - it.x0) * overlay->scale())), uint32_t(std::max(1.0f, (it.y1 - it.y0) * overlay->scale())));
 		}
@@ -1462,7 +1484,7 @@ namespace oc4::render
 				drawMovie(it);
 				return true;
 			}
-			if (it.kind == UiItem::Kind::Model)
+			if (it.kind == UiItem::Kind::Model || it.kind == UiItem::Kind::Flag)
 			{
 				const auto m = models.find(modelKey(it));
 				if (m == models.end() || !m->second.bitmap)
