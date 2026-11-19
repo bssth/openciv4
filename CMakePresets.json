@@ -3,6 +3,19 @@
 	"cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
 	"configurePresets": [
 		{
+			"name": "linux-base",
+			"hidden": true,
+			"generator": "Ninja",
+			"condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+			"cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++", "OC4_SPIRV_SHADERS": true }
+		},
+		{
+			"name": "linux-headless",
+			"inherits": "linux-base",
+			"binaryDir": "${sourceDir}/build/linux-headless",
+			"cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+		},
+		{
 			"name": "vs2026",
 			"displayName": "Visual Studio 2026 solution (x64)",
 			"description": "Generates build/vs2026/openciv4.sln",
@@ -41,6 +54,7 @@
 		}
 	],
 	"buildPresets": [
+		{ "name": "linux-headless", "configurePreset": "linux-headless" },
 		{ "name": "vs2026-release", "configurePreset": "vs2026", "configuration": "Release" },
 		{ "name": "vs2026-debug", "configurePreset": "vs2026", "configuration": "Debug" },
 		{ "name": "release", "configurePreset": "release" },
