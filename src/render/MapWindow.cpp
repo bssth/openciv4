@@ -1168,8 +1168,9 @@ namespace oc4::render
 			}
 			// On the main interface's minimap: the camera goes there (and follows while held), as the
 			// original's (where the team's map is not centred yet, the minimap and the camera's leash
-			// keep the map's edges hidden).
-			if (down && left && !popup.active() && ui.active() && onMinimap(x, y) && ui.onMainMinimap(x, y))
+			// keep the map's edges hidden). It works with a popup up too (the
+			// map can be looked over while choosing a tech, a build or a name).
+			if (down && left && ui.active() && onMinimap(x, y) && ui.onMainMinimap(x, y))
 			{
 				SDL_CaptureMouse(true);
 				minimapDrag = true;
