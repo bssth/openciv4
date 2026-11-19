@@ -439,13 +439,21 @@ namespace oc4::host
 			player(p).init(static_cast<PlayerTypes>(p));
 		game.initDiplomacy();
 
-		// As the original engine plays a scenario: its map, its starting plots, the era's
-		// free things (CvGame::setInitialItems: units where none are), then its own.
+		// As the original engine plays a scenario: its map, its starting plots, the era's free
+		// techs and gold, then the scenario's own items (units, cities, its gold), and only then
+		// free units, for players the scenario left without units or cities. CvGame::setInitialItems
+		// would give free units before the scenario's are placed, so every player would get them.
 		if (wb.attr("applyMapDesc")().cast<int>() < 0)
 			throw std::runtime_error("cannot apply the scenario's map");
 		wb.attr("getAssignedStartingPlots")();
-		game.setInitialItems();
+		game.initFreeState();
+		game.assignStartingPlots();
+		game.normalizeStartingPlots();
 		wb.attr("applyInitialItems")();
+		game.initFreeUnits();
+		for (int p = 0; p < maxPlayers(); ++p)
+			if (player(p).isAlive())
+				player(p).AI_updateFoundValues();
 		game.initScoreCalculation();
 		game.setFinalInitialized(true);
 		game.initEvents();
