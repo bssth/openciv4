@@ -417,7 +417,9 @@ namespace oc4::host
 			const PlayerTypes me = GC.getGame().getActivePlayer();
 			return me != NO_PLAYER && CvPlayerAI::getPlayerNonInl(me).isTurnActive() && ui.isEndTurnMessage();
 		});
-		host.def("ui_end_turn_state", [&ui] { return int(ui.isEndTurnMessage() ? END_TURN_GO : END_TURN_OVER_HIGHLIGHT); });
+		// (the original's: END_TURN_GO, a green button, while units can still move; the turn over,
+		// the end of turn message up, END_TURN_OVER_HIGHLIGHT, a red one)
+		host.def("ui_end_turn_state", [&ui] { return int(ui.isEndTurnMessage() ? END_TURN_OVER_HIGHLIGHT : END_TURN_GO); });
 		host.def("ui_should_show_research", [&ui] {
 			const PlayerTypes me = GC.getGame().getActivePlayer();
 			return me != NO_PLAYER && CvPlayerAI::getPlayerNonInl(me).getCurrentResearch() == NO_TECH && !ui.isCityScreenUp();

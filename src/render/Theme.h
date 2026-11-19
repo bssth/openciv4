@@ -120,6 +120,9 @@ namespace oc4::render
 		};
 		const Progress* progress(std::string_view style);
 
+		// A colour of the theme's by its full name ("SF_CtrlTheme_Civ4_Control_Color_EndTurnDot_Red");
+		// the fallback when it has none.
+		Color colour(std::string_view name, Color fallback);
 		// The bitmap with the colour added, less half (the AddSigned combine): how the end of turn
 		// button's glass takes its red or green.
 		Bitmap addSigned(const Bitmap& bitmap, Color colour);

@@ -938,6 +938,15 @@ namespace oc4::render
 		return out;
 	}
 
+	Color Theme::colour(std::string_view name, Color fallback)
+	{
+		Color c = fallback;
+		float alpha = 1;
+		if (m->loaded && !m->colour(nullptr, m->anywhere(std::string(name)), c, alpha))
+			c = fallback;
+		return c;
+	}
+
 	Theme::Bitmap Theme::addSigned(const Bitmap& b, Color c)
 	{
 		if (!b)

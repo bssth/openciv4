@@ -12,6 +12,15 @@
 
 namespace oc4::render
 {
+	// The end of turn message's beat, as the original's (measured in Wine at 120 frames a second):
+	// every 1.5 s it rises over 0.5 s, holds 0.5 s, sinks over 0.5 s. 0 at its lowest, 1 where
+	// the hold starts and ends (1.5 in its middle: callers clamp).
+	static float endTurnBeat(double clock)
+	{
+		const double t = std::fmod(std::max(clock, 0.0), 1.5) / 0.5;
+		return float(std::min(t, 3 - t));
+	}
+
 	namespace
 	{
 		using Kind = MapWindow::UiItem::Kind;
@@ -504,7 +513,9 @@ namespace oc4::render
 				break;
 			case Kind::EndTurnText:
 				if (!it.text.empty())
-					o.richText(widen(it.text), sw / 2, y0 + 6, m_sizes[3], false, { 0.85f, 0.85f, 0.8f }, 0.6f + 0.4f * float(std::sin(clock * 3)), Overlay::Align::Center);
+					// (blinking with the end turn button's beat: gone around its darkest)
+					o.richText(widen(it.text), sw / 2, y0 + 6, m_sizes[3], false, { 0.85f, 0.85f, 0.8f },
+						std::clamp((endTurnBeat(clock) - 0.25f) / 0.75f, 0.0f, 1.0f), Overlay::Align::Center);
 				break;
 			case Kind::Multiline:
 				o.richBlock(widen(it.text), x0, y0, std::max(20.0f, w), fontSize(it.font), fontBold(it.font), kText, alpha);
@@ -641,18 +652,27 @@ namespace oc4::render
 			}
 			case Kind::EndTurnButton:
 			{
-				// The engine's own button where the script puts it: green when the turn is done.
+				// The engine's own button where the script puts it: the style's brass ring, and over it
+				// the theme's glass (SF_CtrlTheme_Civ4_Control_Button_EndTurn_Skin, at its size in the
+				// middle) taking the state's colour, added less half (AddSigned): EndTurnDot_Green while
+				// units can still move, steady; EndTurnDot_Red once the turn is over, sinking to
+				// EndTurnDot_DarkRed and back with the end of turn message's beat.
 				const float cx = w > 0 ? (x0 + x1) / 2 : map ? map->x0 - 22 : sw - 240, cy = h > 0 ? (y0 + y1) / 2 : map ? map->y0 + 18 : sh - 140;
 				const float r = w > 0 ? std::min(w, h) / 2 - 1 : 15;
 				const bool green = it.text == "Green";
-				const float pulse = green ? 0.75f + 0.25f * float(std::sin(clock * 5)) : 1.0f;
-				// The theme's glass takes the colour (EndTurnDot_Green / Red: added to it, less half),
-				// the green one pulsing.
-				const Color colour = green ? Color{ 0, std::round(0.75f * pulse * 16) / 16, 0 } : Color{ 0.75f, 0, 0 };
-				const Theme::Button* frame = m_theme.loaded() && !it.style.empty() ? m_theme.button(it.style) : nullptr;
-				if (frame && !frame->skin[0].empty())
+				Color colour = m_theme.colour("SF_CtrlTheme_Civ4_Control_Color_EndTurnDot_Green", { 0, 0.75f, 0 });
+				if (!green)
 				{
-					Theme::Skin glass = frame->skin[hot && !frame->skin[1].empty() ? 1 : 0];
+					const Color red = m_theme.colour("SF_CtrlTheme_Civ4_Control_Color_EndTurnDot_Red", { 0.75f, 0, 0 });
+					const Color dark = m_theme.colour("SF_CtrlTheme_Civ4_Control_Color_EndTurnDot_DarkRed", { 0.39f, 0, 0 });
+					const float k = std::min(endTurnBeat(clock), 1.0f);
+					colour = { dark.r + (red.r - dark.r) * k, dark.g + (red.g - dark.g) * k, dark.b + (red.b - dark.b) * k };
+				}
+				const Theme::Button* frame = m_theme.loaded() && !it.style.empty() ? m_theme.button(it.style) : nullptr;
+				Theme::Skin glass = m_theme.loaded() ? m_theme.skin("", "SF_CtrlTheme_Civ4_Control_Button_EndTurn_Skin") : Theme::Skin{};
+				if (frame && !frame->skin[0].empty() && !glass.empty())
+				{
+					Theme::draw(o, frame->skin[hot && !frame->skin[1].empty() ? 1 : 0], cx - r, cy - r, cx + r, cy + r, it.alpha);
 					for (Theme::Layer& l : glass)
 						l.image = m_theme.addSigned(l.image, colour);
 					Theme::draw(o, glass, cx - r, cy - r, cx + r, cy + r, it.alpha);

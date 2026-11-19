@@ -2211,7 +2211,8 @@ class CyInterface(object):
 
 	def getEndTurnState(self): return _cpe.EndTurnButtonStates(oc4host.ui_end_turn_state())
 	def shouldDisplayEndTurn(self): return oc4host.ui_end_turn_message()
-	def shouldDisplayEndTurnButton(self): return True
+	# (the original hides the button while the other civilizations move)
+	def shouldDisplayEndTurnButton(self): return oc4host.ui_turn_active()
 	def shouldDisplayWaitingOthers(self): return not oc4host.ui_turn_active()
 	def shouldDisplayWaitingYou(self): return False
 	def shouldDisplayReturn(self): return False
