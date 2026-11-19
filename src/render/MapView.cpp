@@ -158,6 +158,13 @@ float valueNoise(float2 p, float scale)
 	return lerp(lerp(v[0], v[1], f.x), lerp(v[2], v[3], f.x), f.y);
 }
 
+// The ground's light, as measured in the original: the sun from the south-east (slopes facing the
+// camera lit, the far side of a ridge dark), flat land a little lighter and bluer than its tiles,
+// and how much a slope's light changes with its angle to the sun.
+static const float3 kGroundSun = float3(-0.39, 0.59, -0.70);
+static const float3 kGroundLight = float3(0.012, 0.024, 0.07);
+static const float kSlopeLight = 0.6;
+
 static const int2 kCorner[4] = { int2(0, 1), int2(1, 1), int2(1, 0), int2(0, 0) }; // top left, top right, bottom right, bottom left
 
 float4 PSTerrain(PSIn i) : SV_Target
@@ -193,7 +200,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 	uint entry[6] = { lo.r, lo.g, lo.b, lo.a, hi.r, hi.g };
 	float3 color = 0;
 	float3 detail = 0.5; // blended as the colours are
-	float2 dp = p * 3.0; // detail repeats
+	float2 dp = p * 0.5; // detail repeats every 2 plots (the landscape's 4 plots a cell, texture scale 2)
 	[loop] for (int step = 0; step < 6; ++step)
 	{
 		uint e = entry[step];
@@ -206,8 +213,9 @@ float4 PSTerrain(PSIn i) : SV_Target
 		detail = step == 0 ? ds : lerp(detail, ds, s.a);
 	}
 
-	// The detail textures sharpen the ground up close (their mips fade to grey far away).
-	color *= detail * 2;
+	// The detail textures sharpen the ground up close (their mips fade to grey far away). Added
+	// round their grey, as the original adds them: the ground keeps its tiles' colour.
+	color += detail - 0.5;
 
 	// Features painted on the ground (flood plains: grass on the plot's own ground): blended
 	// between the plot centres that have them, in patches that grow together towards the
@@ -235,12 +243,15 @@ float4 PSTerrain(PSIn i) : SV_Target
 		float4 tex = decals.Sample(decalSampler, float3(p * 2, d - 1)); // (tiled: wrapping)
 		float patches = 0.5 * valueNoise(p, 3) + 0.3 * valueNoise(p, 7) + 0.2 * valueNoise(p, 17);
 		float cover = amount * lerp(0.3, 1.0, nearRiver);
-		color = lerp(color, tex.rgb * detail * 2, smoothstep(0.45, 0.65, cover * (0.35 + 0.95 * patches)));
+		color = lerp(color, tex.rgb + detail - 0.5, smoothstep(0.45, 0.65, cover * (0.35 + 0.95 * patches)));
 	}
 
 	float3 n = normalize(i.nrm);
-	float ndl = saturate(dot(n, -lightDir));
-	color *= ambientLight * 1.25 + lightColor * ndl * 0.7;
+	// Lit as the original lights the ground: its light is added, not multiplied, so flat land
+	// keeps its tiles' own colour (grassland as bright as GrassBlend.dds) and slopes are lighter
+	// or darker by how much more or less they face the sun than flat land does.
+	float ndl = saturate(dot(n, -kGroundSun));
+	color = saturate(color + kGroundLight + (ndl - saturate(-kGroundSun.z)) * kSlopeLight);
 
 	// Water by its depth over the ground, so that shores have no edge: tint and sun glint.
 	float depth = saturate((waterZ - i.world.z) / (0.04 * plotSize));
@@ -1278,44 +1289,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 						if (q->riverEast)
 							segment(qx + 1, qy, qx + 1, qy + 1);
 					}
-			// Flat land is not flat: gentle relief, so that the light varies over it as in the
-			// original (the same blend tiles under an even light look like one tile repeated).
-			// Faded out towards water and river beds, so that shores and rivers keep their levels.
-			const auto land = [&](int x, int y) {
-				const PlotView* p = map.plot(x, y);
-				return p && !p->water ? 1.0f : 0.0f;
-			};
-			const float l0 = land(ix, iy) + (land(ix + 1, iy) - land(ix, iy)) * fx;
-			const float l1 = land(ix, iy + 1) + (land(ix + 1, iy + 1) - land(ix, iy + 1)) * fx;
-			const float onLand = smoother((l0 + (l1 - l0) * fy - 0.5f) * 2);
-			if (onLand > 0)
-				h += relief(px, py) * kRelief * S() * onLand * (1 - bed);
 			return h - bed * 0.025f * S();
-		}
-
-		static constexpr float kRelief = 0.12f; // of a plot, either way
-
-		// Smooth noise in [-1, 1] over the map in plots, a few octaves of value noise whose
-		// lattices have whole cells a plot, so that a wrapping map has no seam.
-		float relief(float px, float py) const
-		{
-			const auto octave = [&](int cells, int salt) {
-				const float qx = px * float(cells), qy = py * float(cells);
-				const int x0 = int(std::floor(qx)), y0 = int(std::floor(qy));
-				const float fx = smoother(qx - float(x0)), fy = smoother(qy - float(y0));
-				const int periodX = map.width * cells, periodY = map.height * cells;
-				const auto at = [&](int x, int y) {
-					if (map.wrapX)
-						x = (x % periodX + periodX) % periodX;
-					if (map.wrapY)
-						y = (y % periodY + periodY) % periodY;
-					return unitFloat(hash(x, y, salt)) * 2 - 1;
-				};
-				const float a = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * fx;
-				const float b = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * fx;
-				return a + (b - a) * fy;
-			};
-			return 0.6f * octave(1, 101) + 0.3f * octave(2, 102) + 0.1f * octave(4, 103);
 		}
 
 		void buildTerrain()

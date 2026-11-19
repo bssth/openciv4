@@ -681,28 +681,28 @@ struct VSTerrain_in
 vertex VSTerrain_out VSTerrain(VSTerrain_in in [[stage_in]], constant Frame& _24 [[buffer(0)]], constant Terrain& _134 [[buffer(1)]])
 {
     VSTerrain_out out = {};
-    float3 _224 = in.i_pos + float3(_134.worldOffset);
-    float3 _215 = _224;
-    float3 _343;
+    float3 _233 = in.i_pos + float3(_134.worldOffset);
+    float3 _224 = _233;
+    float3 _352;
     do
     {
         if (_24.globe.z <= 0.0)
         {
-            _343 = _224;
+            _352 = _233;
             break;
         }
-        float2 _241 = _224.xy - _24.globe.xy;
+        float2 _250 = _233.xy - _24.globe.xy;
         if (_24.globe.w > 0.0)
         {
-            _241.x -= (_24.globe.w * rint(_241.x / _24.globe.w));
+            _250.x -= (_24.globe.w * rint(_250.x / _24.globe.w));
         }
-        float _280 = length(_241);
-        float _285 = fast::min(_280 / _24.globe.z, 3.141590118408203125);
-        float _298 = _24.globe.z + _215.z;
-        _343 = float3(_24.globe.xy + ((select(float2(0.0), _241 / float2(_280), bool2(_280 > 9.9999997473787516355514526367188e-05)) * _298) * sin(_285)), (_298 * cos(_285)) - _24.globe.z);
+        float _289 = length(_250);
+        float _294 = fast::min(_289 / _24.globe.z, 3.141590118408203125);
+        float _307 = _24.globe.z + _224.z;
+        _352 = float3(_24.globe.xy + ((select(float2(0.0), _250 / float2(_289), bool2(_289 > 9.9999997473787516355514526367188e-05)) * _307) * sin(_294)), (_307 * cos(_294)) - _24.globe.z);
         break;
     } while(false);
-    out.gl_Position = float4(_343, 1.0) * _24.viewProj;
+    out.gl_Position = float4(_352, 1.0) * _24.viewProj;
     out._entryPointOutput_world = in.i_pos;
     out._entryPointOutput_nrm = in.i_nrm;
     return out;
@@ -800,661 +800,661 @@ struct PSTerrain_in
     float3 i_nrm [[user(locn1)]];
 };
 
-fragment PSTerrain_out PSTerrain(PSTerrain_in in [[stage_in]], constant Frame& _922 [[buffer(0)]], constant Terrain& _56 [[buffer(1)]], texture2d<float> plots [[texture(0)]], texture2d_array<float> atlas [[texture(1)]], texture2d_array<float> decals [[texture(2)]], texture2d_array<float> details [[texture(3)]], texture2d<float> cells [[texture(4)]], texture2d<float> borders [[texture(5)]], sampler atlasSampler [[sampler(1)]], sampler decalSampler [[sampler(2)]], sampler detailSampler [[sampler(3)]])
+fragment PSTerrain_out PSTerrain(PSTerrain_in in [[stage_in]], constant Frame& _963 [[buffer(0)]], constant Terrain& _56 [[buffer(1)]], texture2d<float> plots [[texture(0)]], texture2d_array<float> atlas [[texture(1)]], texture2d_array<float> decals [[texture(2)]], texture2d_array<float> details [[texture(3)]], texture2d<float> cells [[texture(4)]], texture2d<float> borders [[texture(5)]], sampler atlasSampler [[sampler(1)]], sampler decalSampler [[sampler(2)]], sampler detailSampler [[sampler(3)]])
 {
     PSTerrain_out out = {};
-    float4 _2848;
+    float4 _2856;
     do
     {
-        float2 _1349 = in.i_world.xy / float2(_56.plotSize);
-        float2 _1259 = _1349;
-        float2 _1352 = _1349 - float2(0.5);
-        int2 _1355 = int2(floor(_1352));
-        int2 _1261 = _1355;
-        float2 _1359 = _1352 - float2(_1355);
-        float2 _1262 = _1359;
-        float2 _1365 = float2(_1262.x, 1.0 - _1262.y);
-        float2 _1264 = dfdx(_1352);
-        float2 _1265 = dfdy(_1352);
-        float2 _1375 = float2(_1264.x, -_1264.y);
-        float2 _1381 = float2(_1265.x, -_1265.y);
-        spvUnsafeArray<int2, 4> _1270 = spvUnsafeArray<int2, 4>({ int2(0, 1), int2(1), int2(1, 0), int2(0) });
-        int2 _1391 = _1355 + _1270[0];
-        int2 _1994 = _1391;
-        float2 _2021 = float2(_56.mapSize);
-        int2 _2016 = _1391 - int2(_2021 * floor((float2(_1391) + float2(0.5)) / _2021));
-        _1994.x = (_56.wrapX != int(0u)) ? _2016.x : clamp(_1994.x, 0, _56.mapSize.x - 1);
-        _1994.y = (_56.wrapY != int(0u)) ? _2016.y : clamp(_1994.y, 0, _56.mapSize.y - 1);
-        uint4 _1269 = uint4(rint(plots.read(uint2(int3(_1994, 0).xy), 0) * 65535.0));
-        spvUnsafeArray<float2, 4> _1272;
-        _1272[0] = float2(float(int((_1269.w & 4u) != 0u)), float(int((_1269.w & 8u) != 0u)));
-        spvUnsafeArray<uint, 4> _1273;
-        _1273[0] = _1269.w >> uint(8);
-        _1270 = _485;
-        int2 _4892 = _1355 + _1270[1];
-        _1994 = _4892;
-        float2 _4896 = float2(_56.mapSize);
-        _2016 = _4892 - int2(_4896 * floor((float2(_4892) + float2(0.5)) / _4896));
-        _1994.x = (_56.wrapX != int(0u)) ? _2016.x : clamp(_1994.x, 0, _56.mapSize.x - 1);
-        _1994.y = (_56.wrapY != int(0u)) ? _2016.y : clamp(_1994.y, 0, _56.mapSize.y - 1);
-        _1269 = uint4(rint(plots.read(uint2(int3(_1994, 0).xy), 0) * 65535.0));
-        _1272[1] = float2(float(int((_1269.w & 4u) != 0u)), float(int((_1269.w & 8u) != 0u)));
-        _1273[1] = _1269.w >> uint(8);
-        _1270 = _485;
-        int2 _5009 = _1355 + _1270[2];
-        _1994 = _5009;
-        float2 _5013 = float2(_56.mapSize);
-        _2016 = _5009 - int2(_5013 * floor((float2(_5009) + float2(0.5)) / _5013));
-        _1994.x = (_56.wrapX != int(0u)) ? _2016.x : clamp(_1994.x, 0, _56.mapSize.x - 1);
-        _1994.y = (_56.wrapY != int(0u)) ? _2016.y : clamp(_1994.y, 0, _56.mapSize.y - 1);
-        _1269 = uint4(rint(plots.read(uint2(int3(_1994, 0).xy), 0) * 65535.0));
-        _1272[2] = float2(float(int((_1269.w & 4u) != 0u)), float(int((_1269.w & 8u) != 0u)));
-        _1273[2] = _1269.w >> uint(8);
-        _1270 = _485;
-        int2 _5126 = _1355 + _1270[3];
-        _1994 = _5126;
-        float2 _5130 = float2(_56.mapSize);
-        _2016 = _5126 - int2(_5130 * floor((float2(_5126) + float2(0.5)) / _5130));
-        _1994.x = (_56.wrapX != int(0u)) ? _2016.x : clamp(_1994.x, 0, _56.mapSize.x - 1);
-        _1994.y = (_56.wrapY != int(0u)) ? _2016.y : clamp(_1994.y, 0, _56.mapSize.y - 1);
-        _1269 = uint4(rint(plots.read(uint2(int3(_1994, 0).xy), 0) * 65535.0));
-        _1272[3] = float2(float(int((_1269.w & 4u) != 0u)), float(int((_1269.w & 8u) != 0u)));
-        _1273[3] = _1269.w >> uint(8);
-        if ((_56.showFog != 0u) && ((((_1272[0].x + _1272[1].x) + _1272[2].x) + _1272[3].x) == 0.0))
+        float2 _1358 = in.i_world.xy / float2(_56.plotSize);
+        float2 _1268 = _1358;
+        float2 _1361 = _1358 - float2(0.5);
+        int2 _1364 = int2(floor(_1361));
+        int2 _1270 = _1364;
+        float2 _1368 = _1361 - float2(_1364);
+        float2 _1271 = _1368;
+        float2 _1374 = float2(_1271.x, 1.0 - _1271.y);
+        float2 _1273 = dfdx(_1361);
+        float2 _1274 = dfdy(_1361);
+        float2 _1384 = float2(_1273.x, -_1273.y);
+        float2 _1390 = float2(_1274.x, -_1274.y);
+        spvUnsafeArray<int2, 4> _1279 = spvUnsafeArray<int2, 4>({ int2(0, 1), int2(1), int2(1, 0), int2(0) });
+        int2 _1400 = _1364 + _1279[0];
+        int2 _2002 = _1400;
+        float2 _2029 = float2(_56.mapSize);
+        int2 _2024 = _1400 - int2(_2029 * floor((float2(_1400) + float2(0.5)) / _2029));
+        _2002.x = (_56.wrapX != int(0u)) ? _2024.x : clamp(_2002.x, 0, _56.mapSize.x - 1);
+        _2002.y = (_56.wrapY != int(0u)) ? _2024.y : clamp(_2002.y, 0, _56.mapSize.y - 1);
+        uint4 _1278 = uint4(rint(plots.read(uint2(int3(_2002, 0).xy), 0) * 65535.0));
+        spvUnsafeArray<float2, 4> _1281;
+        _1281[0] = float2(float(int((_1278.w & 4u) != 0u)), float(int((_1278.w & 8u) != 0u)));
+        spvUnsafeArray<uint, 4> _1282;
+        _1282[0] = _1278.w >> uint(8);
+        _1279 = _485;
+        int2 _4900 = _1364 + _1279[1];
+        _2002 = _4900;
+        float2 _4904 = float2(_56.mapSize);
+        _2024 = _4900 - int2(_4904 * floor((float2(_4900) + float2(0.5)) / _4904));
+        _2002.x = (_56.wrapX != int(0u)) ? _2024.x : clamp(_2002.x, 0, _56.mapSize.x - 1);
+        _2002.y = (_56.wrapY != int(0u)) ? _2024.y : clamp(_2002.y, 0, _56.mapSize.y - 1);
+        _1278 = uint4(rint(plots.read(uint2(int3(_2002, 0).xy), 0) * 65535.0));
+        _1281[1] = float2(float(int((_1278.w & 4u) != 0u)), float(int((_1278.w & 8u) != 0u)));
+        _1282[1] = _1278.w >> uint(8);
+        _1279 = _485;
+        int2 _5017 = _1364 + _1279[2];
+        _2002 = _5017;
+        float2 _5021 = float2(_56.mapSize);
+        _2024 = _5017 - int2(_5021 * floor((float2(_5017) + float2(0.5)) / _5021));
+        _2002.x = (_56.wrapX != int(0u)) ? _2024.x : clamp(_2002.x, 0, _56.mapSize.x - 1);
+        _2002.y = (_56.wrapY != int(0u)) ? _2024.y : clamp(_2002.y, 0, _56.mapSize.y - 1);
+        _1278 = uint4(rint(plots.read(uint2(int3(_2002, 0).xy), 0) * 65535.0));
+        _1281[2] = float2(float(int((_1278.w & 4u) != 0u)), float(int((_1278.w & 8u) != 0u)));
+        _1282[2] = _1278.w >> uint(8);
+        _1279 = _485;
+        int2 _5134 = _1364 + _1279[3];
+        _2002 = _5134;
+        float2 _5138 = float2(_56.mapSize);
+        _2024 = _5134 - int2(_5138 * floor((float2(_5134) + float2(0.5)) / _5138));
+        _2002.x = (_56.wrapX != int(0u)) ? _2024.x : clamp(_2002.x, 0, _56.mapSize.x - 1);
+        _2002.y = (_56.wrapY != int(0u)) ? _2024.y : clamp(_2002.y, 0, _56.mapSize.y - 1);
+        _1278 = uint4(rint(plots.read(uint2(int3(_2002, 0).xy), 0) * 65535.0));
+        _1281[3] = float2(float(int((_1278.w & 4u) != 0u)), float(int((_1278.w & 8u) != 0u)));
+        _1282[3] = _1278.w >> uint(8);
+        if ((_56.showFog != 0u) && ((((_1281[0].x + _1281[1].x) + _1281[2].x) + _1281[3].x) == 0.0))
         {
-            _2848 = float4(0.0, 0.0, 0.0, 1.0);
+            _2856 = float4(0.0, 0.0, 0.0, 1.0);
             break;
         }
-        int _1441 = clamp(_1261.x + 1, 0, _56.mapSize.x) * 2;
-        int _1447 = clamp(_1261.y + 1, 0, _56.mapSize.y);
-        uint4 _1275 = uint4(rint(cells.read(uint2(int3(_1441, _1447, 0).xy), 0) * 65535.0));
-        uint4 _1276 = uint4(rint(cells.read(uint2(int3(int2(_1441, _1447) + int2(1, 0), 0).xy), 0) * 65535.0));
-        spvUnsafeArray<uint, 6> _1493 = spvUnsafeArray<uint, 6>({ _1275.x, _1275.y, _1275.z, _1275.w, _1276.x, _1276.y });
-        spvUnsafeArray<uint, 6> _1277 = _1493;
-        float2 _1495 = _1349 * 3.0;
-        float3 _2809;
-        float3 _2813;
-        _2813 = float3(0.5);
-        _2809 = float3(0.0);
-        float3 _1541;
-        float3 _1552;
-        for (int _2804 = 0; _2804 < 6; _2813 = _1552, _2809 = _1541, _2804++)
+        int _1450 = clamp(_1270.x + 1, 0, _56.mapSize.x) * 2;
+        int _1456 = clamp(_1270.y + 1, 0, _56.mapSize.y);
+        uint4 _1284 = uint4(rint(cells.read(uint2(int3(_1450, _1456, 0).xy), 0) * 65535.0));
+        uint4 _1285 = uint4(rint(cells.read(uint2(int3(int2(_1450, _1456) + int2(1, 0), 0).xy), 0) * 65535.0));
+        spvUnsafeArray<uint, 6> _1502 = spvUnsafeArray<uint, 6>({ _1284.x, _1284.y, _1284.z, _1284.w, _1285.x, _1285.y });
+        spvUnsafeArray<uint, 6> _1286 = _1502;
+        float2 _1504 = _1358 * 0.5;
+        float3 _2817;
+        float3 _2821;
+        _2821 = float3(0.5);
+        _2817 = float3(0.0);
+        float3 _1550;
+        float3 _1561;
+        for (int _2812 = 0; _2812 < 6; _2821 = _1561, _2817 = _1550, _2812++)
         {
-            if (_1277[_2804] == 65535u)
+            if (_1286[_2812] == 65535u)
             {
                 break;
             }
-            uint _1509 = _1277[_2804] & 16383u;
-            uint _1511 = _1277[_2804] >> uint(14);
-            float2 _1287 = _1365;
-            float2 _1288 = _1375;
-            float2 _1289 = _1381;
-            if (_1511 == 1u)
+            uint _1518 = _1286[_2812] & 16383u;
+            uint _1520 = _1286[_2812] >> uint(14);
+            float2 _1296 = _1374;
+            float2 _1297 = _1384;
+            float2 _1298 = _1390;
+            if (_1520 == 1u)
             {
-                _1287 = float2(_1287.y, 1.0 - _1287.x);
-                _1288 = float2(_1288.y, -_1288.x);
-                _1289 = float2(_1289.y, -_1289.x);
+                _1296 = float2(_1296.y, 1.0 - _1296.x);
+                _1297 = float2(_1297.y, -_1297.x);
+                _1298 = float2(_1298.y, -_1298.x);
             }
             else
             {
-                if (_1511 == 2u)
+                if (_1520 == 2u)
                 {
-                    _1287 = float2(1.0) - _1287;
-                    _1288 = -_1288;
-                    _1289 = -_1289;
+                    _1296 = float2(1.0) - _1296;
+                    _1297 = -_1297;
+                    _1298 = -_1298;
                 }
                 else
                 {
-                    if (_1511 == 3u)
+                    if (_1520 == 3u)
                     {
-                        _1287 = float2(1.0 - _1287.y, _1287.x);
-                        _1288 = float2(-_1288.y, _1288.x);
-                        _1289 = float2(-_1289.y, _1289.x);
+                        _1296 = float2(1.0 - _1296.y, _1296.x);
+                        _1297 = float2(-_1297.y, _1297.x);
+                        _1298 = float2(-_1298.y, _1298.x);
                     }
                 }
             }
-            float3 _2174 = float3(_1287, float(_1509));
-            float4 _2177 = atlas.sample(atlasSampler, _2174.xy, uint(rint(_2174.z)), gradient2d(_1288, _1289));
-            float4 _1284 = _2177;
-            float3 _1526 = float3(_1495, float(_1509 >> uint(5)));
-            float3 _1528 = details.sample(detailSampler, _1526.xy, uint(rint(_1526.z))).xyz;
-            _1541 = select(mix(_2809, _2177.xyz, float3(_1284.w)), _2177.xyz, bool3(_2804 == 0));
-            _1552 = select(mix(_2813, _1528, float3(_1284.w)), _1528, bool3(_2804 == 0));
+            float3 _2182 = float3(_1296, float(_1518));
+            float4 _2185 = atlas.sample(atlasSampler, _2182.xy, uint(rint(_2182.z)), gradient2d(_1297, _1298));
+            float4 _1293 = _2185;
+            float3 _1535 = float3(_1504, float(_1518 >> uint(5)));
+            float3 _1537 = details.sample(detailSampler, _1535.xy, uint(rint(_1535.z))).xyz;
+            _1550 = select(mix(_2817, _2185.xyz, float3(_1293.w)), _2185.xyz, bool3(_2812 == 0));
+            _1561 = select(mix(_2821, _1537, float3(_1293.w)), _1537, bool3(_2812 == 0));
         }
-        float3 _1560 = _2809 * (_2813 * 2.0);
-        uint _1571 = max(max(_1273[0], _1273[1]), max(_1273[2], _1273[3]));
-        float3 _2831;
-        if (_1571 > 0u)
+        float3 _1570 = _2817 + (_2821 - float3(0.5));
+        uint _1581 = max(max(_1282[0], _1282[1]), max(_1282[2], _1282[3]));
+        float3 _2839;
+        if (_1581 > 0u)
         {
-            float2 _1292 = smoothstep(float2(0.0), float2(1.0), _1359);
-            float4 _1293 = float4(float(_1273[0] == _1571), float(_1273[1] == _1571), float(_1273[2] == _1571), float(_1273[3] == _1571));
-            int2 _1617 = int2(floor(_1349));
-            int2 _1631 = _1617 + int2(-1);
-            int2 _1298 = _1631;
-            int2 _2178 = _1631;
-            float2 _2205 = float2(_56.mapSize);
-            int2 _2200 = _1631 - int2(_2205 * floor((float2(_1631) + float2(0.5)) / _2205));
-            _2178.x = (_56.wrapX != int(0u)) ? _2200.x : clamp(_2178.x, 0, _56.mapSize.x - 1);
-            _2178.y = (_56.wrapY != int(0u)) ? _2200.y : clamp(_2178.y, 0, _56.mapSize.y - 1);
-            uint4 _2198 = uint4(rint(plots.read(uint2(int3(_2178, 0).xy), 0) * 65535.0));
-            uint _1634 = _2198.w;
-            float _2845;
-            if ((_1634 & 16u) != 0u)
+            float2 _1301 = smoothstep(float2(0.0), float2(1.0), _1368);
+            float4 _1302 = float4(float(_1282[0] == _1581), float(_1282[1] == _1581), float(_1282[2] == _1581), float(_1282[3] == _1581));
+            int2 _1627 = int2(floor(_1358));
+            int2 _1641 = _1627 + int2(-1);
+            int2 _1307 = _1641;
+            int2 _2186 = _1641;
+            float2 _2213 = float2(_56.mapSize);
+            int2 _2208 = _1641 - int2(_2213 * floor((float2(_1641) + float2(0.5)) / _2213));
+            _2186.x = (_56.wrapX != int(0u)) ? _2208.x : clamp(_2186.x, 0, _56.mapSize.x - 1);
+            _2186.y = (_56.wrapY != int(0u)) ? _2208.y : clamp(_2186.y, 0, _56.mapSize.y - 1);
+            uint4 _2206 = uint4(rint(plots.read(uint2(int3(_2186, 0).xy), 0) * 65535.0));
+            uint _1644 = _2206.w;
+            float _2853;
+            if ((_1644 & 16u) != 0u)
             {
-                _2845 = fast::min(2.0, length(_1349 - float2(fast::clamp(_1259.x, float(_1298.x), float(_1298.x + 1)), float(_1298.y))));
+                _2853 = fast::min(2.0, length(_1358 - float2(fast::clamp(_1268.x, float(_1307.x), float(_1307.x + 1)), float(_1307.y))));
             }
             else
             {
-                _2845 = 2.0;
+                _2853 = 2.0;
             }
-            float _2849;
-            if ((_1634 & 32u) != 0u)
+            float _2857;
+            if ((_1644 & 32u) != 0u)
             {
-                _2849 = fast::min(_2845, length(_1349 - float2(float(_1298.x + 1), fast::clamp(_1259.y, float(_1298.y), float(_1298.y + 1)))));
+                _2857 = fast::min(_2853, length(_1358 - float2(float(_1307.x + 1), fast::clamp(_1268.y, float(_1307.y), float(_1307.y + 1)))));
             }
             else
             {
-                _2849 = _2845;
+                _2857 = _2853;
             }
-            int2 _3704 = _1617 + int2(0, -1);
-            _1298 = _3704;
-            _2178 = _3704;
-            float2 _3708 = float2(_56.mapSize);
-            _2200 = _3704 - int2(_3708 * floor((float2(_3704) + float2(0.5)) / _3708));
-            _2178.x = (_56.wrapX != int(0u)) ? _2200.x : clamp(_2178.x, 0, _56.mapSize.x - 1);
-            _2178.y = (_56.wrapY != int(0u)) ? _2200.y : clamp(_2178.y, 0, _56.mapSize.y - 1);
-            uint4 _3793 = uint4(rint(plots.read(uint2(int3(_2178, 0).xy), 0) * 65535.0));
-            uint _3794 = _3793.w;
-            float _3816;
-            if ((_3794 & 16u) != 0u)
+            int2 _3712 = _1627 + int2(0, -1);
+            _1307 = _3712;
+            _2186 = _3712;
+            float2 _3716 = float2(_56.mapSize);
+            _2208 = _3712 - int2(_3716 * floor((float2(_3712) + float2(0.5)) / _3716));
+            _2186.x = (_56.wrapX != int(0u)) ? _2208.x : clamp(_2186.x, 0, _56.mapSize.x - 1);
+            _2186.y = (_56.wrapY != int(0u)) ? _2208.y : clamp(_2186.y, 0, _56.mapSize.y - 1);
+            uint4 _3801 = uint4(rint(plots.read(uint2(int3(_2186, 0).xy), 0) * 65535.0));
+            uint _3802 = _3801.w;
+            float _3824;
+            if ((_3802 & 16u) != 0u)
             {
-                _3816 = fast::min(_2849, length(_1349 - float2(fast::clamp(_1259.x, float(_1298.x), float(_1298.x + 1)), float(_1298.y))));
+                _3824 = fast::min(_2857, length(_1358 - float2(fast::clamp(_1268.x, float(_1307.x), float(_1307.x + 1)), float(_1307.y))));
             }
             else
             {
-                _3816 = _2849;
+                _3824 = _2857;
             }
-            float _3839;
-            if ((_3794 & 32u) != 0u)
+            float _3847;
+            if ((_3802 & 32u) != 0u)
             {
-                _3839 = fast::min(_3816, length(_1349 - float2(float(_1298.x + 1), fast::clamp(_1259.y, float(_1298.y), float(_1298.y + 1)))));
+                _3847 = fast::min(_3824, length(_1358 - float2(float(_1307.x + 1), fast::clamp(_1268.y, float(_1307.y), float(_1307.y + 1)))));
             }
             else
             {
-                _3839 = _3816;
+                _3847 = _3824;
             }
-            int2 _3853 = _1617 + int2(1, -1);
-            _1298 = _3853;
-            _2178 = _3853;
-            float2 _3857 = float2(_56.mapSize);
-            _2200 = _3853 - int2(_3857 * floor((float2(_3853) + float2(0.5)) / _3857));
-            _2178.x = (_56.wrapX != int(0u)) ? _2200.x : clamp(_2178.x, 0, _56.mapSize.x - 1);
-            _2178.y = (_56.wrapY != int(0u)) ? _2200.y : clamp(_2178.y, 0, _56.mapSize.y - 1);
-            uint4 _3942 = uint4(rint(plots.read(uint2(int3(_2178, 0).xy), 0) * 65535.0));
-            uint _3943 = _3942.w;
-            float _3965;
-            if ((_3943 & 16u) != 0u)
+            int2 _3861 = _1627 + int2(1, -1);
+            _1307 = _3861;
+            _2186 = _3861;
+            float2 _3865 = float2(_56.mapSize);
+            _2208 = _3861 - int2(_3865 * floor((float2(_3861) + float2(0.5)) / _3865));
+            _2186.x = (_56.wrapX != int(0u)) ? _2208.x : clamp(_2186.x, 0, _56.mapSize.x - 1);
+            _2186.y = (_56.wrapY != int(0u)) ? _2208.y : clamp(_2186.y, 0, _56.mapSize.y - 1);
+            uint4 _3950 = uint4(rint(plots.read(uint2(int3(_2186, 0).xy), 0) * 65535.0));
+            uint _3951 = _3950.w;
+            float _3973;
+            if ((_3951 & 16u) != 0u)
             {
-                _3965 = fast::min(_3839, length(_1349 - float2(fast::clamp(_1259.x, float(_1298.x), float(_1298.x + 1)), float(_1298.y))));
+                _3973 = fast::min(_3847, length(_1358 - float2(fast::clamp(_1268.x, float(_1307.x), float(_1307.x + 1)), float(_1307.y))));
             }
             else
             {
-                _3965 = _3839;
+                _3973 = _3847;
             }
-            float _3988;
-            if ((_3943 & 32u) != 0u)
+            float _3996;
+            if ((_3951 & 32u) != 0u)
             {
-                _3988 = fast::min(_3965, length(_1349 - float2(float(_1298.x + 1), fast::clamp(_1259.y, float(_1298.y), float(_1298.y + 1)))));
+                _3996 = fast::min(_3973, length(_1358 - float2(float(_1307.x + 1), fast::clamp(_1268.y, float(_1307.y), float(_1307.y + 1)))));
             }
             else
             {
-                _3988 = _3965;
+                _3996 = _3973;
             }
-            int2 _4002 = _1617 + int2(-1, 0);
-            _1298 = _4002;
-            _2178 = _4002;
-            float2 _4006 = float2(_56.mapSize);
-            _2200 = _4002 - int2(_4006 * floor((float2(_4002) + float2(0.5)) / _4006));
-            _2178.x = (_56.wrapX != int(0u)) ? _2200.x : clamp(_2178.x, 0, _56.mapSize.x - 1);
-            _2178.y = (_56.wrapY != int(0u)) ? _2200.y : clamp(_2178.y, 0, _56.mapSize.y - 1);
-            uint4 _4091 = uint4(rint(plots.read(uint2(int3(_2178, 0).xy), 0) * 65535.0));
-            uint _4092 = _4091.w;
-            float _4114;
-            if ((_4092 & 16u) != 0u)
+            int2 _4010 = _1627 + int2(-1, 0);
+            _1307 = _4010;
+            _2186 = _4010;
+            float2 _4014 = float2(_56.mapSize);
+            _2208 = _4010 - int2(_4014 * floor((float2(_4010) + float2(0.5)) / _4014));
+            _2186.x = (_56.wrapX != int(0u)) ? _2208.x : clamp(_2186.x, 0, _56.mapSize.x - 1);
+            _2186.y = (_56.wrapY != int(0u)) ? _2208.y : clamp(_2186.y, 0, _56.mapSize.y - 1);
+            uint4 _4099 = uint4(rint(plots.read(uint2(int3(_2186, 0).xy), 0) * 65535.0));
+            uint _4100 = _4099.w;
+            float _4122;
+            if ((_4100 & 16u) != 0u)
             {
-                _4114 = fast::min(_3988, length(_1349 - float2(fast::clamp(_1259.x, float(_1298.x), float(_1298.x + 1)), float(_1298.y))));
+                _4122 = fast::min(_3996, length(_1358 - float2(fast::clamp(_1268.x, float(_1307.x), float(_1307.x + 1)), float(_1307.y))));
             }
             else
             {
-                _4114 = _3988;
+                _4122 = _3996;
             }
-            float _4137;
-            if ((_4092 & 32u) != 0u)
+            float _4145;
+            if ((_4100 & 32u) != 0u)
             {
-                _4137 = fast::min(_4114, length(_1349 - float2(float(_1298.x + 1), fast::clamp(_1259.y, float(_1298.y), float(_1298.y + 1)))));
+                _4145 = fast::min(_4122, length(_1358 - float2(float(_1307.x + 1), fast::clamp(_1268.y, float(_1307.y), float(_1307.y + 1)))));
             }
             else
             {
-                _4137 = _4114;
+                _4145 = _4122;
             }
-            _1298 = _1617;
-            _2178 = _1617;
-            float2 _4155 = float2(_56.mapSize);
-            _2200 = _1617 - int2(_4155 * floor((float2(_1617) + float2(0.5)) / _4155));
-            _2178.x = (_56.wrapX != int(0u)) ? _2200.x : clamp(_2178.x, 0, _56.mapSize.x - 1);
-            _2178.y = (_56.wrapY != int(0u)) ? _2200.y : clamp(_2178.y, 0, _56.mapSize.y - 1);
-            uint4 _4240 = uint4(rint(plots.read(uint2(int3(_2178, 0).xy), 0) * 65535.0));
-            uint _4241 = _4240.w;
-            float _4263;
-            if ((_4241 & 16u) != 0u)
+            _1307 = _1627;
+            _2186 = _1627;
+            float2 _4163 = float2(_56.mapSize);
+            _2208 = _1627 - int2(_4163 * floor((float2(_1627) + float2(0.5)) / _4163));
+            _2186.x = (_56.wrapX != int(0u)) ? _2208.x : clamp(_2186.x, 0, _56.mapSize.x - 1);
+            _2186.y = (_56.wrapY != int(0u)) ? _2208.y : clamp(_2186.y, 0, _56.mapSize.y - 1);
+            uint4 _4248 = uint4(rint(plots.read(uint2(int3(_2186, 0).xy), 0) * 65535.0));
+            uint _4249 = _4248.w;
+            float _4271;
+            if ((_4249 & 16u) != 0u)
             {
-                _4263 = fast::min(_4137, length(_1349 - float2(fast::clamp(_1259.x, float(_1298.x), float(_1298.x + 1)), float(_1298.y))));
+                _4271 = fast::min(_4145, length(_1358 - float2(fast::clamp(_1268.x, float(_1307.x), float(_1307.x + 1)), float(_1307.y))));
             }
             else
             {
-                _4263 = _4137;
+                _4271 = _4145;
             }
-            float _4286;
-            if ((_4241 & 32u) != 0u)
+            float _4294;
+            if ((_4249 & 32u) != 0u)
             {
-                _4286 = fast::min(_4263, length(_1349 - float2(float(_1298.x + 1), fast::clamp(_1259.y, float(_1298.y), float(_1298.y + 1)))));
+                _4294 = fast::min(_4271, length(_1358 - float2(float(_1307.x + 1), fast::clamp(_1268.y, float(_1307.y), float(_1307.y + 1)))));
             }
             else
             {
-                _4286 = _4263;
+                _4294 = _4271;
             }
-            int2 _4300 = _1617 + int2(1, 0);
-            _1298 = _4300;
-            _2178 = _4300;
-            float2 _4304 = float2(_56.mapSize);
-            _2200 = _4300 - int2(_4304 * floor((float2(_4300) + float2(0.5)) / _4304));
-            _2178.x = (_56.wrapX != int(0u)) ? _2200.x : clamp(_2178.x, 0, _56.mapSize.x - 1);
-            _2178.y = (_56.wrapY != int(0u)) ? _2200.y : clamp(_2178.y, 0, _56.mapSize.y - 1);
-            uint4 _4389 = uint4(rint(plots.read(uint2(int3(_2178, 0).xy), 0) * 65535.0));
-            uint _4390 = _4389.w;
-            float _4412;
-            if ((_4390 & 16u) != 0u)
+            int2 _4308 = _1627 + int2(1, 0);
+            _1307 = _4308;
+            _2186 = _4308;
+            float2 _4312 = float2(_56.mapSize);
+            _2208 = _4308 - int2(_4312 * floor((float2(_4308) + float2(0.5)) / _4312));
+            _2186.x = (_56.wrapX != int(0u)) ? _2208.x : clamp(_2186.x, 0, _56.mapSize.x - 1);
+            _2186.y = (_56.wrapY != int(0u)) ? _2208.y : clamp(_2186.y, 0, _56.mapSize.y - 1);
+            uint4 _4397 = uint4(rint(plots.read(uint2(int3(_2186, 0).xy), 0) * 65535.0));
+            uint _4398 = _4397.w;
+            float _4420;
+            if ((_4398 & 16u) != 0u)
             {
-                _4412 = fast::min(_4286, length(_1349 - float2(fast::clamp(_1259.x, float(_1298.x), float(_1298.x + 1)), float(_1298.y))));
+                _4420 = fast::min(_4294, length(_1358 - float2(fast::clamp(_1268.x, float(_1307.x), float(_1307.x + 1)), float(_1307.y))));
             }
             else
             {
-                _4412 = _4286;
+                _4420 = _4294;
             }
-            float _4435;
-            if ((_4390 & 32u) != 0u)
+            float _4443;
+            if ((_4398 & 32u) != 0u)
             {
-                _4435 = fast::min(_4412, length(_1349 - float2(float(_1298.x + 1), fast::clamp(_1259.y, float(_1298.y), float(_1298.y + 1)))));
+                _4443 = fast::min(_4420, length(_1358 - float2(float(_1307.x + 1), fast::clamp(_1268.y, float(_1307.y), float(_1307.y + 1)))));
             }
             else
             {
-                _4435 = _4412;
+                _4443 = _4420;
             }
-            int2 _4449 = _1617 + int2(-1, 1);
-            _1298 = _4449;
-            _2178 = _4449;
-            float2 _4453 = float2(_56.mapSize);
-            _2200 = _4449 - int2(_4453 * floor((float2(_4449) + float2(0.5)) / _4453));
-            _2178.x = (_56.wrapX != int(0u)) ? _2200.x : clamp(_2178.x, 0, _56.mapSize.x - 1);
-            _2178.y = (_56.wrapY != int(0u)) ? _2200.y : clamp(_2178.y, 0, _56.mapSize.y - 1);
-            uint4 _4538 = uint4(rint(plots.read(uint2(int3(_2178, 0).xy), 0) * 65535.0));
-            uint _4539 = _4538.w;
-            float _4561;
-            if ((_4539 & 16u) != 0u)
+            int2 _4457 = _1627 + int2(-1, 1);
+            _1307 = _4457;
+            _2186 = _4457;
+            float2 _4461 = float2(_56.mapSize);
+            _2208 = _4457 - int2(_4461 * floor((float2(_4457) + float2(0.5)) / _4461));
+            _2186.x = (_56.wrapX != int(0u)) ? _2208.x : clamp(_2186.x, 0, _56.mapSize.x - 1);
+            _2186.y = (_56.wrapY != int(0u)) ? _2208.y : clamp(_2186.y, 0, _56.mapSize.y - 1);
+            uint4 _4546 = uint4(rint(plots.read(uint2(int3(_2186, 0).xy), 0) * 65535.0));
+            uint _4547 = _4546.w;
+            float _4569;
+            if ((_4547 & 16u) != 0u)
             {
-                _4561 = fast::min(_4435, length(_1349 - float2(fast::clamp(_1259.x, float(_1298.x), float(_1298.x + 1)), float(_1298.y))));
+                _4569 = fast::min(_4443, length(_1358 - float2(fast::clamp(_1268.x, float(_1307.x), float(_1307.x + 1)), float(_1307.y))));
             }
             else
             {
-                _4561 = _4435;
+                _4569 = _4443;
             }
-            float _4584;
-            if ((_4539 & 32u) != 0u)
+            float _4592;
+            if ((_4547 & 32u) != 0u)
             {
-                _4584 = fast::min(_4561, length(_1349 - float2(float(_1298.x + 1), fast::clamp(_1259.y, float(_1298.y), float(_1298.y + 1)))));
+                _4592 = fast::min(_4569, length(_1358 - float2(float(_1307.x + 1), fast::clamp(_1268.y, float(_1307.y), float(_1307.y + 1)))));
             }
             else
             {
-                _4584 = _4561;
+                _4592 = _4569;
             }
-            int2 _4598 = _1617 + int2(0, 1);
-            _1298 = _4598;
-            _2178 = _4598;
-            float2 _4602 = float2(_56.mapSize);
-            _2200 = _4598 - int2(_4602 * floor((float2(_4598) + float2(0.5)) / _4602));
-            _2178.x = (_56.wrapX != int(0u)) ? _2200.x : clamp(_2178.x, 0, _56.mapSize.x - 1);
-            _2178.y = (_56.wrapY != int(0u)) ? _2200.y : clamp(_2178.y, 0, _56.mapSize.y - 1);
-            uint4 _4687 = uint4(rint(plots.read(uint2(int3(_2178, 0).xy), 0) * 65535.0));
-            uint _4688 = _4687.w;
-            float _4710;
-            if ((_4688 & 16u) != 0u)
+            int2 _4606 = _1627 + int2(0, 1);
+            _1307 = _4606;
+            _2186 = _4606;
+            float2 _4610 = float2(_56.mapSize);
+            _2208 = _4606 - int2(_4610 * floor((float2(_4606) + float2(0.5)) / _4610));
+            _2186.x = (_56.wrapX != int(0u)) ? _2208.x : clamp(_2186.x, 0, _56.mapSize.x - 1);
+            _2186.y = (_56.wrapY != int(0u)) ? _2208.y : clamp(_2186.y, 0, _56.mapSize.y - 1);
+            uint4 _4695 = uint4(rint(plots.read(uint2(int3(_2186, 0).xy), 0) * 65535.0));
+            uint _4696 = _4695.w;
+            float _4718;
+            if ((_4696 & 16u) != 0u)
             {
-                _4710 = fast::min(_4584, length(_1349 - float2(fast::clamp(_1259.x, float(_1298.x), float(_1298.x + 1)), float(_1298.y))));
+                _4718 = fast::min(_4592, length(_1358 - float2(fast::clamp(_1268.x, float(_1307.x), float(_1307.x + 1)), float(_1307.y))));
             }
             else
             {
-                _4710 = _4584;
+                _4718 = _4592;
             }
-            float _4733;
-            if ((_4688 & 32u) != 0u)
+            float _4741;
+            if ((_4696 & 32u) != 0u)
             {
-                _4733 = fast::min(_4710, length(_1349 - float2(float(_1298.x + 1), fast::clamp(_1259.y, float(_1298.y), float(_1298.y + 1)))));
+                _4741 = fast::min(_4718, length(_1358 - float2(float(_1307.x + 1), fast::clamp(_1268.y, float(_1307.y), float(_1307.y + 1)))));
             }
             else
             {
-                _4733 = _4710;
+                _4741 = _4718;
             }
-            int2 _4747 = _1617 + int2(1);
-            _1298 = _4747;
-            _2178 = _4747;
-            float2 _4751 = float2(_56.mapSize);
-            _2200 = _4747 - int2(_4751 * floor((float2(_4747) + float2(0.5)) / _4751));
-            _2178.x = (_56.wrapX != int(0u)) ? _2200.x : clamp(_2178.x, 0, _56.mapSize.x - 1);
-            _2178.y = (_56.wrapY != int(0u)) ? _2200.y : clamp(_2178.y, 0, _56.mapSize.y - 1);
-            uint4 _4836 = uint4(rint(plots.read(uint2(int3(_2178, 0).xy), 0) * 65535.0));
-            uint _4837 = _4836.w;
-            float _4859;
-            if ((_4837 & 16u) != 0u)
+            int2 _4755 = _1627 + int2(1);
+            _1307 = _4755;
+            _2186 = _4755;
+            float2 _4759 = float2(_56.mapSize);
+            _2208 = _4755 - int2(_4759 * floor((float2(_4755) + float2(0.5)) / _4759));
+            _2186.x = (_56.wrapX != int(0u)) ? _2208.x : clamp(_2186.x, 0, _56.mapSize.x - 1);
+            _2186.y = (_56.wrapY != int(0u)) ? _2208.y : clamp(_2186.y, 0, _56.mapSize.y - 1);
+            uint4 _4844 = uint4(rint(plots.read(uint2(int3(_2186, 0).xy), 0) * 65535.0));
+            uint _4845 = _4844.w;
+            float _4867;
+            if ((_4845 & 16u) != 0u)
             {
-                _4859 = fast::min(_4733, length(_1349 - float2(fast::clamp(_1259.x, float(_1298.x), float(_1298.x + 1)), float(_1298.y))));
+                _4867 = fast::min(_4741, length(_1358 - float2(fast::clamp(_1268.x, float(_1307.x), float(_1307.x + 1)), float(_1307.y))));
             }
             else
             {
-                _4859 = _4733;
+                _4867 = _4741;
             }
-            float _4882;
-            if ((_4837 & 32u) != 0u)
+            float _4890;
+            if ((_4845 & 32u) != 0u)
             {
-                _4882 = fast::min(_4859, length(_1349 - float2(float(_1298.x + 1), fast::clamp(_1259.y, float(_1298.y), float(_1298.y + 1)))));
+                _4890 = fast::min(_4867, length(_1358 - float2(float(_1307.x + 1), fast::clamp(_1268.y, float(_1307.y), float(_1307.y + 1)))));
             }
             else
             {
-                _4882 = _4859;
+                _4890 = _4867;
             }
-            float3 _1701 = float3(_1349 * 2.0, float(_1571 - 1u));
-            float4 _1702 = decals.sample(decalSampler, _1701.xy, uint(rint(_1701.z)));
-            float2 _2303 = _1349 * 3.0;
-            float2 _2305 = floor(_2303);
-            float2 _2308 = _2303 - _2305;
-            float2 _2293 = (_2308 * _2308) * (float2(3.0) - (_2308 * 2.0));
-            float2 _2294 = float2(_56.mapSize) * 3.0;
-            float2 _2296 = _2305;
+            float3 _1711 = float3(_1358 * 2.0, float(_1581 - 1u));
+            float4 _1712 = decals.sample(decalSampler, _1711.xy, uint(rint(_1711.z)));
+            float2 _2311 = _1358 * 3.0;
+            float2 _2313 = floor(_2311);
+            float2 _2316 = _2311 - _2313;
+            float2 _2301 = (_2316 * _2316) * (float2(3.0) - (_2316 * 2.0));
+            float2 _2302 = float2(_56.mapSize) * 3.0;
+            float2 _2304 = _2313;
             if (_56.wrapX != int(0u))
             {
-                _2296.x -= (_2294.x * floor(_2296.x / _2294.x));
+                _2304.x -= (_2302.x * floor(_2304.x / _2302.x));
             }
             if (_56.wrapY != int(0u))
             {
-                _2296.y -= (_2294.y * floor(_2296.y / _2294.y));
+                _2304.y -= (_2302.y * floor(_2304.y / _2302.y));
             }
-            uint _2380 = (uint(_2296.x) * 2654435761u) ^ (uint(_2296.y) * 2246822519u);
-            uint _2386 = (_2380 ^ (_2380 >> uint(15))) * 739982445u;
-            spvUnsafeArray<float, 4> _2298;
-            _2298[0] = float((_2386 ^ (_2386 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
-            _2296 = _2305 + float2(1.0, 0.0);
+            uint _2388 = (uint(_2304.x) * 2654435761u) ^ (uint(_2304.y) * 2246822519u);
+            uint _2394 = (_2388 ^ (_2388 >> uint(15))) * 739982445u;
+            spvUnsafeArray<float, 4> _2306;
+            _2306[0] = float((_2394 ^ (_2394 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
+            _2304 = _2313 + float2(1.0, 0.0);
             if (_56.wrapX != int(0u))
             {
-                _2296.x -= (_2294.x * floor(_2296.x / _2294.x));
+                _2304.x -= (_2302.x * floor(_2304.x / _2302.x));
             }
             if (_56.wrapY != int(0u))
             {
-                _2296.y -= (_2294.y * floor(_2296.y / _2294.y));
+                _2304.y -= (_2302.y * floor(_2304.y / _2302.y));
             }
-            uint _3547 = (uint(_2296.x) * 2654435761u) ^ (uint(_2296.y) * 2246822519u);
-            uint _3550 = (_3547 ^ (_3547 >> uint(15))) * 739982445u;
-            _2298[1] = float((_3550 ^ (_3550 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
-            _2296 = _2305 + float2(0.0, 1.0);
+            uint _3555 = (uint(_2304.x) * 2654435761u) ^ (uint(_2304.y) * 2246822519u);
+            uint _3558 = (_3555 ^ (_3555 >> uint(15))) * 739982445u;
+            _2306[1] = float((_3558 ^ (_3558 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
+            _2304 = _2313 + float2(0.0, 1.0);
             if (_56.wrapX != int(0u))
             {
-                _2296.x -= (_2294.x * floor(_2296.x / _2294.x));
+                _2304.x -= (_2302.x * floor(_2304.x / _2302.x));
             }
             if (_56.wrapY != int(0u))
             {
-                _2296.y -= (_2294.y * floor(_2296.y / _2294.y));
+                _2304.y -= (_2302.y * floor(_2304.y / _2302.y));
             }
-            uint _3614 = (uint(_2296.x) * 2654435761u) ^ (uint(_2296.y) * 2246822519u);
-            uint _3617 = (_3614 ^ (_3614 >> uint(15))) * 739982445u;
-            _2298[2] = float((_3617 ^ (_3617 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
-            _2296 = _2305 + float2(1.0);
+            uint _3622 = (uint(_2304.x) * 2654435761u) ^ (uint(_2304.y) * 2246822519u);
+            uint _3625 = (_3622 ^ (_3622 >> uint(15))) * 739982445u;
+            _2306[2] = float((_3625 ^ (_3625 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
+            _2304 = _2313 + float2(1.0);
             if (_56.wrapX != int(0u))
             {
-                _2296.x -= (_2294.x * floor(_2296.x / _2294.x));
+                _2304.x -= (_2302.x * floor(_2304.x / _2302.x));
             }
             if (_56.wrapY != int(0u))
             {
-                _2296.y -= (_2294.y * floor(_2296.y / _2294.y));
+                _2304.y -= (_2302.y * floor(_2304.y / _2302.y));
             }
-            uint _3681 = (uint(_2296.x) * 2654435761u) ^ (uint(_2296.y) * 2246822519u);
-            uint _3684 = (_3681 ^ (_3681 >> uint(15))) * 739982445u;
-            _2298[3] = float((_3684 ^ (_3684 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
-            float2 _2430 = _1349 * 7.0;
-            float2 _2432 = floor(_2430);
-            float2 _2435 = _2430 - _2432;
-            float2 _2420 = (_2435 * _2435) * (float2(3.0) - (_2435 * 2.0));
-            float2 _2421 = float2(_56.mapSize) * 7.0;
-            float2 _2423 = _2432;
+            uint _3689 = (uint(_2304.x) * 2654435761u) ^ (uint(_2304.y) * 2246822519u);
+            uint _3692 = (_3689 ^ (_3689 >> uint(15))) * 739982445u;
+            _2306[3] = float((_3692 ^ (_3692 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
+            float2 _2438 = _1358 * 7.0;
+            float2 _2440 = floor(_2438);
+            float2 _2443 = _2438 - _2440;
+            float2 _2428 = (_2443 * _2443) * (float2(3.0) - (_2443 * 2.0));
+            float2 _2429 = float2(_56.mapSize) * 7.0;
+            float2 _2431 = _2440;
             if (_56.wrapX != int(0u))
             {
-                _2423.x -= (_2421.x * floor(_2423.x / _2421.x));
+                _2431.x -= (_2429.x * floor(_2431.x / _2429.x));
             }
             if (_56.wrapY != int(0u))
             {
-                _2423.y -= (_2421.y * floor(_2423.y / _2421.y));
+                _2431.y -= (_2429.y * floor(_2431.y / _2429.y));
             }
-            uint _2507 = (uint(_2423.x) * 2654435761u) ^ (uint(_2423.y) * 2246822519u);
-            uint _2513 = (_2507 ^ (_2507 >> uint(15))) * 739982445u;
-            spvUnsafeArray<float, 4> _2425;
-            _2425[0] = float((_2513 ^ (_2513 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
-            _2423 = _2432 + float2(1.0, 0.0);
+            uint _2515 = (uint(_2431.x) * 2654435761u) ^ (uint(_2431.y) * 2246822519u);
+            uint _2521 = (_2515 ^ (_2515 >> uint(15))) * 739982445u;
+            spvUnsafeArray<float, 4> _2433;
+            _2433[0] = float((_2521 ^ (_2521 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
+            _2431 = _2440 + float2(1.0, 0.0);
             if (_56.wrapX != int(0u))
             {
-                _2423.x -= (_2421.x * floor(_2423.x / _2421.x));
+                _2431.x -= (_2429.x * floor(_2431.x / _2429.x));
             }
             if (_56.wrapY != int(0u))
             {
-                _2423.y -= (_2421.y * floor(_2423.y / _2421.y));
+                _2431.y -= (_2429.y * floor(_2431.y / _2429.y));
             }
-            uint _3346 = (uint(_2423.x) * 2654435761u) ^ (uint(_2423.y) * 2246822519u);
-            uint _3349 = (_3346 ^ (_3346 >> uint(15))) * 739982445u;
-            _2425[1] = float((_3349 ^ (_3349 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
-            _2423 = _2432 + float2(0.0, 1.0);
+            uint _3354 = (uint(_2431.x) * 2654435761u) ^ (uint(_2431.y) * 2246822519u);
+            uint _3357 = (_3354 ^ (_3354 >> uint(15))) * 739982445u;
+            _2433[1] = float((_3357 ^ (_3357 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
+            _2431 = _2440 + float2(0.0, 1.0);
             if (_56.wrapX != int(0u))
             {
-                _2423.x -= (_2421.x * floor(_2423.x / _2421.x));
+                _2431.x -= (_2429.x * floor(_2431.x / _2429.x));
             }
             if (_56.wrapY != int(0u))
             {
-                _2423.y -= (_2421.y * floor(_2423.y / _2421.y));
+                _2431.y -= (_2429.y * floor(_2431.y / _2429.y));
             }
-            uint _3413 = (uint(_2423.x) * 2654435761u) ^ (uint(_2423.y) * 2246822519u);
-            uint _3416 = (_3413 ^ (_3413 >> uint(15))) * 739982445u;
-            _2425[2] = float((_3416 ^ (_3416 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
-            _2423 = _2432 + float2(1.0);
+            uint _3421 = (uint(_2431.x) * 2654435761u) ^ (uint(_2431.y) * 2246822519u);
+            uint _3424 = (_3421 ^ (_3421 >> uint(15))) * 739982445u;
+            _2433[2] = float((_3424 ^ (_3424 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
+            _2431 = _2440 + float2(1.0);
             if (_56.wrapX != int(0u))
             {
-                _2423.x -= (_2421.x * floor(_2423.x / _2421.x));
+                _2431.x -= (_2429.x * floor(_2431.x / _2429.x));
             }
             if (_56.wrapY != int(0u))
             {
-                _2423.y -= (_2421.y * floor(_2423.y / _2421.y));
+                _2431.y -= (_2429.y * floor(_2431.y / _2429.y));
             }
-            uint _3480 = (uint(_2423.x) * 2654435761u) ^ (uint(_2423.y) * 2246822519u);
-            uint _3483 = (_3480 ^ (_3480 >> uint(15))) * 739982445u;
-            _2425[3] = float((_3483 ^ (_3483 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
-            float2 _2557 = _1349 * 17.0;
-            float2 _2559 = floor(_2557);
-            float2 _2562 = _2557 - _2559;
-            float2 _2547 = (_2562 * _2562) * (float2(3.0) - (_2562 * 2.0));
-            float2 _2548 = float2(_56.mapSize) * 17.0;
-            float2 _2550 = _2559;
+            uint _3488 = (uint(_2431.x) * 2654435761u) ^ (uint(_2431.y) * 2246822519u);
+            uint _3491 = (_3488 ^ (_3488 >> uint(15))) * 739982445u;
+            _2433[3] = float((_3491 ^ (_3491 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
+            float2 _2565 = _1358 * 17.0;
+            float2 _2567 = floor(_2565);
+            float2 _2570 = _2565 - _2567;
+            float2 _2555 = (_2570 * _2570) * (float2(3.0) - (_2570 * 2.0));
+            float2 _2556 = float2(_56.mapSize) * 17.0;
+            float2 _2558 = _2567;
             if (_56.wrapX != int(0u))
             {
-                _2550.x -= (_2548.x * floor(_2550.x / _2548.x));
+                _2558.x -= (_2556.x * floor(_2558.x / _2556.x));
             }
             if (_56.wrapY != int(0u))
             {
-                _2550.y -= (_2548.y * floor(_2550.y / _2548.y));
+                _2558.y -= (_2556.y * floor(_2558.y / _2556.y));
             }
-            uint _2634 = (uint(_2550.x) * 2654435761u) ^ (uint(_2550.y) * 2246822519u);
-            uint _2640 = (_2634 ^ (_2634 >> uint(15))) * 739982445u;
-            spvUnsafeArray<float, 4> _2552;
-            _2552[0] = float((_2640 ^ (_2640 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
-            _2550 = _2559 + float2(1.0, 0.0);
+            uint _2642 = (uint(_2558.x) * 2654435761u) ^ (uint(_2558.y) * 2246822519u);
+            uint _2648 = (_2642 ^ (_2642 >> uint(15))) * 739982445u;
+            spvUnsafeArray<float, 4> _2560;
+            _2560[0] = float((_2648 ^ (_2648 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
+            _2558 = _2567 + float2(1.0, 0.0);
             if (_56.wrapX != int(0u))
             {
-                _2550.x -= (_2548.x * floor(_2550.x / _2548.x));
+                _2558.x -= (_2556.x * floor(_2558.x / _2556.x));
             }
             if (_56.wrapY != int(0u))
             {
-                _2550.y -= (_2548.y * floor(_2550.y / _2548.y));
+                _2558.y -= (_2556.y * floor(_2558.y / _2556.y));
             }
-            uint _3145 = (uint(_2550.x) * 2654435761u) ^ (uint(_2550.y) * 2246822519u);
-            uint _3148 = (_3145 ^ (_3145 >> uint(15))) * 739982445u;
-            _2552[1] = float((_3148 ^ (_3148 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
-            _2550 = _2559 + float2(0.0, 1.0);
+            uint _3153 = (uint(_2558.x) * 2654435761u) ^ (uint(_2558.y) * 2246822519u);
+            uint _3156 = (_3153 ^ (_3153 >> uint(15))) * 739982445u;
+            _2560[1] = float((_3156 ^ (_3156 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
+            _2558 = _2567 + float2(0.0, 1.0);
             if (_56.wrapX != int(0u))
             {
-                _2550.x -= (_2548.x * floor(_2550.x / _2548.x));
+                _2558.x -= (_2556.x * floor(_2558.x / _2556.x));
             }
             if (_56.wrapY != int(0u))
             {
-                _2550.y -= (_2548.y * floor(_2550.y / _2548.y));
+                _2558.y -= (_2556.y * floor(_2558.y / _2556.y));
             }
-            uint _3212 = (uint(_2550.x) * 2654435761u) ^ (uint(_2550.y) * 2246822519u);
-            uint _3215 = (_3212 ^ (_3212 >> uint(15))) * 739982445u;
-            _2552[2] = float((_3215 ^ (_3215 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
-            _2550 = _2559 + float2(1.0);
+            uint _3220 = (uint(_2558.x) * 2654435761u) ^ (uint(_2558.y) * 2246822519u);
+            uint _3223 = (_3220 ^ (_3220 >> uint(15))) * 739982445u;
+            _2560[2] = float((_3223 ^ (_3223 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
+            _2558 = _2567 + float2(1.0);
             if (_56.wrapX != int(0u))
             {
-                _2550.x -= (_2548.x * floor(_2550.x / _2548.x));
+                _2558.x -= (_2556.x * floor(_2558.x / _2556.x));
             }
             if (_56.wrapY != int(0u))
             {
-                _2550.y -= (_2548.y * floor(_2550.y / _2548.y));
+                _2558.y -= (_2556.y * floor(_2558.y / _2556.y));
             }
-            uint _3279 = (uint(_2550.x) * 2654435761u) ^ (uint(_2550.y) * 2246822519u);
-            uint _3282 = (_3279 ^ (_3279 >> uint(15))) * 739982445u;
-            _2552[3] = float((_3282 ^ (_3282 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
-            float _1729 = smoothstep(0.449999988079071044921875, 0.64999997615814208984375, (mix(mix(_1293.w, _1293.z, _1292.x), mix(_1293.x, _1293.y, _1292.x), _1292.y) * mix(0.300000011920928955078125, 1.0, 1.0 - smoothstep(0.0500000007450580596923828125, 0.800000011920928955078125, _4882))) * (0.3499999940395355224609375 + (0.949999988079071044921875 * (((0.5 * mix(mix(_2298[0], _2298[1], _2293.x), mix(_2298[2], _2298[3], _2293.x), _2293.y)) + (0.300000011920928955078125 * mix(mix(_2425[0], _2425[1], _2420.x), mix(_2425[2], _2425[3], _2420.x), _2420.y))) + (0.20000000298023223876953125 * mix(mix(_2552[0], _2552[1], _2547.x), mix(_2552[2], _2552[3], _2547.x), _2547.y))))));
-            _2831 = mix(_1560, (_1702.xyz * _2813) * 2.0, float3(_1729));
+            uint _3287 = (uint(_2558.x) * 2654435761u) ^ (uint(_2558.y) * 2246822519u);
+            uint _3290 = (_3287 ^ (_3287 >> uint(15))) * 739982445u;
+            _2560[3] = float((_3290 ^ (_3290 >> uint(12))) & 65535u) * 1.525902189314365386962890625e-05;
+            float _1740 = smoothstep(0.449999988079071044921875, 0.64999997615814208984375, (mix(mix(_1302.w, _1302.z, _1301.x), mix(_1302.x, _1302.y, _1301.x), _1301.y) * mix(0.300000011920928955078125, 1.0, 1.0 - smoothstep(0.0500000007450580596923828125, 0.800000011920928955078125, _4890))) * (0.3499999940395355224609375 + (0.949999988079071044921875 * (((0.5 * mix(mix(_2306[0], _2306[1], _2301.x), mix(_2306[2], _2306[3], _2301.x), _2301.y)) + (0.300000011920928955078125 * mix(mix(_2433[0], _2433[1], _2428.x), mix(_2433[2], _2433[3], _2428.x), _2428.y))) + (0.20000000298023223876953125 * mix(mix(_2560[0], _2560[1], _2555.x), mix(_2560[2], _2560[3], _2555.x), _2555.y))))));
+            _2839 = mix(_1570, (_1712.xyz + _2821) - float3(0.5), float3(_1740));
         }
         else
         {
-            _2831 = _1560;
+            _2839 = _1570;
         }
-        float3 _1752 = _2831 * ((float3(_922.ambientLight) * 1.25) + ((float3(_922.lightColor) * fast::clamp(dot(fast::normalize(in.i_nrm), -float3(_922.lightDir)), 0.0, 1.0)) * 0.699999988079071044921875));
-        float _1762 = fast::clamp((_56.waterZ - in.i_world.z) / (0.039999999105930328369140625 * _56.plotSize), 0.0, 1.0);
-        float3 _2834;
-        if (_1762 > 0.0)
+        float3 _1760 = fast::clamp((_2839 + float3(0.01200000010430812835693359375, 0.0240000002086162567138671875, 0.070000000298023223876953125)) + float3((fast::clamp(dot(fast::normalize(in.i_nrm), float3(0.38999998569488525390625, -0.589999973773956298828125, 0.699999988079071044921875)), 0.0, 1.0) - 0.699999988079071044921875) * 0.60000002384185791015625), float3(0.0), float3(1.0));
+        float _1770 = fast::clamp((_56.waterZ - in.i_world.z) / (0.039999999105930328369140625 * _56.plotSize), 0.0, 1.0);
+        float3 _2842;
+        if (_1770 > 0.0)
         {
-            _2834 = mix(_1752, float3(0.07999999821186065673828125, 0.20000000298023223876953125, 0.2800000011920928955078125), float3(_1762 * 0.3499999940395355224609375)) + float3((powr(fast::clamp(dot(reflect(float3(_922.lightDir), float3(0.0, 0.0, 1.0)), fast::normalize(float3(_922.eyePos) - (in.i_world + float3(_56.worldOffset)))), 0.0, 1.0), 160.0) * 0.180000007152557373046875) * _1762);
+            _2842 = mix(_1760, float3(0.07999999821186065673828125, 0.20000000298023223876953125, 0.2800000011920928955078125), float3(_1770 * 0.3499999940395355224609375)) + float3((powr(fast::clamp(dot(reflect(float3(_963.lightDir), float3(0.0, 0.0, 1.0)), fast::normalize(float3(_963.eyePos) - (in.i_world + float3(_56.worldOffset)))), 0.0, 1.0), 160.0) * 0.180000007152557373046875) * _1770);
         }
         else
         {
-            _2834 = _1752;
+            _2842 = _1760;
         }
-        float2 _1800 = _1349 - float2(int2(floor(_1349)));
-        float2 _1802 = fwidth(_1349);
-        float2 _1318 = _1802;
-        float3 _2835;
+        float2 _1808 = _1358 - float2(int2(floor(_1358)));
+        float2 _1810 = fwidth(_1358);
+        float2 _1327 = _1810;
+        float3 _2843;
         if (_56.showBorders != 0u)
         {
-            int2 _1810 = _56.mapSize * int2(16);
-            float2 _1814 = (_1349 * 16.0) - float2(0.5);
-            int2 _1817 = int2(floor(_1814));
-            float2 _1322 = _1814 - float2(_1817);
-            int2 _1825 = int2(floor(_1349 * 16.0));
-            int2 _1324 = _1825;
-            int2 _1325 = _1810;
-            float2 _2677 = float2(_1810);
-            int2 _2673 = _1825 - int2(_2677 * floor((float2(_1825) + float2(0.5)) / _2677));
-            _1324.x = (_56.wrapX != int(0u)) ? _2673.x : clamp(_1324.x, 0, _1325.x - 1);
-            _1324.y = (_56.wrapY != int(0u)) ? _2673.y : clamp(_1324.y, 0, _1325.y - 1);
-            uint4 _2730 = uint4(rint(borders.read(uint2(int3(_1324, 0).xy), 0) * 65535.0));
-            uint _1828 = _2730.x;
-            float3 _2836;
-            if (_1828 != 0u)
+            int2 _1818 = _56.mapSize * int2(16);
+            float2 _1822 = (_1358 * 16.0) - float2(0.5);
+            int2 _1825 = int2(floor(_1822));
+            float2 _1331 = _1822 - float2(_1825);
+            int2 _1833 = int2(floor(_1358 * 16.0));
+            int2 _1333 = _1833;
+            int2 _1334 = _1818;
+            float2 _2685 = float2(_1818);
+            int2 _2681 = _1833 - int2(_2685 * floor((float2(_1833) + float2(0.5)) / _2685));
+            _1333.x = (_56.wrapX != int(0u)) ? _2681.x : clamp(_1333.x, 0, _1334.x - 1);
+            _1333.y = (_56.wrapY != int(0u)) ? _2681.y : clamp(_1333.y, 0, _1334.y - 1);
+            uint4 _2738 = uint4(rint(borders.read(uint2(int3(_1333, 0).xy), 0) * 65535.0));
+            uint _1836 = _2738.x;
+            float3 _2844;
+            if (_1836 != 0u)
             {
-                int2 _1328 = _1817;
-                int2 _1329 = _1810;
-                float2 _2736 = float2(_1810);
-                int2 _2732 = _1817 - int2(_2736 * floor((float2(_1817) + float2(0.5)) / _2736));
-                _1328.x = (_56.wrapX != int(0u)) ? _2732.x : clamp(_1328.x, 0, _1329.x - 1);
-                _1328.y = (_56.wrapY != int(0u)) ? _2732.y : clamp(_1328.y, 0, _1329.y - 1);
-                uint2 _1327 = uint4(rint(borders.read(uint2(int3(_1328, 0).xy), 0) * 65535.0)).xy;
-                float _1849 = float(_1327.y);
-                spvUnsafeArray<float, 4> _1331;
-                _1331[0] = (_1327.x == _1828) ? (_1849 * 1.14442664198577404022216796875e-05) : (_1849 * (-1.14442664198577404022216796875e-05));
-                int2 _2882 = _1817 + int2(1, 0);
-                _1328 = _2882;
-                _1329 = _1810;
-                float2 _2883 = float2(_1810);
-                _2732 = _2882 - int2(_2883 * floor((float2(_2882) + float2(0.5)) / _2883));
-                _1328.x = (_56.wrapX != int(0u)) ? _2732.x : clamp(_1328.x, 0, _1329.x - 1);
-                _1328.y = (_56.wrapY != int(0u)) ? _2732.y : clamp(_1328.y, 0, _1329.y - 1);
-                _1327 = uint4(rint(borders.read(uint2(int3(_1328, 0).xy), 0) * 65535.0)).xy;
-                float _2935 = float(_1327.y);
-                _1331[1] = (_1327.x == _1828) ? (_2935 * 1.14442664198577404022216796875e-05) : (_2935 * (-1.14442664198577404022216796875e-05));
-                int2 _2954 = _1817 + int2(0, 1);
-                _1328 = _2954;
-                _1329 = _1810;
-                float2 _2955 = float2(_1810);
-                _2732 = _2954 - int2(_2955 * floor((float2(_2954) + float2(0.5)) / _2955));
-                _1328.x = (_56.wrapX != int(0u)) ? _2732.x : clamp(_1328.x, 0, _1329.x - 1);
-                _1328.y = (_56.wrapY != int(0u)) ? _2732.y : clamp(_1328.y, 0, _1329.y - 1);
-                _1327 = uint4(rint(borders.read(uint2(int3(_1328, 0).xy), 0) * 65535.0)).xy;
-                float _3007 = float(_1327.y);
-                _1331[2] = (_1327.x == _1828) ? (_3007 * 1.14442664198577404022216796875e-05) : (_3007 * (-1.14442664198577404022216796875e-05));
-                int2 _3026 = _1817 + int2(1);
-                _1328 = _3026;
-                _1329 = _1810;
-                float2 _3027 = float2(_1810);
-                _2732 = _3026 - int2(_3027 * floor((float2(_3026) + float2(0.5)) / _3027));
-                _1328.x = (_56.wrapX != int(0u)) ? _2732.x : clamp(_1328.x, 0, _1329.x - 1);
-                _1328.y = (_56.wrapY != int(0u)) ? _2732.y : clamp(_1328.y, 0, _1329.y - 1);
-                _1327 = uint4(rint(borders.read(uint2(int3(_1328, 0).xy), 0) * 65535.0)).xy;
-                float _3079 = float(_1327.y);
-                _1331[3] = (_1327.x == _1828) ? (_3079 * 1.14442664198577404022216796875e-05) : (_3079 * (-1.14442664198577404022216796875e-05));
-                float _1883 = fast::max(mix(mix(_1331[0], _1331[1], _1322.x), mix(_1331[2], _1331[3], _1322.x), _1322.y), 0.0);
-                float _1895 = fast::max(fast::max(_1318.x, _1318.y), 9.9999997473787516355514526367188e-06);
-                float _1899 = 1.0 - fast::clamp(_1883 * 2.22222232818603515625, 0.0, 1.0);
-                _2836 = mix(mix(_2834, _56.playerColors[min((_1828 - 1u), 255u)].xyz, float3((_1899 * sqrt(_1899)) * 0.60000002384185791015625)), _56.playerColors[min((_1828 - 1u), 255u)].xyz * 0.85000002384185791015625, float3((1.0 - smoothstep(0.02199999988079071044921875 - (_1895 * 0.5), 0.02199999988079071044921875 + (_1895 * 0.5), _1883)) * 0.949999988079071044921875));
+                int2 _1337 = _1825;
+                int2 _1338 = _1818;
+                float2 _2744 = float2(_1818);
+                int2 _2740 = _1825 - int2(_2744 * floor((float2(_1825) + float2(0.5)) / _2744));
+                _1337.x = (_56.wrapX != int(0u)) ? _2740.x : clamp(_1337.x, 0, _1338.x - 1);
+                _1337.y = (_56.wrapY != int(0u)) ? _2740.y : clamp(_1337.y, 0, _1338.y - 1);
+                uint2 _1336 = uint4(rint(borders.read(uint2(int3(_1337, 0).xy), 0) * 65535.0)).xy;
+                float _1857 = float(_1336.y);
+                spvUnsafeArray<float, 4> _1340;
+                _1340[0] = (_1336.x == _1836) ? (_1857 * 1.14442664198577404022216796875e-05) : (_1857 * (-1.14442664198577404022216796875e-05));
+                int2 _2890 = _1825 + int2(1, 0);
+                _1337 = _2890;
+                _1338 = _1818;
+                float2 _2891 = float2(_1818);
+                _2740 = _2890 - int2(_2891 * floor((float2(_2890) + float2(0.5)) / _2891));
+                _1337.x = (_56.wrapX != int(0u)) ? _2740.x : clamp(_1337.x, 0, _1338.x - 1);
+                _1337.y = (_56.wrapY != int(0u)) ? _2740.y : clamp(_1337.y, 0, _1338.y - 1);
+                _1336 = uint4(rint(borders.read(uint2(int3(_1337, 0).xy), 0) * 65535.0)).xy;
+                float _2943 = float(_1336.y);
+                _1340[1] = (_1336.x == _1836) ? (_2943 * 1.14442664198577404022216796875e-05) : (_2943 * (-1.14442664198577404022216796875e-05));
+                int2 _2962 = _1825 + int2(0, 1);
+                _1337 = _2962;
+                _1338 = _1818;
+                float2 _2963 = float2(_1818);
+                _2740 = _2962 - int2(_2963 * floor((float2(_2962) + float2(0.5)) / _2963));
+                _1337.x = (_56.wrapX != int(0u)) ? _2740.x : clamp(_1337.x, 0, _1338.x - 1);
+                _1337.y = (_56.wrapY != int(0u)) ? _2740.y : clamp(_1337.y, 0, _1338.y - 1);
+                _1336 = uint4(rint(borders.read(uint2(int3(_1337, 0).xy), 0) * 65535.0)).xy;
+                float _3015 = float(_1336.y);
+                _1340[2] = (_1336.x == _1836) ? (_3015 * 1.14442664198577404022216796875e-05) : (_3015 * (-1.14442664198577404022216796875e-05));
+                int2 _3034 = _1825 + int2(1);
+                _1337 = _3034;
+                _1338 = _1818;
+                float2 _3035 = float2(_1818);
+                _2740 = _3034 - int2(_3035 * floor((float2(_3034) + float2(0.5)) / _3035));
+                _1337.x = (_56.wrapX != int(0u)) ? _2740.x : clamp(_1337.x, 0, _1338.x - 1);
+                _1337.y = (_56.wrapY != int(0u)) ? _2740.y : clamp(_1337.y, 0, _1338.y - 1);
+                _1336 = uint4(rint(borders.read(uint2(int3(_1337, 0).xy), 0) * 65535.0)).xy;
+                float _3087 = float(_1336.y);
+                _1340[3] = (_1336.x == _1836) ? (_3087 * 1.14442664198577404022216796875e-05) : (_3087 * (-1.14442664198577404022216796875e-05));
+                float _1891 = fast::max(mix(mix(_1340[0], _1340[1], _1331.x), mix(_1340[2], _1340[3], _1331.x), _1331.y), 0.0);
+                float _1903 = fast::max(fast::max(_1327.x, _1327.y), 9.9999997473787516355514526367188e-06);
+                float _1907 = 1.0 - fast::clamp(_1891 * 2.22222232818603515625, 0.0, 1.0);
+                _2844 = mix(mix(_2842, _56.playerColors[min((_1836 - 1u), 255u)].xyz, float3((_1907 * sqrt(_1907)) * 0.60000002384185791015625)), _56.playerColors[min((_1836 - 1u), 255u)].xyz * 0.85000002384185791015625, float3((1.0 - smoothstep(0.02199999988079071044921875 - (_1903 * 0.5), 0.02199999988079071044921875 + (_1903 * 0.5), _1891)) * 0.949999988079071044921875));
             }
             else
             {
-                _2836 = _2834;
+                _2844 = _2842;
             }
-            _2835 = _2836;
+            _2843 = _2844;
         }
         else
         {
-            _2835 = _2834;
+            _2843 = _2842;
         }
-        float3 _2837;
+        float3 _2845;
         if (_56.showGrid != 0u)
         {
-            float2 _1337 = fast::min(_1800, float2(1.0) - _1800) / fast::max(_1802, float2(9.9999997473787516355514526367188e-06));
-            _2837 = _2835 * (1.0 - (0.3499999940395355224609375 * (1.0 - fast::clamp(fast::min(_1337.x, _1337.y) - 0.5, 0.0, 1.0))));
+            float2 _1346 = fast::min(_1808, float2(1.0) - _1808) / fast::max(_1810, float2(9.9999997473787516355514526367188e-06));
+            _2845 = _2843 * (1.0 - (0.3499999940395355224609375 * (1.0 - fast::clamp(fast::min(_1346.x, _1346.y) - 0.5, 0.0, 1.0))));
         }
         else
         {
-            _2837 = _2835;
+            _2845 = _2843;
         }
-        float3 _2838;
+        float3 _2846;
         if (_56.showFog != 0u)
         {
-            float2 _1338 = smoothstep(float2(0.0), float2(1.0), _1359);
-            float2 _1339 = mix(mix(_1272[3], _1272[2], float2(_1338.x)), mix(_1272[0], _1272[1], float2(_1338.x)), float2(_1338.y));
-            _2838 = _2837 * (_1339.x * mix(0.550000011920928955078125, 1.0, _1339.y));
+            float2 _1347 = smoothstep(float2(0.0), float2(1.0), _1368);
+            float2 _1348 = mix(mix(_1281[3], _1281[2], float2(_1347.x)), mix(_1281[0], _1281[1], float2(_1347.x)), float2(_1347.y));
+            _2846 = _2845 * (_1348.x * mix(0.550000011920928955078125, 1.0, _1348.y));
         }
         else
         {
-            _2838 = _2837;
+            _2846 = _2845;
         }
-        _2848 = float4(_2838, 1.0);
+        _2856 = float4(_2846, 1.0);
         break;
     } while(false);
-    out._entryPointOutput = _2848;
+    out._entryPointOutput = _2856;
     return out;
 }
 
