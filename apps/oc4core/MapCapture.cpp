@@ -988,8 +988,23 @@ namespace oc4::host
 					GAMETEXT.buildCityBillboardCitySizeString(label, city, NiColorA(1, 1, 1, 1));
 					c.population = std::atoi(gameText(label.getCString()).c_str());
 					label.clear();
-					GAMETEXT.buildCityBillboardProductionString(label, city);
-					c.production = gameMarkup(label.getCString());
+					// (what it builds only for the active team's cities, as the original's bar)
+					const CvGame& g = GC.getGame();
+					c.ownTeam = city->getTeam() == g.getActiveTeam() || g.isDebugMode();
+					c.production.clear();
+					c.productionArt.clear();
+					if (c.ownTeam)
+					{
+						GAMETEXT.buildCityBillboardProductionString(label, city);
+						c.production = gameMarkup(label.getCString());
+						// The production symbol, as the engine asks for it: the button of what it builds,
+						// else the game's "no production" button.
+						if (const TCHAR* art = city->getCityBillboardProductionIcon())
+							c.productionArt = art;
+					}
+					label.clear();
+					GAMETEXT.buildCityBillboardIconString(label, city);
+					c.icons = gameMarkup(label.getCString());
 					NiColorA dot, number;
 					city->getCityBillboardSizeIconColors(dot, number);
 					c.sizeDot = { dot.r, dot.g, dot.b }, c.sizeText = { number.r, number.g, number.b };

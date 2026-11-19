@@ -427,7 +427,7 @@ namespace oc4::render
 		b.batch = m_batch;
 		use(b.image.get());
 		const float u0 = sx0 / float(w), v0 = sy0 / float(h), u1 = sx1 / float(w), v1 = sy1 / float(h);
-		const uint32_t c = pack(alpha, alpha, alpha, alpha);
+		const uint32_t c = m_imageColour ? *m_imageColour : pack(alpha, alpha, alpha, alpha);
 		vertex(x0, y0, c, u0, v0), vertex(x1, y0, c, u1, v0), vertex(x1, y1, c, u1, v1);
 		vertex(x0, y0, c, u0, v0), vertex(x1, y1, c, u1, v1), vertex(x0, y1, c, u0, v1);
 	}
@@ -457,6 +457,19 @@ namespace oc4::render
 			const float x0 = x + (width - w) / 2, y0 = y + (height - h) / 2;
 			image(ic->key, ic->bgra, ic->width, ic->height, 0, x0, y0, x0 + w, y0 + h, m_inlineAlpha);
 		}
+	}
+
+	bool Overlay::art(const std::string& art, float x0, float y0, float x1, float y1, Color tint, float alpha)
+	{
+		if (!m_art || !m_drawing)
+			return false;
+		const ButtonArt::Icon* ic = m_art->icon(art);
+		if (!ic)
+			return false;
+		m_imageColour = premultiplied(tint, alpha);
+		image(ic->key, ic->bgra, ic->width, ic->height, 0, x0, y0, x1, y1, alpha);
+		m_imageColour.reset();
+		return true;
 	}
 
 	void Overlay::clip(float x0, float y0, float x1, float y1)

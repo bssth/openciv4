@@ -512,7 +512,12 @@ namespace oc4::render
 			// (the plot cursor's own plot: the mouse is put on its middle, which a hill's side may give to its neighbour)
 			if (padMode == PadMode::Cursor && mouseX >= 0 && padPlotX >= 0)
 				return { padPlotX, padPlotY };
-			return mouseX < 0 ? std::pair{ -1, -1 } : plotUnder(mouseX, mouseY);
+			if (mouseX < 0)
+				return { -1, -1 };
+			// (a city's bar stands for the city, as the original's)
+			if (const auto bar = view->cityBarAt(float(mouseX), float(mouseY)))
+				return *bar;
+			return plotUnder(mouseX, mouseY);
 		}
 
 		std::pair<int, int> plotUnder(int x, int y) const
@@ -1226,7 +1231,8 @@ namespace oc4::render
 				// A click, not a drag: the plot under it is the host's.
 				mouseX = x;
 				mouseY = y;
-				const auto figure = figureUnder(x, y);
+				// (a city's bar is over the figures: a click on it is on its city)
+				const auto figure = view->cityBarAt(float(x), float(y)) ? std::nullopt : figureUnder(x, y);
 				if (const auto p = figure ? *figure : hoveredPlot(); p.first >= 0)
 					clicks.push_back({ p.first, p.second, !downLeft, mods.shift, mods.ctrl, mods.alt, figure.has_value() });
 			}
@@ -2538,8 +2544,10 @@ namespace oc4::render
 
 	std::optional<MapWindow::PlotClick> MapWindow::clickAt(int x, int y, bool right) const
 	{
-		const auto figure = m->figureUnder(x, y);
-		const auto p = figure ? *figure : m->plotUnder(x, y);
+		// (a city's bar stands for the city, as the original's: its screen opens)
+		const auto bar = m->view->cityBarAt(float(x), float(y));
+		const auto figure = bar ? std::nullopt : m->figureUnder(x, y);
+		const auto p = bar ? *bar : figure ? *figure : m->plotUnder(x, y);
 		if (p.first < 0)
 			return std::nullopt;
 		PlotClick c;

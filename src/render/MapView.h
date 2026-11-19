@@ -74,6 +74,8 @@ namespace oc4::render
 		Vec3 worldSize() const;
 		float groundHeight(float x, float y) const;
 		std::optional<std::pair<int, int>> plotAt(Vec3 world) const;
+		// The plot of the city whose bar (drawOverlay's last) is at the point, in the overlay's units.
+		std::optional<std::pair<int, int>> cityBarAt(float x, float y) const;
 		// The plot of the unit whose figure the ray from a to b meets first, as last drawn.
 		std::optional<std::pair<int, int>> figureAt(Vec3 a, Vec3 b) const;
 

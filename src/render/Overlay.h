@@ -14,6 +14,7 @@
 #include <array>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <string_view>
@@ -77,6 +78,10 @@ namespace oc4::render
 		void setArt(ButtonArt* art) { m_art = art; }
 		// (an inline picture drawn: by its art, the top left and size of its place)
 		void drawInline(const std::string& art, float x, float y, float width, float height);
+		// The art (a DDS or TGA of its own, as drawInline's) stretched over the rectangle, its
+		// colours multiplied by the tint; false without the art.
+		bool art(const std::string& art, float x0, float y0, float x1, float y1, Color tint = { 1, 1, 1 }, float alpha = 1);
+		ButtonArt* buttonArt() const { return m_art; }
 
 		// The colour of the text's shadow (one pixel down and right) until changed again; black by default.
 		void setShadow(Color colour, float alpha) { m_shadow = colour; m_shadowAlpha = alpha; }
@@ -149,5 +154,6 @@ namespace oc4::render
 		int m_shelfX = 0, m_shelfY = 0, m_shelfHeight = 0;
 		ButtonArt* m_art = nullptr;
 		float m_inlineAlpha = 1; // (the text's being drawn)
+		std::optional<uint32_t> m_imageColour; // (the pictures' vertex colour while art() draws one)
 	};
 }

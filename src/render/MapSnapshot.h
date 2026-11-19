@@ -213,6 +213,9 @@ namespace oc4::render
 		bool capital = false;
 		std::string name;       // as the game's city bar shows it (with turns to grow)
 		std::string production; // what it builds (turns), if the active player may see it: markup
+		std::string productionArt; // the production symbol (getCityBillboardProductionIcon); the active team's cities only
+		std::string icons;      // the line of icons over the bar (buildCityBillboardIconString): markup
+		bool ownTeam = false;   // the active team's: the bar shows what it builds
 		float foodStored = -1, foodRate = 0, productionStored = -1, productionRate = 0; // bar fractions, -1: not shown
 		// The game's colours of the population's circle and number (getCityBillboardSizeIconColors) and of the bars.
 		Color sizeDot, sizeText, foodBar{ 0.35f, 0.85f, 0.25f }, productionBar{ 0.35f, 0.55f, 0.95f };
