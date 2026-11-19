@@ -33,6 +33,8 @@ namespace oc4::render
 		constexpr uint32_t kSlots = 32;  // atlas slots per terrain
 		constexpr int kSub = 8;          // terrain quads per plot side
 		constexpr size_t kMaxPlayers = 256;
+		constexpr std::array<float, 4> kDefaultGridLine = { 0, 0.5f, 1.0f / 128, 0 }; // a terrain without grid art: as BtS's land
+		constexpr size_t kGridTerrains = 64; // terrains with their own grid line (gridLines in the shader); more take the 64th's
 		constexpr uint16_t kNoOverlay = 0xFFFF;
 		constexpr int kBorderRes = 16;       // culture border texels per plot side
 		constexpr float kBorderReach = 0.75f; // plots: the border texture's distances go this far
@@ -55,6 +57,10 @@ cbuffer Terrain : register(b1, UNIFORMS)
 	uint showFog;
 	uint3 terrainPad;
 	float4 playerColors[256];
+	// By terrain, its grid line as the original paints it into the terrain's grid texture
+	// (<Grid> in CIV4ArtDefines_Terrain.xml): the ground under the line goes towards grey x by
+	// y (land: black by half; coast and ocean: white), z the line's width in plots.
+	float4 gridLines[64];
 };
 
 Texture2D plots : register(t0, space2);          // 16-bit unorm: terrain, overlay terrain (hills, peaks), owner + 1, flags
@@ -192,6 +198,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 	uint4 hi = uint4(round(cells.Load(int3(at + int2(1, 0), 0)) * 65535.0));
 	uint entry[6] = { lo.r, lo.g, lo.b, lo.a, hi.r, hi.g };
 	float3 color = 0;
+	float3 lineColor = 0; // the ground as the grid texture has it under a grid line
+	float lineWidth = 0;
 	float3 detail = 0.5; // blended as the colours are
 	float2 dp = p * 3.0; // detail repeats
 	[loop] for (int step = 0; step < 6; ++step)
@@ -204,6 +212,36 @@ float4 PSTerrain(PSIn i) : SV_Target
 		float3 ds = details.Sample(detailSampler, float3(dp, slice >> 5)).rgb;
 		color = step == 0 ? s.rgb : lerp(color, s.rgb, s.a);
 		detail = step == 0 ? ds : lerp(detail, ds, s.a);
+		float4 gl = gridLines[min(slice >> 5, 63u)];
+		float3 lc = lerp(s.rgb, gl.xxx, gl.y);
+		lineColor = step == 0 ? lc : lerp(lineColor, lc, s.a);
+		lineWidth = step == 0 ? gl.z : lerp(lineWidth, gl.z, s.a);
+	}
+
+	// The grid, as the original draws it: each terrain's blend atlas swapped for its grid twin,
+	// the same tiles with a line along the plot edges (through the middle of each tile). So it
+	// lies in the ground itself: over hills and down to the sea floor, under the water, rivers,
+	// forests and improvements, lit and fogged as the ground is. The grid textures' mips are
+	// drawn by hand: down to 16 texels a plot each draws the line again, as many texels wide
+	// and as dark as the full texture does (so it stays a pixel or two wide, not fainter), and
+	// the smaller ones have none. Sampled as they are: trilinear (isotropic), bilinear texels.
+	if (showGrid)
+	{
+		float2 edge = abs(p - round(p)); // plots to the nearest edge
+		float footprint = max(length(float2(dcx.x, dcy.x)), length(float2(dcx.y, dcy.y))); // plots a pixel
+		float lod = max(log2(footprint * 128), 0); // the mip, 128 texels a plot at the top
+		float level = floor(lod);
+		float2 cover = 0;
+		[unroll] for (int m = 0; m < 2; ++m)
+		{
+			float l = level + m;
+			float texel = exp2(l) / 128;
+			float width = lineWidth * exp2(l); // (as many texels as at the top)
+			// a line of `width` filtered over a texel; none from 8 texels a plot down
+			float2 c = clamp((width + texel) * 0.5 - edge, 0, min(width, texel)) / texel;
+			cover += (l <= 3 ? c : 0) * (m == 0 ? 1 - (lod - level) : lod - level);
+		}
+		color = lerp(color, lineColor, saturate(cover.x + cover.y - cover.x * cover.y));
 	}
 
 	// The detail textures sharpen the ground up close (their mips fade to grey far away).
@@ -251,8 +289,6 @@ float4 PSTerrain(PSIn i) : SV_Target
 		color = lerp(color, float3(0.08, 0.20, 0.28), depth * 0.35) + glint * 0.18 * depth;
 	}
 
-	int2 plot = int2(floor(p));
-	float2 g = p - plot;
 	float2 pw = fwidth(p);
 	if (showBorders)
 	{
@@ -284,11 +320,6 @@ float4 PSTerrain(PSIn i) : SV_Target
 			color = lerp(color, oc * 0.85, stroke * 0.95);
 		}
 	}
-	if (showGrid)
-	{
-		float2 e = min(g, 1 - g) / max(pw, 1e-5);
-		color *= 1 - 0.35 * (1 - saturate(min(e.x, e.y) - 0.5));
-	}
 	if (showFog)
 	{
 		// What the active team knows, blended between plot centres: black where it has not
@@ -316,6 +347,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			float waterZ;
 			uint32_t showFog, pad[3];
 			float playerColors[kMaxPlayers][4];
+			float gridLines[kGridTerrains][4];
 		};
 
 		uint32_t mix(uint32_t h)
@@ -556,6 +588,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 		bool riverMaskChanged = true;
 		std::vector<int16_t> borderOwners;
 		std::vector<uint32_t> terrainColors; // BGRA: the average of each terrain's plain tile
+		std::vector<std::array<float, 4>> gridLines; // by terrain: grey, amount, width in plots (gridLines in the shader)
 		std::vector<uint8_t> minimapPixels;
 		uint64_t minimapVersion = 0;
 		std::vector<uint16_t> featureDecal; // by FeatureTypes: 1-based slice of decalTex, 0 none
@@ -759,6 +792,66 @@ float4 PSTerrain(PSIn i) : SV_Target
 
 		// ------------------------------------------------------------ art
 
+		// The original draws the grid by swapping each terrain's blend atlas for its grid texture:
+		// the same tiles with a line painted through their middles, which is where the plot edges
+		// run. Measured from the two (grey, amount, width in plots), so the shader draws that line:
+		// the ground under it towards black or white (BtS: land half way to black, 1/128 of a plot
+		// wide; coast half way and ocean 30% to white, 2/128 wide).
+		std::array<float, 4> measureGridLine(const std::vector<uint8_t>& blend, uint32_t width, uint32_t height, const std::string& path)
+		{
+			try
+			{
+				const auto loc = assets.locate(makeAssetKey(path));
+				if (!loc)
+					throw std::runtime_error("not found");
+				const gfx::Image image = gfx::loadDds(assets.read(*loc));
+				if (image.width != width || image.height != height)
+					throw std::runtime_error("not the size of the terrain's blend texture");
+				const std::vector<uint8_t> grid = gfx::decodeBgra(image);
+				// The tile columns that differ (summed over the whole texture), then the line's
+				// colour against the ground's in them.
+				const uint32_t tileSize = width / 4;
+				if (tileSize == 0)
+					return kDefaultGridLine;
+				std::vector<double> diff(tileSize);
+				for (uint32_t y = 0; y < height; ++y)
+					for (uint32_t x = 0; x < width; ++x)
+					{
+						const size_t i = (size_t(y) * width + x) * 4;
+						for (int c = 0; c < 3; ++c)
+							diff[x % tileSize] += std::abs(int(grid[i + c]) - int(blend[i + c]));
+					}
+				const double perTexel = 3.0 * height * 4;
+				double under = 0, line = 0;
+				int columns = 0;
+				for (uint32_t col = 0; col < tileSize; ++col)
+				{
+					if (diff[col] / perTexel < 8) // (DXT noise is ~1)
+						continue;
+					++columns;
+					for (uint32_t y = 0; y < height; ++y)
+						for (uint32_t x = col; x < width; x += tileSize)
+						{
+							const size_t i = (size_t(y) * width + x) * 4;
+							for (int c = 0; c < 3; ++c)
+								under += blend[i + c], line += grid[i + c];
+						}
+				}
+				if (columns == 0 || under <= 0)
+					return { 0, 0, 0, 0 }; // no line: the grid texture is the blend texture
+				const float n = float(columns) * height * 4 * 3;
+				const float u = float(under) / n / 255, l = float(line) / n / 255;
+				const float grey = l < u ? 0.0f : 1.0f;
+				const float amount = std::clamp(grey == 0 ? 1 - l / u : (l - u) / std::max(1 - u, 1e-3f), 0.0f, 1.0f);
+				return { grey, amount, float(columns) / float(tileSize), 0 };
+			}
+			catch (const std::exception& e)
+			{
+				problem(std::format("terrain grid texture {}: {}", path, e.what()));
+				return kDefaultGridLine;
+			}
+		}
+
 		// Every terrain's blend atlas as 32 tiles of kTile pixels in one texture array, so that
 		// tiles filter and mip without bleeding into each other.
 		void buildAtlas()
@@ -768,6 +861,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			if (count == 0)
 				return;
 			std::vector<std::vector<uint8_t>> levels(count * kSlots * kTileMips);
+			gridLines.assign(count, kDefaultGridLine);
 			for (size_t t = 0; t < count; ++t)
 			{
 				std::vector<uint8_t> pixels;
@@ -788,6 +882,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 					if (!path.empty())
 						problem(std::format("terrain texture {}: {}", path, e.what()));
 				}
+				if (!pixels.empty() && !map.terrains[t].grid.empty())
+					gridLines[t] = measureGridLine(pixels, width, height, map.terrains[t].grid);
 				const uint32_t tileSize = width / 4;
 				const uint32_t tiles = tileSize ? 4 * (height / tileSize) : 0;
 				for (uint32_t s = 0; s < kSlots; ++s)
@@ -2843,6 +2939,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 			tc.showBorders = options.borders;
 			tc.showFog = options.fog;
 			tc.waterZ = 0;
+			for (size_t t = 0; t < kGridTerrains; ++t)
+				std::memcpy(tc.gridLines[t], gridLines.empty() ? kDefaultGridLine.data() : gridLines[std::min(t, gridLines.size() - 1)].data(), sizeof(tc.gridLines[t]));
 			for (size_t i = 0; i < std::min(map.players.size(), kMaxPlayers); ++i)
 			{
 				const Color& c = map.players[i].primary;
