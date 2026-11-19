@@ -1,6 +1,9 @@
 #include "GameSession.h"
 
 #include "Net.h"
+#ifdef __linux__
+#include "Pitboss.h"
+#endif
 #include "core/FileUtil.h"
 
 #include "DataStream.h"
@@ -120,11 +123,12 @@ namespace oc4::host
 	void GameSession::setupInitCore(const NewGameSettings& s)
 	{
 		CvInitCore& ic = GC.getInitCore();
-		ic.init(GAMEMODE_NORMAL); // game options to their XML defaults
-		ic.setType(GAME_SP_NEW);
+		ic.init(s.pitboss ? GAMEMODE_PITBOSS : GAMEMODE_NORMAL);
+		ic.setType(s.pitboss ? GAME_MP_NEW : GAME_SP_NEW);
+		if (s.pitboss) ic.setMPOption(MPOPTION_SIMULTANEOUS_TURNS, true);
 		// The "loaded" init core describes the game being played too: a new one (AND2 asks it
 		// whether the game is new before it offers to recalculate an old save's modifiers).
-		GC.getLoadedInitCore().setType(GAME_SP_NEW);
+		GC.getLoadedInitCore().setType(s.pitboss ? GAME_MP_NEW : GAME_SP_NEW);
 
 		// Python's own random module from the game's seed: mods' scripts draw from it (CoM's
 		// natural wonders), seeded by the clock it would make each game of a seed another.
@@ -168,6 +172,8 @@ namespace oc4::host
 		const WorldSizeTypes worldSize = ic.getWorldSize();
 		int numPlayers = s.players > 0 ? s.players : GC.getWorldInfo(worldSize).getDefaultPlayers();
 		numPlayers = std::clamp(numPlayers, 2, std::min<int>(maxCivPlayers(), int(civs.size())));
+		if (s.pitboss && std::ranges::any_of(s.humans, [&](int p) { return p < 0 || p >= numPlayers; }))
+			throw std::runtime_error("human seat outside configured player count");
 
 		const HandicapTypes humanHandicap = static_cast<HandicapTypes>(infoTypeOrStandard(s.handicap, NewGameSettings{}.handicap, "STANDARD_HANDICAP"));
 		const HandicapTypes aiHandicap = static_cast<HandicapTypes>(GC.getDefineINT("AI_HANDICAP"));
@@ -180,12 +186,13 @@ namespace oc4::host
 				if (civInfo.isLeaders(l))
 					leaders.push_back(l);
 			const PlayerTypes id = static_cast<PlayerTypes>(p);
-			ic.setSlotStatus(id, p == 0 ? SS_TAKEN : SS_COMPUTER);
+			const bool human = s.pitboss ? std::ranges::find(s.humans, p) != s.humans.end() : p == 0;
+			ic.setSlotStatus(id, human ? SS_TAKEN : SS_COMPUTER);
 			ic.setCiv(id, civ);
 			const bool chosen = p == 0 && chosenLeader >= 0 && std::ranges::find(leaders, chosenLeader) != leaders.end();
 			ic.setLeader(id, static_cast<LeaderHeadTypes>(chosen ? chosenLeader : leaders.empty() ? 0 : leaders[size_t(rng.next(int(leaders.size())))]));
 			ic.setTeam(id, static_cast<TeamTypes>(p));
-			ic.setHandicap(id, p == 0 ? humanHandicap : aiHandicap);
+			ic.setHandicap(id, human ? humanHandicap : aiHandicap);
 			ic.setColor(id, static_cast<PlayerColorTypes>(civInfo.getDefaultPlayerColor()));
 			ic.setPlayableCiv(id, civInfo.isPlayable());
 		}
@@ -198,7 +205,7 @@ namespace oc4::host
 		ic.setHandicap(barbarianPlayer(), static_cast<HandicapTypes>(GC.getDefineINT("BARBARIAN_HANDICAP")));
 		ic.setColor(barbarianPlayer(), static_cast<PlayerColorTypes>(GC.getCivilizationInfo(barbCiv).getDefaultPlayerColor()));
 
-		ic.setActivePlayer(static_cast<PlayerTypes>(0));
+		ic.setActivePlayer(static_cast<PlayerTypes>(s.pitboss ? s.humans.front() : 0));
 	}
 
 	namespace py = pybind11;
@@ -440,6 +447,14 @@ namespace oc4::host
 			if (!net.takeFrame(frame))
 				return;
 			setInterfaceTime(false);
+#ifdef __linux__
+			if (net.pitboss())
+			{
+				pb::connections(frame.connected);
+				GC.getInitCore().setMPOption(MPOPTION_TURN_TIMER, frame.pitbossTicks >= 0);
+				GC.getGame().setCutoffSlice(GC.getGame().getTurnSlice() + (frame.pitbossTicks == 0 ? -1 : frame.pitbossTicks));
+			}
+#endif
 			net.setInFrame(true);
 			for (const auto& command : frame.commands)
 				m_utility.runCommand(command);
@@ -448,7 +463,7 @@ namespace oc4::host
 			net.setInFrame(false);
 			setInterfaceTime(true);
 			const bool check = frame.number % Net::kChecksumEvery == 0;
-			net.executed(frame.number, check ? GC.getGame().calculateSyncChecksum() : 0);
+			net.executed(frame.number, (check || net.pitboss()) ? GC.getGame().calculateSyncChecksum() : 0);
 			// (development, to find where the games of one out of sync part: OC4_MP_LOG=<file> gets
 			// each frame's orders and each check's checksum, OC4_MP_CHECK_SCRIPT=<file.py> runs at
 			// each check, OC4_MP_FRAME telling it which)
@@ -493,6 +508,25 @@ namespace oc4::host
 		GC.getGame().update();
 	}
 
+	void GameSession::setupPitboss(const std::vector<int>& humans, int seat, bool server)
+	{
+		m_utility.setPitboss(server, seat);
+		GC.getInitCore().setMode(GAMEMODE_PITBOSS);
+		setupMultiplayer(humans, seat);
+	}
+
+	std::string GameSession::pitbossPythonState() const
+	{
+		return py::repr(py::module_::import("random").attr("getstate")()).cast<std::string>();
+	}
+
+	void GameSession::restorePitbossPythonState(const std::string& state)
+	{
+		// literal_eval accepts the RNG's tuple of numbers, without executing Python from the wire.
+		auto tuple = py::module_::import("ast").attr("literal_eval")(py::bytes(state));
+		py::module_::import("random").attr("setstate")(tuple);
+	}
+
 	void GameSession::setupMultiplayer(const std::vector<int>& humans, int seat)
 	{
 		CvInitCore& ic = GC.getInitCore();
@@ -509,7 +543,7 @@ namespace oc4::host
 			player(p).updateHuman();
 		}
 		GC.getGame().setActivePlayer(static_cast<PlayerTypes>(seat));
-		m_utility.setProfileOptionsFromPlayer(static_cast<PlayerTypes>(seat));
+		if (seat >= 0) m_utility.setProfileOptionsFromPlayer(static_cast<PlayerTypes>(seat));
 		// (the mods' scripts draw from Python's random module too: the same numbers in every game)
 		m_python.run(std::format("import random\nrandom.seed({})\n", ic.getSyncRandSeed() ^ unsigned(GC.getGame().getGameTurn())));
 		setInterfaceTime(true); // (from now on, between frames)

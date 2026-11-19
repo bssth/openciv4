@@ -55,13 +55,15 @@ namespace oc4::host
 	{
 		enum class Kind
 		{
-			NewGame, Load, Join, Mod, Exit
+			NewGame, Load, Join, Pitboss, Mod, Exit
 		};
 		Kind kind = Kind::Exit;
 		NewGameSettings game;
 		std::filesystem::path save;
 		int host = 0;     // a multiplayer game hosted for this many humans (port 2056), 0 none
 		std::string join; // ... or the one at this address joined
+		int seat = -1;
+		std::string password;
 		std::string mod;  // ... or this mod played instead ("Mods\Name\" as saves have it; empty: none)
 	};
 
@@ -134,6 +136,8 @@ namespace oc4::host
 		std::pair<int, int> m_laidOut{ -1, -1 }, m_seenSize{ -1, -1 }; // the size the screens were made for; the window's
 		std::chrono::steady_clock::time_point m_sizeChanged;
 		std::vector<Item> m_items;
+		std::optional<Item> m_edit;
+		bool m_editSelectAll = false;
 		int m_hovered = -1;
 		std::pair<int, int> m_mouse{ -1, -1 }; // where the mouse was at the clicks taken
 		unsigned m_diploVersion = 0;           // the talk the diplomacy screen shows

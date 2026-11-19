@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 3.28)
+project(openciv4_pitboss_transport_tests LANGUAGES CXX)
+
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+	message(FATAL_ERROR "PitBoss currently supports Linux only")
+endif()
+
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+enable_testing()
+add_executable(pitboss_test ../pitboss_test.cpp ../../apps/oc4core/Pitboss.cpp)
+target_include_directories(pitboss_test PRIVATE ../../apps/oc4core)
+target_compile_features(pitboss_test PRIVATE cxx_std_20)
+target_link_libraries(pitboss_test PRIVATE OpenSSL::Crypto)
+add_test(NAME pitboss COMMAND pitboss_test)
+set_tests_properties(pitboss PROPERTIES TIMEOUT 65)

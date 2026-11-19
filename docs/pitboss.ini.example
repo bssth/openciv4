@@ -1,0 +1,20 @@
+# Copy outside the checkout and edit paths before starting.
+[server]
+civ4=/path/to/Civ4
+# Optional XML/Python/art mod using the vanilla native core:
+# mod=Mods/Next War
+listen=127.0.0.1
+port=2056
+turn_hours=24
+# An absolute path is recommended. Relative paths are relative to this INI.
+# If omitted: $XDG_STATE_HOME/openciv4/pitboss/default, or ~/.local/state/...
+state_dir=/path/to/private/pitboss-state
+
+[game]
+humans=0,1
+players=4
+map=Continents
+size=WORLDSIZE_SMALL
+seed=7
+speed=GAMESPEED_NORMAL
+handicap=HANDICAP_NOBLE

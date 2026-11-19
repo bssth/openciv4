@@ -7,6 +7,7 @@
 ## the host reads what was chosen with takeChoice().
 
 import os
+import sys
 import time
 import CvPythonExtensions as _cpe
 import oc4screens
@@ -60,7 +61,7 @@ def show(title, maps, folders, message='', page='', mods=()):
 	_state['mods'] = list(mods)
 	_state['choice'] = None
 	_state['message'] = _u(message)
-	_state['page'] = 'load' if message or page == 'load' else 'main'
+	_state['page'] = page if page in ('load', 'pitboss') else ('load' if message else 'main')
 	_draw()
 
 
@@ -110,7 +111,7 @@ def _draw():
 		_cpe.FontTypes.TITLE_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
 	screen.setLabel('MenuVersion', 'Background', u'<font=1>openciv4 - temporary menu</font>', 1 << 1, W - 12, H - 24, 0,
 		_cpe.FontTypes.SMALL_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
-	{'main': _mainPage, 'new': _newPage, 'load': _loadPage, 'multi': _multiPage, 'mods': _modsPage}[_state['page']](screen, W, H)
+	{'main': _mainPage, 'new': _newPage, 'load': _loadPage, 'multi': _multiPage, 'pitboss': _pitbossPage, 'mods': _modsPage}[_state['page']](screen, W, H)
 
 
 def _background():
@@ -173,7 +174,7 @@ def _modsPage(screen, W, H):
 def _multiPage(screen, W, H):
 	"""Multiplayer: host a new game or a saved one for a number of humans (the others join it,
 	port 2056), or join one at an address."""
-	w, h = 520, 380
+	w, h = 520, 430
 	x, y = (W - w) / 2, (H - h) / 2
 	screen.addPanel('MenuMultiPanel', u'', u'', True, False, x, y, w, h, _cpe.PanelStyles.PANEL_STYLE_MAIN)
 	screen.setLabel('MenuMultiHeader', 'Background', u'<font=3b>' + _t('TXT_KEY_MAIN_MENU_MULTIPLAYER', u'Multiplayer') + u'</font>',
@@ -189,8 +190,34 @@ def _multiPage(screen, W, H):
 		_cpe.FontTypes.GAME_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
 	screen.addEditBoxGFC('MenuAddress', x + w - 290, y + 226, 260, 30, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1, _cpe.FontTypes.GAME_FONT)
 	screen.setEditBoxString('MenuAddress', _state.get('address', u'127.0.0.1:2056'))
+	if sys.platform.startswith('linux'):
+		_button(screen, 'MenuPitboss', u'Join a PitBoss server', x + 30, y + 270, w - 60)
 	_button(screen, 'MenuJoin', u'Join', x + w - 230, y + h - 64, 200)
 	_button(screen, 'MenuBack', _t('TXT_KEY_MAIN_MENU_GO_BACK', u'Go Back'), x + 30, y + h - 64, 200)
+
+
+def _pitbossPage(screen, W, H):
+	w, h = 560, 400
+	x, y = (W - w) / 2, (H - h) / 2
+	screen.addPanel('MenuPitbossPanel', u'', u'', True, False, x, y, w, h, _cpe.PanelStyles.PANEL_STYLE_MAIN)
+	screen.setLabel('MenuPitbossHeader', 'Background', u'<font=3b>Join PitBoss</font>', 1 << 2, W / 2, y + 18, 0,
+		_cpe.FontTypes.TITLE_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
+	for n, label, yy, text in (('MenuPitbossAddress', u'Server', 76, _state.get('address', u'127.0.0.1:2056')),
+		('MenuPitbossPassword', u'Seat password', 184, u'')):
+		screen.setLabel(n + 'Label', 'Background', u'<font=2>' + label + u'</font>', 1 << 0, x + 30, y + yy + 4, 0,
+			_cpe.FontTypes.GAME_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
+		screen.addEditBoxGFC(n, x + 210, y + yy, w - 240, 32, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1, _cpe.FontTypes.GAME_FONT)
+		screen.setEditBoxString(n, text)
+	screen.setEditBoxPassword('MenuPitbossPassword')
+	screen.setLabel('MenuPitbossSeatLabel', 'Background', u'<font=2>Assigned seat (0-17)</font>', 1 << 0, x + 30, y + 134, 0,
+		_cpe.FontTypes.GAME_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
+	screen.addDropDownBoxGFC('MenuPitbossSeat', x + 210, y + 130, w - 240, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1, _cpe.FontTypes.GAME_FONT)
+	for seat in range(18):
+		screen.addPullDownString('MenuPitbossSeat', unicode(seat), seat, seat, seat == _state.get('seat', 0))
+	screen.addMultilineText('MenuPitbossMessage', u'<font=2>' + (_state['message'] or u'Use the seat and password supplied by the operator. Your civilization stays human while you are away.') + u'</font>',
+		x + 30, y + 236, w - 60, 76, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1, 1 << 0)
+	_button(screen, 'MenuPitbossGo', u'Connect', x + w - 230, y + h - 64, 200)
+	_button(screen, 'MenuBack', u'Go Back', x + 30, y + h - 64, 200)
 
 
 def _leaders():
@@ -363,6 +390,17 @@ def handleInput(args):
 		_state['page'] = 'multi'
 	elif function == 'MenuMods':
 		_state['page'] = 'mods'
+	elif function == 'MenuPitboss':
+		_state['page'] = 'pitboss'
+	elif function == 'MenuPitbossGo':
+		_state['address'] = _u(screen.getEditBoxString('MenuPitbossAddress')).strip()
+		_state['seat'] = screen.getPullDownData('MenuPitbossSeat', screen.getSelectedPullDownID('MenuPitbossSeat'))
+		password = _u(screen.getEditBoxString('MenuPitbossPassword'))
+		if _state['address'] and password:
+			_state['choice'] = ('pitboss', _state['address'].encode('utf-8'), _state['seat'], password.encode('utf-8'))
+			screen.setEditBoxString('MenuPitbossPassword', u'')
+			return 1
+		_state['message'] = u'Enter the server address and your seat password.'
 	elif function == 'MenuModGo':
 		for i, folder in enumerate(_state['mods']):
 			if screen.isRowSelected('MenuModList', i):

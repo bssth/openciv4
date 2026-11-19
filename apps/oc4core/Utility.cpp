@@ -3,6 +3,9 @@
 #include "DataStream.h"
 #include "GameFont.h"
 #include "Net.h"
+#ifdef __linux__
+#include "Pitboss.h"
+#endif
 #include "core/FileUtil.h"
 
 #include "CvDeal.h"
@@ -22,6 +25,15 @@
 
 namespace oc4::host
 {
+	bool Utility::isConnected(int player)
+	{
+#ifdef __linux__
+		return m_pitboss && pb::connected(player);
+#else
+		return false;
+#endif
+	}
+	int Utility::getAssignedNetworkID(int player) { return isConnected(player) ? player : -1; }
 	Utility::Utility(const AssetResolver& assets, PythonHost& python, Xml& xml, std::filesystem::path logDir)
 		: m_assets(assets), m_python(python), m_xml(xml), m_logDir(std::move(logDir))
 	{

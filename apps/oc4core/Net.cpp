@@ -1,4 +1,7 @@
 #include "Net.h"
+#ifdef __linux__
+#include "Pitboss.h"
+#endif
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -149,6 +152,15 @@ namespace oc4::host
 		static Net net;
 		return net;
 	}
+	bool Net::pitboss() const
+	{
+#ifdef __linux__
+		return pb::clientActive();
+#else
+		return false;
+#endif
+	}
+	bool Net::active() const { return m_active || pitboss(); }
 
 	void Net::listen(uint16_t port)
 	{
@@ -293,6 +305,9 @@ namespace oc4::host
 
 	void Net::stop()
 	{
+#ifdef __linux__
+		if (pitboss()) pb::disconnect();
+#endif
 		m_running = false;
 		m_active = false;
 		for (auto& link : m_links)
@@ -436,6 +451,9 @@ namespace oc4::host
 
 	void Net::submit(Bytes command)
 	{
+#ifdef __linux__
+		if (pitboss()) { pb::submit(std::move(command)); return; }
+#endif
 		if (m_host)
 		{
 			std::lock_guard lock(m_mutex);
@@ -447,6 +465,18 @@ namespace oc4::host
 
 	bool Net::takeFrame(Frame& frame)
 	{
+#ifdef __linux__
+		if (pitboss())
+		{
+			pb::Frame f;
+			if (!pb::takeFrame(f)) return false;
+			frame.number = f.number;
+			frame.pitbossTicks = f.remainingTicks;
+			frame.connected = f.connected;
+			for (auto& o : f.orders) frame.commands.push_back(std::move(o.command));
+			return true;
+		}
+#endif
 		std::lock_guard lock(m_mutex);
 		if (m_frames.empty())
 			return false;
@@ -457,6 +487,9 @@ namespace oc4::host
 
 	void Net::executed(uint32_t frame, int checksum)
 	{
+#ifdef __linux__
+		if (pitboss()) { pb::executed(frame, uint32_t(checksum)); return; }
+#endif
 		const bool has = frame % kChecksumEvery == 0;
 		{
 			std::lock_guard lock(m_mutex);
@@ -486,6 +519,9 @@ namespace oc4::host
 
 	std::string Net::status() const
 	{
+#ifdef __linux__
+		if (pitboss()) return pb::status();
+#endif
 		std::lock_guard lock(m_mutex);
 		if (!m_problem.empty())
 			return "multiplayer: " + m_problem;
