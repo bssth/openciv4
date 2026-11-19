@@ -273,9 +273,12 @@ namespace oc4::render
 
 		float plot() const { return view->plotSize(); }
 
-		// The game's camera tilts from its lower pitch at the closest zoom to straight down at
-		// CAMERA_SMALLEST_MAX_DISTANCE, evenly with the distance: zooming in, the eye comes down
-		// towards the ground on a curve rather than straight at what it looks at.
+		// The game's camera tilt, as measured in the original (BtS 3.19 defaults, camera position
+		// against the plot it looks at, 19 zoom levels, within 0.15 degrees): level at about
+		// CAMERA_LOWER_PITCH + 1.8 (29.8) up to 1.3 x CAMERA_MIN_DISTANCE (910), then easing in
+		// quadratically with the distance to straight down at 0.86 x CAMERA_SMALLEST_MAX_DISTANCE
+		// (6020). At the start distance (2200) that is 33.6 degrees above the ground; a straight
+		// line from 28 at 700 to 90 at 7000 gave 42.8, looking down far more steeply.
 		void updatePitch()
 		{
 			if (cityView)
@@ -284,19 +287,26 @@ namespace oc4::render
 				return;
 			}
 			const MapSnapshot& m = view->map();
-			const float span = std::max(m.cameraTopDistance - m.cameraMinDistance, 1.0f);
-			const float t = std::clamp((camera.distance - m.cameraMinDistance) / span, 0.0f, 1.0f);
-			const float degrees = m.cameraLowerPitch + (m.cameraUpperPitch - m.cameraLowerPitch) * t;
+			const float from = 1.3f * m.cameraMinDistance, to = std::max(0.86f * m.cameraTopDistance, from + 1);
+			const float t = std::clamp((camera.distance - from) / (to - from), 0.0f, 1.0f);
+			const float low = m.cameraLowerPitch + 1.8f;
+			const float degrees = low + (m.cameraUpperPitch - low) * t * t;
 			camera.pitch = std::clamp(degrees * 3.14159265f / 180 + tilt, 0.2f, 1.55f);
 		}
 
-		// FIELD_OF_VIEW is across the screen: a wide window sees more of the map to the sides, not
-		// a taller slice of it.
+		// FIELD_OF_VIEW is the angle across the screen's diagonal, as measured in the original: at
+		// the same camera, its plots were 206 pixels apart at 1600x900 and 170 at 1200x900, which
+		// only an angle kept along the diagonal gives (a wide window sees a little more to the
+		// sides and a little less up and down than a 4:3 one).
 		void fitFov()
 		{
-			const float aspect = float(renderer->width()) / std::max(float(renderer->height()), 1.0f);
-			const float across = std::clamp(view->map().cameraFov, 10.0f, 120.0f) * 3.14159265f / 180;
-			camera.fovY = 2 * std::atan(std::tan(across / 2) / std::max(aspect, 0.1f));
+			const float w = float(renderer->width()), h = std::max(float(renderer->height()), 1.0f);
+			const float diagonal = std::clamp(view->map().cameraFov, 10.0f, 120.0f) * 3.14159265f / 180;
+			camera.fovY = 2 * std::atan(std::tan(diagonal / 2) * h / std::hypot(w, h));
+			// (what the camera looks at is drawn above the window's middle, as the original's
+			// CyCamera().GetDefaultViewPortCenter() (0.5, 0.569) has it: clear of the interface
+			// along the bottom)
+			camera.centreUp = 0.569f;
 		}
 
 		float closestZoom() const { return std::max(view->map().cameraMinDistance, plot()); }
@@ -312,7 +322,7 @@ namespace oc4::render
 			const Vec3 up = camera.up();
 			const XMMATRIX v = XMMatrixLookAtRH(XMVectorSet(eye.x, eye.y, eye.z, 1), XMVectorSet(camera.target.x, camera.target.y, camera.target.z, 1),
 				XMVectorSet(up.x, up.y, up.z, 0));
-			const XMMATRIX p = XMMatrixPerspectiveFovRH(camera.fovY, float(renderer->width()) / float(renderer->height()),
+			const XMMATRIX p = camera.projection(float(renderer->width()) / float(renderer->height()),
 				std::max(0.01f, camera.distance * 0.01f), camera.distance * 20 + 1000);
 			return v * p;
 		}

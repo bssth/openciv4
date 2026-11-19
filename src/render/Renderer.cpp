@@ -449,6 +449,13 @@ float4 PSOverlay(Out p) : SV_Target
 		return { -sp * std::cos(yaw), -sp * std::sin(yaw), std::cos(pitch) };
 	}
 
+	DirectX::XMMATRIX Camera::projection(float aspect, float nearZ, float farZ) const
+	{
+		using namespace DirectX;
+		// (y + 2 * (centreUp - 0.5) * w: a shift on the screen that does not change with depth)
+		return XMMatrixPerspectiveFovRH(fovY, aspect, nearZ, farZ) * XMMatrixSet(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 2 * (centreUp - 0.5f), 0, 1);
+	}
+
 	Renderer::Renderer(SDL_Window* window, uint32_t width, uint32_t height) : m_window(window), m_width(width), m_height(height)
 	{
 		static_assert(sizeof(FrameConstants) == sizeof(m_frame));
@@ -1096,7 +1103,7 @@ float4 PSOverlay(Out p) : SV_Target
 		const Vec3 up = camera.up();
 		const XMMATRIX view = XMMatrixLookAtRH(XMVectorSet(eye.x, eye.y, eye.z, 1),
 			XMVectorSet(camera.target.x, camera.target.y, camera.target.z, 1), XMVectorSet(up.x, up.y, up.z, 0));
-		const XMMATRIX proj = XMMatrixPerspectiveFovRH(camera.fovY, float(m_width) / float(m_height), nearZ, camera.distance * 20 + 1000);
+		const XMMATRIX proj = camera.projection(float(m_width) / float(m_height), nearZ, camera.distance * 20 + 1000);
 
 		FrameConstants fc{};
 		XMStoreFloat4x4(&fc.viewProj, XMMatrixTranspose(view * proj));
