@@ -2,6 +2,7 @@
 
 #include "GameFont.h"
 #include "Interface.h"
+#include "MapCapture.h"
 #include "Utility.h"
 #include "Sounds.h"
 
@@ -1234,6 +1235,21 @@ if _walls:
 					}
 				}
 				std::sscanf(item.text.c_str(), "%d %d %d", &item.attitude, &item.action, &item.actionSerial);
+				item.text.clear();
+			}
+			if (item.kind == Kind::Flag)
+			{
+				// (the player's: the map's flag model of its era, its colours)
+				const FlagArt flag = flagArt(std::atoi(item.text.c_str()));
+				if (flag.model && flag.model->getNIF())
+				{
+					item.flagNif = flag.model->getNIF();
+					item.flagKfm = flag.model->getKFM() ? flag.model->getKFM() : "";
+					item.texture = (flag.white ? "opaque:" : "") + flag.decal;
+					item.hasColor = true;
+					item.color = flag.primary;
+					item.flagSecondary = flag.secondary;
+				}
 				item.text.clear();
 			}
 			if (item.kind == Kind::Model)

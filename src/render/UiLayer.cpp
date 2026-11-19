@@ -621,8 +621,11 @@ namespace oc4::render
 			case Kind::Flag:
 			{
 				// A player's flag, as the original's by the minimap (68 by 250, most below the
-				// screen): a banner from a crossbar on its pole, in the player's colour with the
+				// screen): its era's flag model waving, drawn by the window; where it cannot be, a
+				// banner from a crossbar on its pole, in the player's colour with the
 				// civilization's flag picture over it.
+				if (leaderhead && leaderhead(it))
+					break;
 				const float s = w / 68.0f, px = x0 + w / 2;
 				const Color wood{ 0.33f, 0.2f, 0.1f }, brass{ 0.76f, 0.64f, 0.4f }, shade{ 0, 0, 0 };
 				o.rect(px - 1.5f * s, y0 + 14 * s, px + 1.5f * s, y1, wood, alpha, 0);

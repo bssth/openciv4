@@ -27,10 +27,17 @@ namespace oc4::render
 	class ModelView
 	{
 	public:
+		// decal: in place of the model's decal maps (a flag's cloth in a player's colours); its
+		// owner keeps it while the view lives.
 		ModelView(Renderer& renderer, const AssetResolver& assets, const std::string& nif, const std::string& kfm, float xRotation, float zRotation,
-			float scale, bool animate, const std::string& layers = {});
+			float scale, bool animate, const std::string& layers = {}, const GpuImage* decal = nullptr);
 
 		bool loaded() const { return m_gpu != nullptr; }
+		// Seen as the original shows a player's flag (the main interface's, by the minimap):
+		// from the front, its pole in the middle across, its height filling the picture with a
+		// little to spare, a little more of it below the middle than above; its blended parts
+		// over the panel with their alpha counted twice (the fringe). Measured against Wine.
+		void frameAsFlag() { m_flag = true; }
 		void update(float dt);
 		// Draws it into its picture, width x height; the picture for the overlay (null if none).
 		const GpuImage* render(uint32_t width, uint32_t height);
@@ -60,5 +67,6 @@ namespace oc4::render
 		float m_frustumTop = 0.4f, m_frustumNear = 1, m_frustumFar = 10000;
 		float m_xRotation = 0, m_zRotation = 0, m_scale = 1;
 		bool m_animate = true;
+		bool m_flag = false;
 	};
 }

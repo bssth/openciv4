@@ -24,8 +24,14 @@ namespace oc4::scene
 	{
 		if (!enabled)
 			return uv;
+		// Max's transform works in 3ds Max's texture space, where V goes up: the file's V
+		// flipped (a ship's damage atlas moves along U by +0.5 to its lightly damaged left half;
+		// a flag's medallions along V by -0.2 a row, up the strip from its empty bottom row).
+		const bool max = method == 1;
+		if (max)
+			uv.y = 1 - uv.y;
 		Vec2 p;
-		if (method == 1)
+		if (max)
 			p = { (uv.x - translation.x - center.x) * tiling.x, (uv.y - translation.y - center.y) * tiling.y };
 		else
 			p = { (uv.x - center.x) * tiling.x + translation.x, (uv.y - center.y) * tiling.y + translation.y };
@@ -34,7 +40,8 @@ namespace oc4::scene
 			const float c = std::cos(rotation), s = std::sin(rotation);
 			p = { p.x * c - p.y * s, p.x * s + p.y * c };
 		}
-		return { p.x + center.x, p.y + center.y };
+		p = { p.x + center.x, p.y + center.y };
+		return max ? Vec2{ p.x, 1 - p.y } : p;
 	}
 
 	std::vector<uint8_t> Model::bindHidden() const
