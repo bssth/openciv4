@@ -139,6 +139,13 @@ namespace oc4::render
 			float t = 0, seconds = 0;
 		};
 		std::optional<Glide> glide;
+		// Where the game told the camera to look (the next unit, a city, a click on the map), as the
+		// original's: from where it is, the rest of the way shrinking by e^-6 a second (most of
+		// it in the first half second, no easing in), or at once from farther than
+		// CAMERA_MAX_TRAVEL_DISTANCE. Moved by hand meanwhile (a drag, the keys, the minimap), it
+		// stays there.
+		std::optional<Vec3> travelTo;
+		Vec3 travelAt; // (where the travel left the camera last frame)
 		bool cityView = false;      // straight down at a city (its screen is up)
 		std::optional<View> beforeCity; // where the camera was when the city screen came up
 		bool open = true, running = false, turnRequest = false, framed = false;
@@ -438,6 +445,7 @@ namespace oc4::render
 			}
 			if (cityView)
 				return; // (the city screen's view holds while it is up)
+			travelTo.reset();
 			camera.target = { (float(x) + 0.5f) * plot(), (float(y) + 0.5f) * plot(), 0 };
 			camera.distance = distance < 0 ? view->map().cameraStartDistance : distance * plot();
 			zoomTo = 0;
@@ -445,9 +453,9 @@ namespace oc4::render
 			keepOnMap();
 		}
 
-		// The game looks at a plot (a unit selected, a city chosen): the camera moves there and
-		// keeps the distance it is on its way to, so a glide (out of the city screen) or a wheel
-		// zoom in progress still ends where it was going.
+		// The game looks at a plot (a unit selected, a city chosen, a click on the map): the camera
+		// travels there (or jumps, from far) and keeps the distance it is on its way to, so a glide
+		// (out of the city screen) or a wheel zoom in progress still ends where it was going.
 		void centerOn(int x, int y)
 		{
 			if (cityView)
@@ -458,8 +466,54 @@ namespace oc4::render
 				glide->to.target = to;
 				return;
 			}
-			camera.target = to;
+			const Vec3 way = shortestWay(camera.target, to);
+			const float jumpDistance = view->map().cameraTravelDistance / std::max(view->map().plotSize, 1.0f) * plot();
+			if (std::hypot(way.x, way.y) > jumpDistance)
+			{
+				travelTo.reset();
+				camera.target = to;
+				keepOnMap();
+				return;
+			}
+			travelTo = to;
+			travelAt = camera.target;
+		}
+
+		// From a to b on the ground, the shorter way round a wrapping map.
+		Vec3 shortestWay(Vec3 a, Vec3 b) const
+		{
+			const Vec3 size = view->worldSize();
+			Vec3 d{ b.x - a.x, b.y - a.y, 0 };
+			if (view->map().wrapX && size.x > 0)
+				d.x = std::remainder(d.x, size.x);
+			if (view->map().wrapY && size.y > 0)
+				d.y = std::remainder(d.y, size.y);
+			return d;
+		}
+
+		void easeTravel(float dt)
+		{
+			if (!travelTo)
+				return;
+			// (moved by hand, into a glide or the city screen meanwhile: it stays as it is now)
+			if (glide || cityView || std::abs(camera.target.x - travelAt.x) > 1e-3f || std::abs(camera.target.y - travelAt.y) > 1e-3f)
+			{
+				travelTo.reset();
+				return;
+			}
+			const Vec3 way = shortestWay(camera.target, *travelTo);
+			if (std::hypot(way.x, way.y) < plot() * 0.01f)
+			{
+				camera.target = { camera.target.x + way.x, camera.target.y + way.y, camera.target.z };
+				travelTo.reset();
+			}
+			else
+			{
+				const float k = 1 - std::exp(-6.0f * dt);
+				camera.target = { camera.target.x + way.x * k, camera.target.y + way.y * k, camera.target.z };
+			}
 			keepOnMap();
+			travelAt = camera.target;
 		}
 
 		void showWholeMap()
@@ -2222,6 +2276,7 @@ namespace oc4::render
 			handleHeldKeys(dt);
 			easeZoom(dt);
 			easeGlide(dt);
+			easeTravel(dt);
 			view->update(dt);
 			for (auto& [nif, h] : heads)
 				h.head->update(dt);

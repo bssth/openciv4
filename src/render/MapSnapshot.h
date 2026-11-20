@@ -278,6 +278,7 @@ namespace oc4::render
 		// tilts between, in degrees below the horizon: the lower one at the closest zoom, the upper
 		// one (straight down) from the smallest of the farthest zooms out.
 		float cameraFov = 42, cameraMinDistance = 700, cameraStartDistance = 2200, cameraTopDistance = 7000, cameraCityDistance = 3500;
+		float cameraTravelDistance = 3000; // (CAMERA_MAX_TRAVEL_DISTANCE: farther, the camera jumps instead of gliding)
 		float cameraLowerPitch = 28, cameraUpperPitch = 90;
 		std::vector<PlotView> plots; // x + y * width
 		std::vector<PlayerView> players;

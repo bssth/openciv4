@@ -768,6 +768,7 @@ namespace oc4::host
 		s.cameraStartDistance = defineOr("CAMERA_START_DISTANCE", 2200);
 		s.cameraTopDistance = defineOr("CAMERA_SMALLEST_MAX_DISTANCE", 7000);
 		s.cameraCityDistance = defineOr("CAMERA_CITY_ZOOM_IN_DISTANCE", 3500);
+		s.cameraTravelDistance = defineOr("CAMERA_MAX_TRAVEL_DISTANCE", 3000);
 		// (the pitches are negative there: below the horizon)
 		s.cameraLowerPitch = std::abs(GC.getDefineFLOAT("CAMERA_LOWER_PITCH")) > 0 ? std::abs(GC.getDefineFLOAT("CAMERA_LOWER_PITCH")) : 28;
 		s.cameraUpperPitch = std::abs(GC.getDefineFLOAT("CAMERA_UPPER_PITCH")) > 0 ? std::abs(GC.getDefineFLOAT("CAMERA_UPPER_PITCH")) : 90;

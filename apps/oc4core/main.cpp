@@ -1330,6 +1330,10 @@ namespace
 						ui.selectGroup(own, click.shift, click.ctrl, click.alt);
 					else
 						ui.clearSelectionList();
+					// (as the original's: the camera goes to the plot clicked, a unit there or not;
+					// a scripted game told where to look keeps looking there)
+					if (opt.lookX < 0 || opt.viewSeconds <= 0)
+						window.centerOn(plot->getX(), plot->getY());
 				}
 				else if (ui.getHeadSelectedUnit())
 				{
