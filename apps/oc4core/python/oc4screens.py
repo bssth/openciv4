@@ -39,6 +39,23 @@ def _changed():
 	_version[0] += 1
 
 
+def researchState():
+	"""The active player's research as a string that changes when the tech advisor should be told
+	(the tech researched, its progress, the rate, the queue's places, the techs known, the turn); ''
+	with no active player."""
+	gc = _cpe.CyGlobalContext()
+	game = _cpe.CyGame()
+	iPlayer = game.getActivePlayer()
+	if iPlayer < 0:
+		return ''
+	player = gc.getPlayer(iPlayer)
+	team = gc.getTeam(player.getTeam())
+	current = player.getCurrentResearch()
+	places = [team.isHasTech(i) and -1 or player.getQueuePosition(i) for i in range(gc.getNumTechInfos())]
+	return repr((game.getGameTurn(), current, current >= 0 and team.getResearchProgress(current) or 0,
+		player.calculateResearchRate(-1), places))
+
+
 beforeDisplay = [] # (called before the display list is made: oc4options lays its window out)
 
 
@@ -608,7 +625,10 @@ class CyGInterfaceScreen(object):
 	def addScrollPanel(self, szName, title, iX, iY, iWidth, iHeight, eStyle):
 		w = self._s.add(szName, 'panel')
 		w.text, w.scroll = _text(title), True
-		w.x, w.y, w.w, w.h, w.pstyle = int(iX), int(iY), int(iWidth), int(iHeight), _style(_cpe.PanelStyles, eStyle)
+		# (drawn as nothing whatever its style: the engine's GScrollPanel is transparent,
+		# GFC_CF_TRANSPARENT in Civ4Theme_ScrollPanel.thm; the tech advisor's techs lie on its
+		# parchment, SCREEN_BG_OPAQUE under the panel, not on the external style's blue)
+		w.x, w.y, w.w, w.h, w.pstyle = int(iX), int(iY), int(iWidth), int(iHeight), 'PANEL_STYLE_EMPTY'
 		# (inside the theme's layout margin, GFC_Control_Layout's Size_OuterMargin of 8: the
 		# WorldBuilder's load/save buttons, at 0 in their panel at 70, line up with its landmark and
 		# erase buttons at 8 and 43; the city screen's resource names fit their columns)

@@ -714,6 +714,7 @@ if _walls:
 			py::module_ screens = py::module_::import("oc4screens");
 			screens.attr("setResolution")(width, height);
 			m_mainId = py::module_::import("CvScreenEnums").attr("MAIN_INTERFACE").cast<int>();
+			m_techChooserId = py::module_::import("CvScreenEnums").attr("TECH_CHOOSER").cast<int>();
 			py::module_::import("CvScreensInterface").attr("showMainInterface")();
 			m_utility.gameInterface().makeInterfaceDirty();
 			m_utility.gameInterface().techSplash = true;
@@ -1008,9 +1009,28 @@ if _walls:
 			// plays its turns so, the military advisor's flashing plots end so).
 			const float dt = m_lastUpdate.time_since_epoch().count() ? std::min(std::chrono::duration<float>(now - m_lastUpdate).count(), 0.25f) : 0.0f;
 			m_lastUpdate = now;
+			bool techChooser = false;
 			for (py::handle id : screens.attr("shownScreens")().cast<py::list>())
 				if (const int screen = id.cast<int>(); screen != kDiplomacyScreen)
+				{
 					entry.attr("update")(py::make_tuple(screen, dt));
+					techChooser = techChooser || screen == m_techChooserId;
+				}
+			// The tech advisor told when the research changes, as the original engine does
+			// (CvScreensInterface.forceScreenUpdate: "forced from net message"): a tech clicked,
+			// queued with Shift, learnt, the turns left. Its techs then take their colours and
+			// numbers again (CvTechChooser.updateTechRecords).
+			// (read through the scripts' CyPlayer and CyTeam, oc4screens.researchState: the core's
+			// own functions are not all exported to the engine on Windows)
+			const std::string research = techChooser ? screens.attr("researchState")().cast<std::string>() : std::string();
+			if (research.empty())
+				m_research.clear();
+			else if (research != m_research)
+			{
+				// (redrawn when it comes up: the original's shows the turns left at once)
+				entry.attr(m_research.empty() ? "forceScreenRedraw" : "forceScreenUpdate")(py::make_tuple(m_techChooserId));
+				m_research = research;
+			}
 			if (ui.anyDirty())
 				entry.attr("forceScreenRedraw")(py::make_tuple(m_mainId));
 			// Diplomacy: the next talk waiting, when nothing is up (the game's script says what the

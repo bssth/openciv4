@@ -63,6 +63,11 @@ namespace oc4::render
 			bool section[4]{ true, true, true, true }; // its left, top, right, bottom columns / rows drawn
 			Color fill{};          // Middle::Fill
 			float fillAlpha = 0;
+			// Tinted by the panel's own inner colour (FactorColor GFC_Control_Panel_Color_Inner),
+			// which a script's setPanelColor changes (the tech advisor's known, researched and
+			// open techs); its alpha the theme's.
+			bool panelColour = false;
+			float tintAlpha = 1;
 		};
 		using Skin = std::vector<Layer>;
 		struct Panel
@@ -125,6 +130,8 @@ namespace oc4::render
 		Bitmap addSigned(const Bitmap& bitmap, Color colour);
 		// The bitmap multiplied by the colour (the Modulate combine): a bar's fill in its colour.
 		Bitmap modulate(const Bitmap& bitmap, Color colour, float alpha = 1);
+		// The skin with its panel colour layers tinted by another colour (setPanelColor).
+		Skin recoloured(const Skin& skin, Color colour);
 		// Font size 1..4 (the markup's <font=n>); the theme's, else the nearest it has.
 		Font font(int size, bool bold = false, bool italic = false) const;
 

@@ -402,8 +402,9 @@ namespace oc4::render
 				}
 				else if (const Theme::Panel* p = themedPanel(it))
 				{
-					Theme::draw(o, p->inner, x0, y0, x1, y1, it.alpha);
-					Theme::draw(o, p->border, x0, y0, x1, y1, it.alpha);
+					// (in the script's colour, setPanelColor, where the theme tints it by its own)
+					Theme::draw(o, it.hasColor ? m_theme.recoloured(p->inner, it.color) : p->inner, x0, y0, x1, y1, it.alpha);
+					Theme::draw(o, it.hasColor ? m_theme.recoloured(p->border, it.color) : p->border, x0, y0, x1, y1, it.alpha);
 				}
 				else if (!emptyPanel(it.style))
 				{

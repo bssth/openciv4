@@ -725,7 +725,11 @@ namespace oc4::render
 			if (const Value* f = has("FactorColor"))
 				if (const Value* combine = resolve(s, has("FactorCombine"));
 					combine && combine->kind == Value::Kind::Call && !combine->args.empty() && combine->args[0].text == "Modulate")
+				{
 					tinted = colour(s, f, tint, tintAlpha);
+					l.panelColour = tinted && f->kind == Value::Kind::Name && f->text == "GFC_Control_Panel_Color_Inner";
+					l.tintAlpha = tintAlpha;
+				}
 			if (const Value* v = has("Image"))
 				l.image = bitmap(s, v, tinted ? &tint : nullptr, tintAlpha);
 			if (const Value* v = has("Center"))
@@ -935,6 +939,18 @@ namespace oc4::render
 		Bitmap out = b;
 		if (const Picture* p = m->picture(b.picture->path, &q, level(alpha)))
 			out.picture = p;
+		return out;
+	}
+
+	Theme::Skin Theme::recoloured(const Skin& skin, Color colour)
+	{
+		Skin out = skin;
+		for (Layer& l : out)
+			if (l.panelColour)
+			{
+				l.image = modulate(l.image, colour, l.tintAlpha);
+				l.center = modulate(l.center, colour, l.tintAlpha);
+			}
 		return out;
 	}
 

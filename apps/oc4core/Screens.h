@@ -131,6 +131,8 @@ namespace oc4::host
 		bool m_active = false;
 		bool m_menu = false; // the main menu, not the game's screens
 		int m_mainId = -1, m_failures = 0;
+		int m_techChooserId = -1;
+		std::string m_research; // the active player's research when the tech advisor was last told (empty: not up)
 		long long m_version = -1;
 		std::pair<int, int> m_laidOut{ -1, -1 }, m_seenSize{ -1, -1 }; // the size the screens were made for; the window's
 		std::chrono::steady_clock::time_point m_sizeChanged;
