@@ -1392,19 +1392,24 @@ namespace
 				ui.setDirty(ColoredPlots_DIRTY_BIT, false);
 				game.updateColoredPlots();
 			}
-			// The selected settler's city radius (the founding border), as the engine draws it.
+			// The selected settler's founding border, as the engine draws it: the plots a city
+			// founded there would claim (its own and the eight next to it: CvCity::init's free
+			// culture), in the player's colour.
 			if (engine.foundingDirty.exchange(false) || selected != coloredFor)
 			{
 				engine.clear(AREA_BORDER_LAYER_FOUNDING_BORDER, true);
 				bool founds = false;
 				for (int i = 0; head && head->getOwner() == me && i < GC.getNumActionInfos() && !founds; ++i)
-					founds = GC.getActionInfo(i).getMissionType() == MISSION_FOUND && game.canHandleAction(i, nullptr, true);
+					// (where it can found now: none next to a city, as in the original)
+					founds = GC.getActionInfo(i).getMissionType() == MISSION_FOUND && game.canHandleAction(i, nullptr, false);
 				if (founds)
-					for (int dy = -2; dy <= 2; ++dy)
-						for (int dx = -2; dx <= 2; ++dx)
-							if (std::abs(dx) + std::abs(dy) < 4) // (the fat cross: no corners)
-								if (const CvPlot* p = GC.getMap().plot(head->getX() + dx, head->getY() + dy))
-									engine.mark({ p->getX(), p->getY(), 1, 1, 1, 0.55f, AREA_BORDER_LAYER_FOUNDING_BORDER, true, false });
+				{
+					const NiColorA& c = GC.getColorInfo(static_cast<ColorTypes>(GC.getPlayerColorInfo(CvPlayerAI::getPlayerNonInl(me).getPlayerColor()).getColorTypePrimary())).getColor();
+					for (int dy = -1; dy <= 1; ++dy)
+						for (int dx = -1; dx <= 1; ++dx)
+							if (const CvPlot* p = GC.getMap().plot(head->getX() + dx, head->getY() + dy))
+								engine.mark({ p->getX(), p->getY(), c.r, c.g, c.b, 0.9f, AREA_BORDER_LAYER_FOUNDING_BORDER, true, false });
+				}
 			}
 			coloredFor = selected;
 			// The globe: its view, and its layer's plots coloured (the game core's colours for the
@@ -1453,8 +1458,10 @@ namespace
 				for (const auto& m : marks)
 				{
 					const auto [x, y] = m.core ? host::windowPlot({ m.x, m.y }) : std::pair{ m.x, m.y };
-					// (the WorldBuilder's plot and brush in the original's area border style)
-					const bool hatched = m.border && (m.layer == AREA_BORDER_LAYER_HIGHLIGHT_PLOT || m.layer == AREA_BORDER_LAYER_WORLD_BUILDER);
+					// (the WorldBuilder's plot and brush, and a settler's founding border, in the
+					// original's area border style)
+					const bool hatched = m.border && (m.layer == AREA_BORDER_LAYER_HIGHLIGHT_PLOT || m.layer == AREA_BORDER_LAYER_WORLD_BUILDER ||
+						m.layer == AREA_BORDER_LAYER_FOUNDING_BORDER);
 					shownMarks.marks.push_back({ x, y, m.layer, { m.r, m.g, m.b }, m.a, m.border, false, hatched });
 				}
 				for (const auto& s : signs)
