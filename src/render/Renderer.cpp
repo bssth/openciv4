@@ -73,7 +73,7 @@ cbuffer Object : register(b1, UNIFORMS)
 	float4 world[3];    // rigid items: 3x4 rows, p' = (dot(row0,p), dot(row1,p), dot(row2,p))
 	float4 baseUv[2];   // 2x3 rows: uv' = (dot(row0.xyz, (u,v,1)), dot(row1.xyz, (u,v,1)))
 	float4 decalUv[2];
-	uint flags;         // bit0 base map, bit1 alpha test, bits2-3 vertex color mode, bit4 lit, bit5 decal, bit6 team colour base, bit7 skinned, bit8 on the ground, bit11 a leader's shading
+	uint flags;         // bit0 base map, bit1 alpha test, bits2-3 vertex color mode, bit4 lit, bit5 decal, bit6 team colour base, bit7 skinned, bit8 on the ground, bit11 a leader's shading, bit14 the units' light
 	uint alphaFunc;
 	float alphaRef;
 	uint treesCut;      // a forest piece (its vertices' red: the tree, 1-based): trees 1..32 by bit not drawn
@@ -225,7 +225,9 @@ float4 PSMain(PSIn i, bool front : SV_IsFrontFace) : SV_Target
 	float3 n = normalize(i.nrm);
 	if (!front)
 		n = -n;
-	float ndl = saturate(dot(n, -lightDir));
+	// (a unit: the units' own light)
+	const bool unitLit = (flags & 16384) != 0;
+	float ndl = saturate(dot(n, -(unitLit ? unitLightDir : lightDir)));
 
 	float3 amb = matAmbient.rgb;
 	float3 dif = matDiffuse.rgb;
@@ -241,7 +243,7 @@ float4 PSMain(PSIn i, bool front : SV_IsFrontFace) : SV_Target
 		alpha *= i.col.a;
 	}
 
-	float3 lit = (flags & 16) ? emi + amb * ambientLight + dif * lightColor * ndl : emi;
+	float3 lit = (flags & 16) ? emi + amb * (unitLit ? unitAmbientLight : ambientLight) + dif * (unitLit ? unitLightColor : lightColor) * ndl : emi;
 	float4 c = float4(saturate(lit), alpha);
 	if (flags & 2048)
 	{
@@ -346,7 +348,26 @@ float4 PSOverlay(Out p) : SV_Target
 			XMFLOAT4 groundGrid;
 			XMFLOAT4 fogGrid;
 			XMFLOAT4 globe;
+			XMFLOAT3 unitLightDir;
+			float pad4;
+			XMFLOAT3 unitLightColor;
+			float pad5;
+			XMFLOAT3 unitAmbientLight;
+			float pad6;
 		};
+
+		// The units' light, as the original lights them (Art/Terrain/Lights/UnitLight.nif, the
+		// art define LIGHTING_UNITS): a directional light from the south, a little east and low
+		// (its node at (21529, -50212, 15940), shining at the origin), diffuse (1, 1, 0.863) at
+		// dimmer 0.8, and an ambient light (0.431, 0.431, 0.353). The scene's light comes from
+		// the north-east: the side of a unit the camera sees (from the south) was in its shade.
+		void writeUnitLight(FrameConstants& fc)
+		{
+			const Vec3 dir = normalize(Vec3{ -21529.342f, 50212.477f, -15940.541f });
+			fc.unitLightDir = { dir.x, dir.y, dir.z };
+			fc.unitLightColor = { 0.8f, 0.8f, 0.8f * 0.86275f };
+			fc.unitAmbientLight = { 0.43137f, 0.43137f, 0.35294f };
+		}
 
 		struct ObjectConstants
 		{
@@ -1033,7 +1054,7 @@ float4 PSOverlay(Out p) : SV_Target
 		SDL_BindGPUVertexSamplers(m_pass, 0, &vertex, 1);
 	}
 
-	void Renderer::drawMesh(const GpuModel::Mesh& mesh, const scene::Material& m, std::span<const Affine> world, Vec3 teamColor, bool onGround)
+	void Renderer::drawMesh(const GpuModel::Mesh& mesh, const scene::Material& m, std::span<const Affine> world, Vec3 teamColor, bool onGround, bool unitLight)
 	{
 		reserveSamplers(8);
 		pass();
@@ -1047,7 +1068,7 @@ float4 PSOverlay(Out p) : SV_Target
 		writeRows(mesh.node >= 0 && size_t(mesh.node) < world.size() ? world[size_t(mesh.node)] : Affine{}, oc.world);
 		oc.flags = (mesh.texture ? 1u : 0u) | (m.alphaTest ? 2u : 0u) | ((m.vertexColorMode & 3u) << 2) | (m.lightingMode ? 16u : 0u) |
 			(mesh.decal ? 32u : 0u) | (m.baseIsTeamColor ? 64u : 0u) | (mesh.skinned ? 128u : 0u) | (onGround ? 256u : 0u) |
-			(m_inView && m_viewOnNothing && !m.alphaBlend ? 1024u : 0u) | (mesh.leader[0] ? 2048u : 0u);
+			(m_inView && m_viewOnNothing && !m.alphaBlend ? 1024u : 0u) | (mesh.leader[0] ? 2048u : 0u) | (unitLight ? 16384u : 0u);
 		oc.alphaFunc = static_cast<uint32_t>(m.alphaFunc);
 		oc.alphaRef = m.alphaRef;
 		oc.treesCut = m.treesCut;
@@ -1105,6 +1126,7 @@ float4 PSOverlay(Out p) : SV_Target
 		fc.lightDir = { light.x, light.y, light.z };
 		fc.lightColor = { 0.85f, 0.82f, 0.75f };
 		fc.ambientLight = { 0.45f, 0.47f, 0.52f };
+		writeUnitLight(fc);
 		fc.eyePos = { eye.x, eye.y, eye.z };
 		fc.globe = { m_globe[0], m_globe[1], m_globe[2], m_globe[3] };
 		fc.groundGrid = m_ground ? XMFLOAT4{ 1.0f / m_groundCell, float(m_groundColumns), float(m_groundRows), m_groundWrap } : XMFLOAT4{ 0, 0, 0, 0 };
@@ -1161,7 +1183,7 @@ float4 PSOverlay(Out p) : SV_Target
 				continue;
 			if (!blended(material))
 			{
-				drawMesh(mesh, material, world, teamColor, onGround);
+				drawMesh(mesh, material, world, teamColor, onGround, m_unitLight);
 				continue;
 			}
 			if (deferredWorld == SIZE_MAX)
@@ -1171,7 +1193,7 @@ float4 PSOverlay(Out p) : SV_Target
 			}
 			if (onGround && groundDistance < 0)
 				groundDistance = length(centerOf(mesh) - eye);
-			m_deferred.push_back({ onGround ? groundDistance : length(centerOf(mesh) - eye), &mesh, deferredWorld, m_deferredMaterials.size(), teamColor, onGround });
+			m_deferred.push_back({ onGround ? groundDistance : length(centerOf(mesh) - eye), &mesh, deferredWorld, m_deferredMaterials.size(), teamColor, onGround, m_unitLight });
 			m_deferredMaterials.push_back(material);
 		}
 	}
@@ -1202,7 +1224,7 @@ float4 PSOverlay(Out p) : SV_Target
 		}
 		std::ranges::stable_sort(m_deferred, std::greater<>(), &Deferred::distance);
 		for (const auto& d : m_deferred)
-			drawMesh(*d.mesh, m_deferredMaterials[d.material], m_deferredWorlds[d.world], d.teamColor, d.onGround);
+			drawMesh(*d.mesh, m_deferredMaterials[d.material], m_deferredWorlds[d.world], d.teamColor, d.onGround, d.unitLight);
 		m_deferred.clear();
 		// The particles, last: unlit, their texture by their colour, without writing depth.
 		uint32_t first = 0;
@@ -1292,6 +1314,7 @@ float4 PSOverlay(Out p) : SV_Target
 		fc.lightDir = { dir.x, dir.y, dir.z };
 		fc.lightColor = { light.color.x, light.color.y, light.color.z };
 		fc.ambientLight = { light.ambient.x, light.ambient.y, light.ambient.z };
+		writeUnitLight(fc);
 		fc.eyePos = { eye.x, eye.y, eye.z };
 		std::memcpy(m_frame, &fc, sizeof(fc));
 	}

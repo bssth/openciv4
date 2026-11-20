@@ -122,6 +122,9 @@ cbuffer Frame : register(b0, UNIFORMS)
 	float4 groundGrid;   // terrain heights: 1 / cell size, columns, rows, wrap width (0: none)
 	float4 fogGrid;      // the fog of war: plot size (0: none), columns, rows, wrap (1 X, 2 Y)
 	float4 globe;        // the globe view: the point it is centred on (xy), its radius (z, 0: flat), the map's wrap width (w)
+	float3 unitLightDir;     float pad4; // the units' own light (flags bit 14): Art/Terrain/Lights/UnitLight.nif
+	float3 unitLightColor;   float pad5;
+	float3 unitAmbientLight; float pad6;
 };
 
 // The globe view: the map wrapped round a sphere centred under the point looked at, its width
@@ -196,6 +199,9 @@ float3 globeBend(float3 p)
 		// Particles: camera-facing quads (six vertices each, in the world, their colour in the
 		// vertices') of a model's particle system in its material; drawn with the blended items.
 		void drawParticles(const GpuModel& model, size_t system, const scene::Material& material, std::vector<scene::Vertex>&& vertices);
+		// What draw lights the models with from now on: the units' own light (true; the original's
+		// Art/Terrain/Lights/UnitLight.nif, LIGHTING_UNITS) or the scene's (false, the default).
+		void setUnitLight(bool on) { m_unitLight = on; }
 		// Draws the blended items of this frame's instances, back to front, then the particles.
 		void endFrame();
 		// Draws models into a target of its own (made width x height), as a camera of its own
@@ -294,7 +300,7 @@ float3 globeBend(float3 p)
 		void upload(SDL_GPUTexture* texture, uint32_t layer, uint32_t mip, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const void* data,
 			uint32_t bytes);
 		void upload(SDL_GPUBuffer* buffer, uint32_t offset, const void* data, uint32_t bytes);
-		void drawMesh(const GpuModel::Mesh& mesh, const scene::Material& material, std::span<const Affine> world, Vec3 teamColor, bool onGround);
+		void drawMesh(const GpuModel::Mesh& mesh, const scene::Material& material, std::span<const Affine> world, Vec3 teamColor, bool onGround, bool unitLight);
 		void bindModelTextures(const GpuImage* base, const GpuImage* decal, const scene::Material& m, const GpuImage* const* leader);
 		SDL_GPUSampler* sampler(int clamp) const { return m_samplers[clamp]; }
 
@@ -329,11 +335,12 @@ float3 globeBend(float3 p)
 		std::map<std::string, std::shared_ptr<GpuImage>> m_textures; // by asset key
 
 		Camera m_camera;
-		float m_frame[44]{}; // the frame constants pushed with each pass
+		float m_frame[56]{}; // the frame constants pushed with each pass
 		float m_viewProj[16]{};
 		float m_globe[4]{};
 		bool m_inView = false;        // between beginView and endView
 		bool m_viewOnNothing = false; // ... a view on nothing: what is not blended covers it (alpha 1)
+		bool m_unitLight = false;     // setUnitLight
 		Vec3 m_viewEye;
 
 		// Blended items of the current frame, drawn by endFrame.
@@ -345,6 +352,7 @@ float3 globeBend(float3 p)
 			size_t material; // into m_deferredMaterials
 			Vec3 teamColor;
 			bool onGround;
+			bool unitLight;
 		};
 		std::vector<Deferred> m_deferred;
 		struct ParticleDraw
