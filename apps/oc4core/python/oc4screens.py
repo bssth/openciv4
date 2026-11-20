@@ -3072,9 +3072,10 @@ def diploClick(name, part, right=False, shift=False):
 
 
 # (Esc goes back a step first: "Never mind" from the trade table, the deals or "something else" to the
-# greeting; "Something else" from its own questions (their research, their attitude, a target) to it)
+# greeting; "Something else" from its own questions (their research, their attitude, a target) to it.
+# A first contact has only war or peace to say: Esc is the peace, the greeting returned)
 _DIPLO_ESCAPE = ('NEVERMIND', 'EXIT', 'REJECT', 'REJECT_DEMAND', 'REJECT_OFFER', 'REFUSE_HELP', 'NO_CONVERT', 'NO_JOIN_WAR',
-	'NO_MAKE_PEACE_WITH', 'NO_RENEGOTIATE', 'NO_REVOLUTION', 'NO_STOP_TRADING')
+	'NO_MAKE_PEACE_WITH', 'NO_RENEGOTIATE', 'NO_REVOLUTION', 'NO_STOP_TRADING', 'PEACE')
 _DIPLO_SOMETHING_ELSE_MENUS = ('AI_DIPLOCOMMENT_RESEARCH', 'AI_DIPLOCOMMENT_TARGET', 'AI_DIPLOCOMMENT_ATTITUDE',
 	'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_FURIOUS', 'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_ANNOYED', 'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_CAUTIOUS',
 	'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_PLEASED', 'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_FRIENDLY')
