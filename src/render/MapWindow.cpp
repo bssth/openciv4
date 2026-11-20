@@ -38,6 +38,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <unordered_map>
 #include <format>
 #include <map>
 #include <numbers>
@@ -1787,14 +1788,65 @@ namespace oc4::render
 			}
 		}
 
+		// A resource's bubble, as the original's plot picker draws it: the resource's button in a
+		// black disc with a bevelled rim, on a pin whose tip is the plot. The bubble keeps its size
+		// at every zoom and stands up and away from the middle of the screen: left of the plot on
+		// the left half, right of it on the right half.
+		void drawResourceBubble(float tipX, float tipY, const ButtonArt::Icon& icon)
+		{
+			constexpr float r = 25.5f, offX = 29, offY = 31;
+			const float side = tipX < overlay->screenWidth() / 2 ? -1.0f : 1.0f;
+			const float cx = tipX + side * offX, cy = tipY - offY;
+			// The pin: from the disc's lower edge down to the plot.
+			const float px[4] = { cx - side * 2.5f, cx - side * 24, tipX, tipX };
+			const float py[4] = { cy + 25, cy + 11, tipY, tipY };
+			overlay->quad(px, py, { 0.86f, 0.86f, 0.9f }, 0.9f);
+			overlay->line(px[1], py[1], tipX, tipY, { 0.2f, 0.2f, 0.22f }, 0.7f, 1);
+			overlay->line(px[0], py[0], tipX, tipY, { 0.2f, 0.2f, 0.22f }, 0.7f, 1);
+			overlay->circle(cx, cy, r, { 0, 0, 0 }, 1);
+			// (the button's middle fills the disc: its margin is cut away with the corners)
+			const ButtonArt::Icon& round = roundIcon(icon);
+			const float ir = (r - 2) / kRoundIconCut;
+			overlay->image(round.key, round.bgra, round.width, round.height, 1, cx - ir, cy - ir, cx + ir, cy + ir);
+			overlay->ellipse(cx, cy, r - 1.5f, r - 1.5f, { 0.78f, 0.78f, 0.8f }, 1, 3);
+			overlay->ellipse(cx, cy, r, r, { 0.1f, 0.1f, 0.1f }, 0.8f, 1);
+		}
+
+		// A button cut to a circle around its middle, made once per button.
+		static constexpr float kRoundIconCut = 0.8f;
+		const ButtonArt::Icon& roundIcon(const ButtonArt::Icon& icon)
+		{
+			auto [it, added] = roundIcons.try_emplace(icon.key);
+			ButtonArt::Icon& round = it->second;
+			if (added)
+			{
+				round = icon;
+				round.key = icon.key ^ 0x5265736f75726365ull; // (its own texture)
+				const float hw = float(icon.width) / 2, hh = float(icon.height) / 2, radius = std::min(hw, hh) * kRoundIconCut;
+				for (uint32_t y = 0; y < icon.height; ++y)
+					for (uint32_t x = 0; x < icon.width; ++x)
+					{
+						const float d = std::hypot(float(x) + 0.5f - hw, float(y) + 0.5f - hh);
+						const float cover = std::clamp(radius - d, 0.0f, 1.0f);
+						uint8_t* px = &round.bgra[(size_t(y) * icon.width + x) * 4];
+						for (int c = 0; c < 4; ++c) // (premultiplied: every channel)
+							px[c] = uint8_t(float(px[c]) * cover + 0.5f);
+					}
+			}
+			return round;
+		}
+		std::unordered_map<uint64_t, ButtonArt::Icon> roundIcons;
+
 		// The game's layers over the plots near the camera: the yields (as many symbols as the
-		// plot gives, a row each), the resources' icons, the units' icons over their stacks.
+		// plot gives, a row each), the resources' bubbles, the units' icons over their stacks.
 		void drawLayers()
 		{
 			if (!layers.yields && !layers.resources && !layers.units)
 				return;
 			const auto& map = view->map();
-			if (map.width <= 0 || camera.distance > 32 * plot())
+			// (the yields and unit icons only near the ground; the resources' bubbles at every height)
+			const bool low = camera.distance <= 32 * plot();
+			if (map.width <= 0 || (!low && !layers.resources))
 				return;
 			const XMMATRIX vp = viewProjection();
 			const auto toScreen = [&](float wx, float wy, float lift, float& sx, float& sy) {
@@ -1810,6 +1862,8 @@ namespace oc4::render
 				return sx > -40 && sy > -40 && sx < overlay->screenWidth() + 40 && sy < overlay->screenHeight() + 40;
 			};
 			const float zoom = std::clamp(12 * plot() / camera.distance, 0.6f, 1.4f);
+			struct Bubble { float x, y; const ButtonArt::Icon* icon; };
+			std::vector<Bubble> bubbles;
 			for (int y = 0; y < map.height; ++y)
 				for (int x = 0; x < map.width; ++x)
 				{
@@ -1821,12 +1875,8 @@ namespace oc4::render
 						continue;
 					if (layers.resources && p.bonus >= 0 && size_t(p.bonus) < map.bonusButtons.size())
 						if (const ButtonArt::Icon* ic = art.icon(map.bonusButtons[size_t(p.bonus)]))
-						{
-							const float r = 13 * zoom;
-							overlay->rect(sx - r - 2, sy - r - 2 - 18 * zoom, sx + r + 2, sy + r + 2 - 18 * zoom, { 0, 0, 0 }, 0.55f, 4);
-							overlay->image(ic->key, ic->bgra, ic->width, ic->height, 1, sx - r, sy - r - 18 * zoom, sx + r, sy + r - 18 * zoom);
-						}
-					if (layers.yields)
+							bubbles.push_back({ sx, sy, ic });
+					if (low && layers.yields)
 					{
 						// (a row a yield, as many of its symbol as it gives: five and more as a number)
 						const float size = 11 * zoom;
@@ -1849,7 +1899,11 @@ namespace oc4::render
 						}
 					}
 				}
-			if (layers.units)
+			// (in the plots' order, south to north and west to east, as the original draws them: where
+			// bubbles crowd, the farther and the more easterly one covers its neighbour)
+			for (const Bubble& b : bubbles)
+				drawResourceBubble(b.x, b.y, *b.icon);
+			if (low && layers.units)
 				for (const UnitView& u : map.units)
 				{
 					if (u.button.empty() || (view->options.fog && !map.plots[size_t(u.x) + size_t(u.y) * size_t(map.width)].visible))
