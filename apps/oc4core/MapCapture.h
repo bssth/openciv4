@@ -57,6 +57,7 @@ namespace oc4::host
 		std::vector<std::pair<int, int>> m_greatWallCities;
 		void loadArtList(std::vector<render::MapSnapshot::Attachable>& out, const char* file, const char* element);
 		int houseSet(int era, int artStyle);
+		int lotPaving(int era) const;
 
 		// A generic house of the city LSystem with the eras and art styles it is drawn for.
 		struct LSystemHouse
@@ -64,6 +65,10 @@ namespace oc4::host
 			int art = -1; // into the snapshot's cityHouses
 			std::vector<std::string> eras, styles;
 		};
+
+		// The paving the LSystem lays under its 2x2 lots (Node_2x2's "decoration:" art) with the
+		// eras it is for.
+		std::vector<LSystemHouse> m_lotPavings;
 
 		// The LSystem's walls (szBuilder:WallBuilder) by LSystem name: post and wall files
 		// (empty: the generic walls of the city's era).

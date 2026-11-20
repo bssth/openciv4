@@ -344,6 +344,30 @@ namespace oc4::host
 			stack.pop_back();
 			for (const auto& c : n->children)
 				stack.push_back(c.get());
+			// (the paving of the 2x2 lots: Node_2x2's productions' decorations, by era)
+			if (n->type == XmlNode::Type::Element && n->name == "LProduction")
+			{
+				const std::wstring* from = n->attribute("From");
+				if (!from || *from != L"Node_2x2")
+					continue;
+				for (const auto& ref : n->children)
+				{
+					const std::wstring* name = ref->type == XmlNode::Type::Element && ref->name == "ArtRef" ? ref->attribute("Name") : nullptr;
+					if (!name || name->rfind(L"decoration:", 0) != 0)
+						continue;
+					const std::string value = narrow(name->substr(11));
+					const size_t sep = value.find("::");
+					LSystemHouse paving;
+					paving.art = int(m_snapshot.cityHouses.size());
+					m_snapshot.cityHouses.push_back({ "Art/Structures/Cities/" + value.substr(0, sep), sep == std::string::npos ? "" : value.substr(sep + 2), 2, 2 });
+					for (const auto& a : ref->children)
+						if (const std::wstring* cls = a->type == XmlNode::Type::Element && a->name == "Attribute" ? a->attribute("Class") : nullptr)
+							if (*cls == L"Era")
+								paving.eras = list(a->text);
+					m_lotPavings.push_back(std::move(paving));
+				}
+				continue;
+			}
 			if (n->type != XmlNode::Type::Element || n->name != "LNode")
 				continue;
 			int width = 1, height = 1;
@@ -750,6 +774,16 @@ namespace oc4::host
 		return index;
 	}
 
+	// The paving under a city's lots in its era (none: -1).
+	int MapCapture::lotPaving(int era) const
+	{
+		const std::string eraName = era >= 0 && era < GC.getNumEraInfos() ? text(GC.getEraInfo(static_cast<EraTypes>(era)).getType()) : "";
+		for (const LSystemHouse& p : m_lotPavings)
+			if (p.eras.empty() || std::ranges::find(p.eras, eraName) != p.eras.end() || std::ranges::find(p.eras, std::string("ERA_ALL")) != p.eras.end())
+				return p.art;
+		return -1;
+	}
+
 	const render::MapSnapshot& MapCapture::capture(const Interface* selection)
 	{
 		if (!m_haveArt)
@@ -1056,6 +1090,17 @@ namespace oc4::host
 							}
 						}
 					c.houseSet = c.owner >= 0 ? houseSet(player(c.owner).getCurrentEra(), city->getArtStyleType()) : -1;
+					c.paving = c.owner >= 0 ? lotPaving(player(c.owner).getCurrentEra()) : -1;
+				}
+				// The effects over it, as the original engine asks for them: at the detail zoom
+				// while the city screen is up.
+				{
+					std::vector<const TCHAR*> names;
+					city->getVisibleEffects(selection && const_cast<Interface*>(selection)->isCityScreenUp() ? ZOOM_DETAIL : ZOOM_NORMAL, names);
+					c.effects.clear();
+					for (const TCHAR* n : names)
+						if (n)
+							c.effects.emplace_back(n);
 				}
 				s.cities.push_back(c);
 			}

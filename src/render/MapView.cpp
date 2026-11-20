@@ -2236,6 +2236,13 @@ float4 PSTerrain(PSIn i) : SV_Target
 				return px + py * map.width;
 			};
 			std::unordered_map<int, std::vector<const Instance*>> waters; // by plot
+			// (a city's: a circle CITY_TREECUT_SCALE plots across round its middle, as measured
+			// in the original: the trees come half a plot from a size 16 city's middle)
+			for (const CityView& c : map.cities)
+			{
+				const Vec3 middle{ (float(c.x) + 0.5f) * S(), (float(c.y) + 0.5f) * S(), 0 };
+				cuts[plotKey(middle.x, middle.y)].push_back({ middle, map.cityTreeCut * S() / 2 });
+			}
 			for (const Instance& d : decor)
 			{
 				for (const auto& [c, r] : d.model->treeCuts)
@@ -2399,24 +2406,28 @@ float4 PSTerrain(PSIn i) : SV_Target
 			cities.clear();
 			addGreatWall();
 			// The layout's size is the detail manager's CITY_LAYOUT_SIZE; taken as half the side
-			// of the turned square here, which gives the original's proportions (a large city
-			// reaches into the plots around it). A 1x1 house of the generic sets is some 55
-			// units across, about a lot.
+			// of the turned square here, which gives the original's proportions (measured: a
+			// size 16 city's paving is 0.39 of its 5-plot border across). The LSystem's art is
+			// 33.4 units a lot (its houses, and the paving: mod_city_lot.nif's 4x4 is 133.6
+			// across), scaled to the lot so that houses and paving stand side by side.
 			constexpr int kLots = 16;
+			constexpr float kLotArt = 33.4f;
 			const float lot = 2 * map.cityLayoutSize * S() / kLots;
-			const float scale = lot / 50.0f;
+			const float scale = lot / kLotArt;
 			const float c0 = std::cos(map.cityTwist), s0 = std::sin(map.cityTwist);
 			std::unordered_map<int, CityLayout> layouts;
 			for (const CityView& c : map.cities)
 			{
 				std::string key;
 				const auto put = [&key](const auto& v) { key.append(reinterpret_cast<const char*>(&v), sizeof(v)); };
-				put(c.owner), put(c.generics), put(c.houseSet), put(teamColor(c.owner)), put(lot), put(map.cityTwist);
+				put(c.owner), put(c.generics), put(c.houseSet), put(c.paving), put(teamColor(c.owner)), put(lot), put(map.cityTwist);
 				for (const CityBuildingView& b : c.buildings)
 					put(b.model), put(b.width), put(b.height), put(b.water), put(b.scale);
 				for (const CityWallView& w : c.walls)
 					for (const std::string* s : { &w.post, &w.wall, &w.gate })
 						put(s->size()), key += *s;
+				for (const std::string& e : c.effects)
+					put(e.size()), key += e;
 				const int plotIndex = c.x + c.y * map.width;
 				if (const auto kept = cityLayouts.find(plotIndex); kept != cityLayouts.end() && kept->second.key == key)
 				{
@@ -2427,13 +2438,14 @@ float4 PSTerrain(PSIn i) : SV_Target
 				const size_t first = cities.size();
 				const Vec3 center{ (float(c.x) + 0.5f) * S(), (float(c.y) + 0.5f) * S(), 0 };
 				std::array<uint8_t, kLots * kLots> taken{};
-				// Lots by their distance from the middle, ties broken by the city's own order.
+				// Lots by their distance from the middle, ties broken by the city's own order: a
+				// tight block, square as the LSystem's nodes are.
 				std::array<float, kLots * kLots> rank;
 				std::array<int, kLots * kLots> order;
 				for (int i = 0; i < kLots * kLots; ++i)
 				{
 					const float dx = float(i % kLots) - 7.5f, dy = float(i / kLots) - 7.5f;
-					rank[size_t(i)] = std::max(std::abs(dx), std::abs(dy)) + std::hypot(dx, dy) * 0.3f + unitFloat(hash(c.x, c.y, i)) * 1.5f;
+					rank[size_t(i)] = std::max(std::abs(dx), std::abs(dy)) + std::hypot(dx, dy) * 0.05f + unitFloat(hash(c.x, c.y, i)) * 0.5f;
 					order[size_t(i)] = i;
 				}
 				std::ranges::sort(order, [&](int a, int b) { return rank[size_t(a)] < rank[size_t(b)]; });
@@ -2508,12 +2520,66 @@ float4 PSTerrain(PSIn i) : SV_Target
 					inst.team = teamColor(c.owner);
 					cities.push_back(std::move(inst));
 				}
+				// The paving under the lots in use, a piece for each pair of pairs of lots (the
+				// LSystem's Node_2x2 decoration of the city's era).
+				if (c.paving >= 0 && size_t(c.paving) < map.cityHouses.size())
+				{
+					const CityHouseArt& art = map.cityHouses[size_t(c.paving)];
+					if (LoadedModel* lm = model(art.nif, {}))
+					{
+						const LoadedModel::Part* part = nullptr;
+						if (!art.node.empty())
+						{
+							buildParts(*lm);
+							const auto it = std::ranges::find_if(lm->parts, [&](const LoadedModel::Part& p) {
+								return toLowerAscii(lm->model.nodes[size_t(p.node)].name) == toLowerAscii(art.node);
+							});
+							part = it != lm->parts.end() ? &*it : nullptr;
+						}
+						if (art.node.empty() || part)
+							for (int by = 0; by < kLots; by += 2)
+								for (int bx = 0; bx < kLots; bx += 2)
+								{
+									if (!taken[size_t(by * kLots + bx)] && !taken[size_t(by * kLots + bx + 1)] && !taken[size_t((by + 1) * kLots + bx)] &&
+										!taken[size_t((by + 1) * kLots + bx + 1)])
+										continue;
+									const Vec3 at = lotsCenter(bx + by * kLots, 2, 2, false);
+									const Vec3 middle = part ? part->bounds.center() : lm->bounds.center();
+									Instance inst = part ? placeStatic(lm, placement(at, map.cityTwist, scale), translation({ -middle.x, -middle.y, 0 }), &part->visible, &part->bounds)
+														 : placeStatic(lm, placement(at, map.cityTwist, scale), translation({ -middle.x, -middle.y, 0 }));
+									inst.team = teamColor(c.owner);
+									cities.push_back(std::move(inst));
+								}
+					}
+				}
 				for (const CityWallView& w : c.walls)
 					buildWalls(c, w, taken, lot, c0, s0, center);
 				placeShoreBuildings(c, center, scale);
+				placeCityEffects(c, center, plotIndex);
 				layouts[plotIndex] = { std::move(key), { cities.begin() + std::ptrdiff_t(first), cities.end() } };
 			}
 			cityLayouts = std::move(layouts);
+		}
+
+		// The effects the game core shows over the city (its smoke, fumes, fire): each its
+		// CIV4EffectInfos model at the middle of the plot, at the effect's scale, kept going
+		// as long as the city shows it.
+		void placeCityEffects(const CityView& c, Vec3 center, int plotIndex)
+		{
+			for (const std::string& type : c.effects)
+			{
+				const auto art = std::ranges::find_if(map.effects, [&](const auto& a) { return _stricmp(a.type.c_str(), type.c_str()) == 0; });
+				if (art == map.effects.end())
+					continue;
+				LoadedModel* lm = model(art->nif, {});
+				if (!lm)
+					continue;
+				Vec3 at = center;
+				at.z = std::max(ground(at.x, at.y), 0.0f);
+				Instance inst = placeStatic(lm, placement(at, 0, art->scale > 0 ? art->scale : 1));
+				inst.plot = plotIndex;
+				cities.push_back(std::move(inst));
+			}
 		}
 
 		// Harbours, lighthouses and the like stand on the shore, towards the water around the
@@ -2549,7 +2615,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			}
 		}
 
-		// The walls round the lots in use (one lot out), turned with the city: posts at the
+		// The walls round the lots in use (on the paving's edge), turned with the city: posts at the
 		// corners and between the pieces, each side filled with the longest pieces that fit
 		// (4, 2 and 1 lengths: a side of the whole layout takes one of each), the gate in the
 		// middle of the side facing south.
@@ -2568,10 +2634,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 				}
 			if (x1 < 0)
 				return;
-			x0 = std::max(x0 - 1, 0);
-			y0 = std::max(y0 - 1, 0);
-			x1 = std::min(x1 + 2, kLots);
-			y1 = std::min(y1 + 2, kLots);
+			// (on the paving's edge: the pairs of lots in use)
+			x0 &= ~1, y0 &= ~1;
+			x1 = std::min((x1 | 1) + 1, kLots);
+			y1 = std::min((y1 | 1) + 1, kLots);
 			const auto world = [&](float lx, float ly) {
 				lx = (lx - kLots / 2.0f) * lot;
 				ly = (ly - kLots / 2.0f) * lot;
@@ -3638,6 +3704,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 				uint64_t(p.riverSouth) << 48 | uint64_t(p.riverEast) << 49 | uint64_t(uint16_t(p.layout + 1) & 0xFFF) << 50 |
 				uint64_t(p.bonusState & 3) << 62; // (the layout's 12 bits: two layouts 4096 apart on a plot would look unchanged)
 		}
+		// (a city clears the trees round it: a new one cuts them again)
+		for (const CityView& c : snapshot.cities)
+			if (const int64_t at = int64_t(c.x) + int64_t(c.y) * snapshot.width; at >= 0 && size_t(at) < featureKey.size())
+				featureKey[size_t(at)] |= 1 << 30;
 		const bool reshaped = resized || shape != m->shape;
 		const bool refeatured = reshaped || newArt || featureKey != m->featureKey;
 		const bool redecorated = reshaped || newArt || decorKey != m->decorKey;
