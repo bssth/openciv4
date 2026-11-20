@@ -31,6 +31,9 @@ namespace oc4::render
 			bool fog = false;  // as the active team sees the map
 			bool flags = true; // the units' flags
 			bool healthBars = true, frozen = false, effects = true; // (the game's graphic options: health under the flags, idle figures still, no particles)
+			// A city's screen is up: as the original, no units (nor their flags and health) and no
+			// city bars on the map; the cities, signs and plots stay.
+			bool cityScreen = false;
 		};
 
 		MapView(Renderer& renderer, const AssetResolver& assets);

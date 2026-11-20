@@ -1485,6 +1485,7 @@ namespace oc4::render
 			fitFov();
 			// (beyond the map: black as the ground not seen, until the team's map is centred)
 			renderer->beginFrame(camera, view->seenBounds() ? Vec3{ 0, 0, 0 } : Vec3{ 0.05f, 0.07f, 0.10f });
+			view->options.cityScreen = cityView;
 			view->draw();
 			renderer->endFrame();
 			syncHeads();
@@ -1819,7 +1820,8 @@ namespace oc4::render
 					float sx = 0, sy = 0;
 					if (!toScreen((float(x) + 0.5f) * plot(), (float(y) + 0.5f) * plot(), 0, sx, sy))
 						continue;
-					if (layers.resources && p.bonus >= 0 && size_t(p.bonus) < map.bonusButtons.size())
+					// (on a city's screen the original shows no resources' bubbles, nor units' icons)
+					if (layers.resources && !cityView && p.bonus >= 0 && size_t(p.bonus) < map.bonusButtons.size())
 						if (const ButtonArt::Icon* ic = art.icon(map.bonusButtons[size_t(p.bonus)]))
 						{
 							const float r = 13 * zoom;
@@ -1849,7 +1851,7 @@ namespace oc4::render
 						}
 					}
 				}
-			if (layers.units)
+			if (layers.units && !cityView)
 				for (const UnitView& u : map.units)
 				{
 					if (u.button.empty() || (view->options.fog && !map.plots[size_t(u.x) + size_t(u.y) * size_t(map.width)].visible))

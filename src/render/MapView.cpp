@@ -3746,7 +3746,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 		if (options.cities)
 			m->drawInstances(m->cities, frustum);
 		m->figureHits.clear();
-		if (options.units)
+		if (options.units && !options.cityScreen)
 		{
 			m->drawPromotionGlows(frustum);
 			m->drawInstances(m->units, frustum, true);
@@ -3807,7 +3807,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 	// production bars and what is being built where the active player may see them.
 	void MapView::drawOverlay(Overlay& overlay)
 	{
-		if (!m->hasMap || !options.banners || !options.cities || m->renderer.globe())
+		if (!m->hasMap || !options.banners || !options.cities || options.cityScreen || m->renderer.globe())
 			return;
 		const float* vp = m->renderer.viewProjection();
 		const float distance = m->renderer.camera().distance / m->S();
