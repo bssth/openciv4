@@ -33,6 +33,40 @@ namespace oc4::host
 		m_interface.sounds = &m_sounds;
 	}
 
+	// (as the original: Ctrl+Left/Right turn the view 45 degrees, no further than CAMERA_MIN_YAW
+	// and CAMERA_MAX_YAW, -45 and 45; a second press the same way does nothing)
+	void Engine::MoveBaseTurnLeft(float increment)
+	{
+		setBaseTurn(std::max(baseTurn - increment, std::min(GC.getDefineFLOAT("CAMERA_MIN_YAW"), float(baseTurn))));
+	}
+
+	void Engine::MoveBaseTurnRight(float increment)
+	{
+		setBaseTurn(std::min(baseTurn + increment, std::max(GC.getDefineFLOAT("CAMERA_MAX_YAW"), float(baseTurn))));
+	}
+
+	// (Alt+F: the original says so in the messages, in English, from its exe)
+	void Engine::SetSatelliteMode(bool value)
+	{
+		satellite = value;
+		++cameraVersion;
+		if (CvDLLInterfaceIFaceBase* ui = gDLL->getInterfaceIFace(); ui && GC.getGame().getActivePlayer() != NO_PLAYER)
+			ui->addMessage(GC.getGame().getActivePlayer(), true, GC.getEVENT_MESSAGE_TIME(),
+				value ? L"Satellite camera enabled." : L"Satellite camera disabled.");
+	}
+
+	void Engine::setBaseTurn(float degrees)
+	{
+		baseTurn = degrees;
+		++cameraVersion;
+	}
+
+	void Engine::setBasePitch(float degrees)
+	{
+		basePitch = degrees;
+		++cameraVersion;
+	}
+
 	void Engine::toggleGlobeview()
 	{
 		globeUp = !globeUp;

@@ -31,7 +31,7 @@
 // opens it, Esc closes it), or with --own-interface the window's simple one.
 // --keys are typed in on your turns then (letters and Space as keys, '^', '@' and '+' before
 // one hold Ctrl, Alt and Shift, '>' ends the turn, '~' is Esc, "(x,y)" right clicks that plot,
-// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e", "%t" and "%b" type an arrow, Return, Tab or Backspace into the window, "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
+// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e", "%t" and "%b" type an arrow, Return, Tab or Backspace into the window ("^%l" with Ctrl held, as a game hotkey), "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
 // popup nothing answers gets its first, 'text' goes into its next edit box, "{Name}" or
 // "{Name/part}" clicks the interface's widget so named, "^{Name}" with Ctrl held, "?{Name}" rests
 // the mouse on it); with
@@ -449,7 +449,6 @@ namespace
 		case CONTROL_CYCLE_CAMERA_FLYING_MODES:
 		case CONTROL_FLYING_CAMERA:
 		case CONTROL_MOUSE_FLYING_CAMERA:
-		case CONTROL_TOP_DOWN_CAMERA:
 			return false;
 		default:
 			return true;
@@ -713,6 +712,7 @@ namespace
 		std::pair<const void*, int> pathFrom{};        // (the unit it starts from and its plot: the gamepad's plot cursor shows it all the while)
 		std::tuple<const void*, const void*, int, int> coloredFor{}; // what was selected when the plots were last coloured
 		uint64_t marksShown = ~0ull; // the marks the window has
+		uint64_t cameraShown = 0;     // the game's camera turn and tilt the window has (engine.cameraVersion)
 		uint64_t globeShown = 0;      // ... and the globe's state it shows (engine.globeVersion)
 		int globeTurn = -1;
 		std::vector<render::MapWindow::PlotMarks::Mark> globeMarks;
@@ -1216,6 +1216,14 @@ namespace
 						press({ render::key::Escape, false, false, false });
 					else if (std::isalnum(static_cast<unsigned char>(c)) || c == ' ')
 						press({ unsigned(std::toupper(static_cast<unsigned char>(c))), shift, ctrl, alt });
+					else if (c == '%' && n + 1 < script.size())
+					{
+						// ("^%l": an arrow, Return or Tab with Ctrl held, as the game's hotkeys have them:
+						// Ctrl+Left turns the camera)
+						if (const unsigned k = scriptedKey(script[n + 1]))
+							press({ k, shift, ctrl, alt });
+						++n;
+					}
 					script.erase(0, std::min(n + 1, script.size()));
 					changed = true;
 				}
@@ -1407,6 +1415,11 @@ namespace
 									engine.mark({ p->getX(), p->getY(), 1, 1, 1, 0.55f, AREA_BORDER_LAYER_FOUNDING_BORDER, true, false });
 			}
 			coloredFor = selected;
+			if (const uint64_t c = engine.cameraVersion; c != cameraShown)
+			{
+				cameraShown = c;
+				window.setCameraAngles(engine.baseTurn, engine.basePitch, engine.satellite);
+			}
 			// The globe: its view, and its layer's plots coloured (the game core's colours for the
 			// active player, again each turn).
 			if (const uint64_t g = engine.globeVersion; g != globeShown || (engine.globeLayer >= 0 && game.getGameTurn() != globeTurn))

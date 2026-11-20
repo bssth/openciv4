@@ -2464,10 +2464,12 @@ class CyCamera(object):
 	def LookAtUnit(self, unit): _lookAtPoint(unit.plot().getPoint())
 	def GetZoom(self): return 1.0
 	def SetZoom(self, f): pass
-	def GetBaseTurn(self): return 0.0
-	def SetBaseTurn(self, f): pass
-	def GetBasePitch(self): return 0.0
-	def SetBasePitch(self, f): pass
+	def GetBaseTurn(self): return oc4host.camera_base_turn()
+	def SetBaseTurn(self, f): oc4host.camera_set_base_turn(float(f))
+	def MoveBaseTurnLeft(self, f=45.0): oc4host.camera_move_base_turn(-float(f))
+	def MoveBaseTurnRight(self, f=45.0): oc4host.camera_move_base_turn(float(f))
+	def GetBasePitch(self): return oc4host.camera_base_pitch()
+	def SetBasePitch(self, f): oc4host.camera_set_base_pitch(float(f))
 
 
 for _name in ('CyGInterfaceScreen', 'CyInterface', 'CyGlobeLayerManager', 'CyAudioGame', 'CyEngine', 'CyCamera'):

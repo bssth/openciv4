@@ -279,6 +279,10 @@ namespace oc4::render
 		void setFullscreen(bool on);
 		// The globe view: the camera back over the whole map (on), where it was (off).
 		void setGlobeView(bool up);
+		// The game's turn and tilt of the view, in the original's degrees (CyCamera's base turn,
+		// Ctrl+Left/Right; its base pitch, which tilts the view up) and its satellite view (Alt+F:
+		// straight down, north up). The camera glides there.
+		void setCameraAngles(float turnDegrees, float pitchDegrees, bool satellite);
 		void setYieldSymbols(std::array<std::string, 3> symbols);
 		void setWorldBuilder(bool on);
 

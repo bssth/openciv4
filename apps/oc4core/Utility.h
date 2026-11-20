@@ -76,6 +76,18 @@ namespace oc4::host
 		std::atomic<uint64_t> globeVersion = 0;
 		void toggleGlobeview() override;
 		bool isGlobeviewUp() override { return globeUp; }
+		// The camera's turn and tilt the game's controls and scripts set (Ctrl+Left/Right turn
+		// it 45 degrees, Alt+F looks straight down; CyCamera's Get/SetBaseTurn and BasePitch),
+		// in the original's degrees; cameraVersion changes with any of them.
+		std::atomic<float> baseTurn = 0, basePitch = 0;
+		std::atomic<bool> satellite = false;
+		std::atomic<uint64_t> cameraVersion = 0;
+		void MoveBaseTurnLeft(float increment) override;
+		void MoveBaseTurnRight(float increment) override;
+		void setBaseTurn(float degrees);
+		void setBasePitch(float degrees);
+		void SetSatelliteMode(bool value) override;
+		bool GetSatelliteMode() override { return satellite; }
 		bool GetGridMode() override { return grid; }
 		void SetGridMode(bool bVal) override { grid = bVal; }
 

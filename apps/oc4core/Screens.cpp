@@ -342,6 +342,17 @@ namespace oc4::host
 		});
 		// (CyCamera's looks: a point of the map, as CvPlot::getPoint gives it)
 		host.def("camera_look_at", [&ui](float x, float y) { ui.lookAt(NiPoint3(x, y, 0), CAMERALOOKAT_NORMAL, NiPoint3(0, 0, 0)); });
+		// (CyCamera's base turn and pitch, in degrees: the game's turn and tilt of the view)
+		host.def("camera_base_turn", [&engine] { return float(engine.baseTurn); });
+		host.def("camera_set_base_turn", [&engine](float degrees) { engine.setBaseTurn(degrees); });
+		host.def("camera_move_base_turn", [&engine](float degrees) {
+			if (degrees < 0)
+				engine.MoveBaseTurnLeft(-degrees);
+			else
+				engine.MoveBaseTurnRight(degrees);
+		});
+		host.def("camera_base_pitch", [&engine] { return float(engine.basePitch); });
+		host.def("camera_set_base_pitch", [&engine](float degrees) { engine.setBasePitch(degrees); });
 		host.def("ui_orders", [&ui] {
 			const CvCity* c = ui.getHeadSelectedCity();
 			return c ? c->getNumOrdersQueued() : 0;

@@ -99,7 +99,7 @@ namespace oc4::render
 					sizes[size_t(i)] = theme.font(i).size;
 				overlay->setFonts(theme.font(2).family, sizes);
 			}
-			camera.yaw = -std::numbers::pi_v<float> / 2; // from the south, looking north
+			camera.yaw = yaw;
 			if (window)
 				SDL_ShowWindow(window);
 		}
@@ -126,12 +126,19 @@ namespace oc4::render
 		std::unique_ptr<Overlay> overlay;
 		Camera camera;
 		float tilt = 0; // the user's change of the zoom-dependent pitch
+		float yaw = -std::numbers::pi_v<float> / 2; // the user's turn (Q/E, the middle button): from the south, looking north
+		// The game's turn and tilt of the view, in radians (CyCamera's base turn: Ctrl+Left/Right;
+		// its base pitch; 1 for Alt+F's satellite view), and where the camera is on its way to
+		// them (as the original, the rest left shrinks by e^-5.2 a second: a quarter in 0.26 s).
+		float baseTurn = 0, basePitch = 0, satellite = 0;
+		float baseTurnShown = 0, basePitchShown = 0, satelliteShown = 0;
 		float zoomTo = 0; // the distance a zoom glides to (0: none)
 		// A flight of the camera from one view to another (into the city screen and out again).
 		struct View
 		{
 			Vec3 target;
 			float distance = 0, pitch = 0, yaw = 0, tilt = 0;
+			float turn = 0; // (the turn drawn on top of yaw: the zoom's and the game's)
 		};
 		struct Glide
 		{
@@ -281,13 +288,50 @@ namespace oc4::render
 			if (cityView)
 			{
 				camera.pitch = std::numbers::pi_v<float> / 2;
+				camera.yaw = yaw;
 				return;
 			}
 			const MapSnapshot& m = view->map();
 			const float span = std::max(m.cameraTopDistance - m.cameraMinDistance, 1.0f);
 			const float t = std::clamp((camera.distance - m.cameraMinDistance) / span, 0.0f, 1.0f);
 			const float degrees = m.cameraLowerPitch + (m.cameraUpperPitch - m.cameraLowerPitch) * t;
-			camera.pitch = std::clamp(degrees * 3.14159265f / 180 + tilt, 0.2f, 1.55f);
+			// (the game's base pitch tilts it up from there; the satellite view looks straight down)
+			const float pitch = std::clamp(degrees * 3.14159265f / 180 + tilt - basePitchShown, 0.2f, 1.55f);
+			camera.pitch = pitch + (std::numbers::pi_v<float> / 2 - pitch) * satelliteShown;
+			camera.yaw = yaw + turnOffset();
+		}
+
+		// The original turns its camera a little: the eye east of south, more the closer it is
+		// (measured with CyCamera().GetCurrentPosition at 13 zooms, within 0.03 degrees; a fit of
+		// the camera to the plot grid in its picture shows it turned towards what it looks at,
+		// not moved aside): 4.17 degrees x s^2, s the share of the way from 0.86 x
+		// CAMERA_SMALLEST_MAX_DISTANCE (6020, none from there out) in to 1.3 x CAMERA_MIN_DISTANCE
+		// (910), where the tilt levels out; it goes on growing closer in (4.5 at 714). That is
+		// 2.3 degrees at the start distance. The game's turn (Ctrl+Left/Right, 45 degrees each
+		// way) adds to it; the satellite view has neither, north up.
+		float zoomTurn() const
+		{
+			const MapSnapshot& m = view->map();
+			const float from = 1.3f * m.cameraMinDistance, to = std::max(0.86f * m.cameraTopDistance, from + 1);
+			const float s = std::max((to - camera.distance) / (to - from), 0.0f);
+			return 4.17f * 3.14159265f / 180 * s * s;
+		}
+
+		float turnOffset() const { return cityView ? 0 : (zoomTurn() + baseTurnShown) * (1 - satelliteShown); }
+
+		// The game's turn and tilt, on their way to where it set them.
+		void easeAngles(float dt)
+		{
+			const float k = 1 - std::exp(-5.2f * dt);
+			bool moved = false;
+			for (auto [shown, to] : { std::pair{ &baseTurnShown, baseTurn }, std::pair{ &basePitchShown, basePitch }, std::pair{ &satelliteShown, satellite } })
+				if (*shown != to)
+				{
+					*shown = std::abs(to - *shown) < 1e-4f ? to : *shown + (to - *shown) * k;
+					moved = true;
+				}
+			if (moved && !glide)
+				updatePitch();
 		}
 
 		// FIELD_OF_VIEW is across the screen: a wide window sees more of the map to the sides, not
@@ -361,7 +405,7 @@ namespace oc4::render
 			camera.target.z = 0;
 		}
 
-		View currentView() const { return { camera.target, camera.distance, camera.pitch, camera.yaw, tilt }; }
+		View currentView() const { return { camera.target, camera.distance, camera.pitch, yaw, tilt, camera.yaw - yaw }; }
 
 		// The camera flies to the view: closer or farther evenly by ratio (a zoom), across the
 		// shorter way round a wrapping map, turning the shorter way, easing in and out.
@@ -392,7 +436,8 @@ namespace oc4::render
 			camera.target = { mix(g.from.target.x, g.to.target.x), mix(g.from.target.y, g.to.target.y), 0 };
 			camera.distance = g.from.distance * std::pow(g.to.distance / std::max(g.from.distance, 1.0f), k);
 			camera.pitch = mix(g.from.pitch, g.to.pitch);
-			camera.yaw = mix(g.from.yaw, g.to.yaw);
+			yaw = mix(g.from.yaw, g.to.yaw);
+			camera.yaw = yaw + mix(g.from.turn, g.to.turn);
 			tilt = g.to.tilt;
 			if (g.t >= 1)
 			{
@@ -1140,7 +1185,7 @@ namespace oc4::render
 			}
 			else if (orbiting)
 			{
-				camera.yaw -= float(x - lastX) * 0.005f;
+				yaw -= float(x - lastX) * 0.005f;
 				tilt += float(y - lastY) * 0.005f;
 				updatePitch();
 			}
@@ -1301,7 +1346,8 @@ namespace oc4::render
 			const Vec3 forward{ -std::cos(camera.yaw), -std::sin(camera.yaw), 0 }, right{ -std::sin(camera.yaw), std::cos(camera.yaw), 0 };
 			Vec3 move{};
 			// (once the keyboard chooses in a menu or a popup, the arrows are its, not the map's)
-			const bool arrows = !(popup.active() && popup.keyboardChoice()) && !uiKeysChoose();
+			// (with Ctrl they turn the camera: the game's CONTROL_ISOMETRIC_CAMERA_LEFT/RIGHT)
+			const bool arrows = !(popup.active() && popup.keyboardChoice()) && !uiKeysChoose() && !held(key::Control);
 			if (arrows && held(key::Up))
 				move += forward;
 			if (arrows && held(key::Down))
@@ -1340,10 +1386,11 @@ namespace oc4::render
 			}
 			if (playing && !held(key::Control)) // (the letters are orders then)
 				return;
-			if (held('Q'))
-				camera.yaw += dt * 1.2f;
-			if (held('E'))
-				camera.yaw -= dt * 1.2f;
+			if (const int turn = int(held('Q')) - int(held('E')))
+			{
+				yaw += float(turn) * dt * 1.2f;
+				updatePitch();
+			}
 		}
 
 		// The heads of the screens' items: made for those new, gone with their items; the
@@ -2222,6 +2269,7 @@ namespace oc4::render
 			handleHeldKeys(dt);
 			easeZoom(dt);
 			easeGlide(dt);
+			easeAngles(dt);
 			view->update(dt);
 			for (auto& [nif, h] : heads)
 				h.head->update(dt);
@@ -2442,6 +2490,13 @@ namespace oc4::render
 		if (layers.bare != m->layersApplied.bare)
 			m->view->options.units = m->view->options.improvements = !layers.bare;
 		m->layersApplied = layers;
+	}
+
+	void MapWindow::setCameraAngles(float turnDegrees, float pitchDegrees, bool satellite)
+	{
+		m->baseTurn = turnDegrees * 3.14159265f / 180;
+		m->basePitch = pitchDegrees * 3.14159265f / 180;
+		m->satellite = satellite ? 1.0f : 0.0f;
 	}
 
 	void MapWindow::setGlobeView(bool up)
