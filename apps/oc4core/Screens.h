@@ -12,6 +12,7 @@
 #include "GameSession.h"
 #include "render/MapWindow.h"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -38,6 +39,9 @@ namespace oc4::host
 
 	// The oc4host functions CyInterface (oc4screens.py) is built on; before the scripts load.
 	void registerScreenFunctions(Utility& utility);
+	// The minimap's toggles the player's profile keeps: the plot grid, the bare map, the yields,
+	// the scores (CyUserProfile's getGrid, getMap, getYields, getScores).
+	std::array<bool, 4> mapToggles(Utility& utility);
 
 	// Which soundscape (an index of the soundscape table; -1: none) each terrain, feature and
 	// improvement type has, and each era's cities by size (small, medium, large): the types

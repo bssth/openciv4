@@ -402,6 +402,13 @@ target_link_libraries(theme_combine_test PRIVATE oc4_options oc4_render)
 add_test(NAME theme_combine COMMAND theme_combine_test)
 set_target_properties(theme_combine_test PROPERTIES FOLDER "tests")
 
+# The minimap's toggles kept in the player's profile (oc4options.py, with a stand-in host).
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+	add_test(NAME minimap_toggles COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/minimap_toggles_test.py
+		${CMAKE_CURRENT_SOURCE_DIR}/apps/oc4core/python)
+endif()
+
 if(WIN32 AND TARGET freetype)
 	add_executable(text_layout_freetype_test tests/text_layout_test.cpp src/render/TextLayout.cpp src/render/FontFreeType.cpp)
 	target_include_directories(text_layout_freetype_test PRIVATE src)

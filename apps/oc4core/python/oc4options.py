@@ -9,7 +9,11 @@
 ##
 ## CyUserProfile is the player's profile those callbacks read and set: the volumes (the sounds
 ## play as loud), the graphic and player options, the clock; kept in the profile file the host
-## names (Documents\My Games\openciv4\profile.ini).
+## names (Documents\My Games\openciv4\profile.ini). It also keeps the map's toggles by the minimap
+## that the original keeps in its profile (Profiles\<name>.pfl, written at each click): the plot
+## grid, the bare map, the yields and the scores (grid=, map=, yields=, scores=); every game, new,
+## loaded or after a restart, starts with them as the profile has them. The unit and resource
+## icon layers are not kept (nor in the original).
 
 import CvPythonExtensions as _cpe
 import oc4host
@@ -48,7 +52,9 @@ _profile = {
 	'graphicsLevel': 0, 'renderQuality': 0, 'globeView': 0, 'movieQuality': 0, 'mainMenu': 0, 'antiAliasing': 0, 'uiScale': 0,
 	'speakers': '', 'musicPath': '', 'voice': False,
 	'wasdPan': False, 'autoEndTurn': False, 'edgeScroll': True,
+	'grid': False, 'map': False, 'yields': False, 'scores': True,
 }
+_TOGGLES = ('grid', 'map', 'yields', 'scores') # (CyUserProfile's getGrid, getMap, getYields, getScores)
 
 
 def _path():
@@ -79,7 +85,7 @@ def _load():
 					_profile['nosound'][parts[1]] = value == '1'
 				elif parts[0] in ('graphic', 'player'):
 					_profile[parts[0]][int(parts[1])] = value == '1'
-				elif parts[0] in ('clock', 'hours24', 'voice', 'wasdPan', 'autoEndTurn', 'edgeScroll'):
+				elif parts[0] in ('clock', 'hours24', 'voice', 'wasdPan', 'autoEndTurn', 'edgeScroll') + _TOGGLES:
 					_profile[parts[0]] = value == '1'
 				elif parts[0] in ('graphicsLevel', 'renderQuality', 'globeView', 'movieQuality', 'mainMenu', 'antiAliasing', 'uiScale'):
 					_profile[parts[0]] = int(value)
@@ -98,7 +104,7 @@ def _save():
 	lines = []
 	for key in ('name', 'speakers', 'musicPath'):
 		lines.append('%s=%s' % (key, _profile[key]))
-	for key in ('clock', 'hours24', 'voice', 'wasdPan', 'autoEndTurn', 'edgeScroll'):
+	for key in ('clock', 'hours24', 'voice', 'wasdPan', 'autoEndTurn', 'edgeScroll') + _TOGGLES:
 		lines.append('%s=%d' % (key, 1 if _profile[key] else 0))
 	for key in ('graphicsLevel', 'renderQuality', 'globeView', 'movieQuality', 'mainMenu', 'antiAliasing', 'uiScale'):
 		lines.append('%s=%d' % (key, _profile[key]))
@@ -128,6 +134,31 @@ def _applyGraphics():
 		oc4host.set_edge_scroll(_profile['edgeScroll'])
 	except Exception:
 		pass
+
+
+def _applyToggles():
+	"""The minimap's toggles as the profile has them, to the host (a new game, a loaded one and
+	the next start of the program all take them so)."""
+	try:
+		oc4host.load_map_toggles(*[bool(_profile[k]) for k in _TOGGLES])
+	except Exception:
+		pass
+
+
+def setMapToggles(grid, bareMap, yields, scores):
+	"""A toggle by the minimap switched (its button or its key; the host tells): kept at once."""
+	now = dict(zip(_TOGGLES, (bool(grid), bool(bareMap), bool(yields), bool(scores))))
+	if [_profile[k] for k in _TOGGLES] != [now[k] for k in _TOGGLES]:
+		_profile.update(now)
+		_save()
+
+
+def _toggle(i):
+	"""A minimap toggle as it is now (the profile's, without the host)."""
+	try:
+		return bool(oc4host.map_toggles()[i])
+	except Exception:
+		return bool(_profile[_TOGGLES[i]])
 
 
 # W A S D panning (openciv4's own option, no game's): its check box on the options' Game tab,
@@ -252,7 +283,7 @@ class _UserProfile(object):
 	def getNumProfileFiles(self): return 1
 	def getProfileFileName(self, i): return 'PROFILES\\%s.prf' % _profile['name']
 	def loadProfileFileNames(self): pass
-	def readFromFile(self, s): _load(); _applyVolumes(); _applyGraphics(); return True
+	def readFromFile(self, s): _load(); _applyVolumes(); _applyGraphics(); _applyToggles(); return True
 	def writeToFile(self, s): _save(); return True
 	def deleteProfileFile(self, s): return False
 	def resetOptions(self, eTab):
@@ -346,11 +377,11 @@ class _UserProfile(object):
 	def wasClockJustTurnedOn(self): return False
 	def setClockJustTurnedOn(self, b): pass
 
-	# the map's toggles by the minimap, as they start
-	def getGrid(self): return False
-	def getMap(self): return False
-	def getYields(self): return False
-	def getScores(self): return True
+	# the map's toggles by the minimap (the profile keeps them as they are switched)
+	def getGrid(self): return _toggle(0)
+	def getMap(self): return _toggle(1)
+	def getYields(self): return _toggle(2)
+	def getScores(self): return _toggle(3)
 
 
 def _volumeAccessors():
@@ -837,3 +868,4 @@ oc4screens.beforeDisplay.append(relayout)
 _load()
 _applyVolumes()
 _applyGraphics()
+_applyToggles()

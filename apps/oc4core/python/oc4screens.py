@@ -35,6 +35,13 @@ _dropRects = {}         # where each pull down is: (file id, name) -> (x0, y0, x
 _editFocus = [None]     # the edit box typed into: (file id, name), or None
 
 
+def _setToggle(i):
+	"""A minimap toggle switched from a script (CyInterface's toggle...): as its control does."""
+	t = list(oc4host.map_toggles())
+	t[i] = not t[i]
+	oc4host.set_map_toggles(*t)
+
+
 def _changed():
 	_version[0] += 1
 
@@ -2227,15 +2234,15 @@ class CyInterface(object):
 	def checkFlashUpdate(self): return False
 	def checkFlashReset(self, ePlayer): pass
 
-	def isScoresVisible(self): return True
+	def isScoresVisible(self): return bool(oc4host.map_toggles()[3])
 	def isScoresMinimized(self): return False
 	def toggleScoresMinimized(self): pass
-	def toggleScoresVisible(self): pass
+	def toggleScoresVisible(self): _setToggle(3)
 	def isOOSVisible(self): return False
 	def isNetStatsVisible(self): return False
-	def isYieldVisibleMode(self): return False
-	def toggleYieldVisibleMode(self): pass
-	def toggleBareMapMode(self): pass
+	def isYieldVisibleMode(self): return bool(oc4host.map_toggles()[2])
+	def toggleYieldVisibleMode(self): _setToggle(2)
+	def toggleBareMapMode(self): _setToggle(1)
 	def isFocused(self): return False
 	def isFocusedWidget(self): return False
 	def isInAdvancedStart(self): return False
@@ -2478,11 +2485,11 @@ _cpe.CyUserProfile.isClockOn = lambda self: False
 _cpe.CyUserProfile.wasClockJustTurnedOn = lambda self: False
 _cpe.CyUserProfile.setClockJustTurnedOn = lambda self, b: None
 _cpe.CyUserProfile.getGraphicOption = lambda self, i: False
-# (the map's toggles by the minimap, as they start: no grid, no bare map, no yields, the scores shown)
-_cpe.CyUserProfile.getGrid = lambda self: False
-_cpe.CyUserProfile.getMap = lambda self: False
-_cpe.CyUserProfile.getYields = lambda self: False
-_cpe.CyUserProfile.getScores = lambda self: True
+# (the map's toggles by the minimap, as they are: oc4options keeps them in the profile)
+_cpe.CyUserProfile.getGrid = lambda self: bool(oc4host.map_toggles()[0])
+_cpe.CyUserProfile.getMap = lambda self: bool(oc4host.map_toggles()[1])
+_cpe.CyUserProfile.getYields = lambda self: bool(oc4host.map_toggles()[2])
+_cpe.CyUserProfile.getScores = lambda self: bool(oc4host.map_toggles()[3])
 
 
 def getClockText():

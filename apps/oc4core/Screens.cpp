@@ -126,6 +126,9 @@ namespace oc4::host
 		std::wstring g_help; // the help shown now (CyInterface.getHelpString)
 		std::function<int(const std::string&, int)> g_textWidth; // how wide a text is in the window
 		render::MapWindow::UiDisplay g_display; // the window's, for the scale's choices
+		// The minimap's toggles as the player's profile has them (mapToggles; none before the
+		// profile is read): Screens::frame keeps it so when one is switched.
+		std::optional<std::array<bool, 4>> g_profileToggles;
 		std::function<int(const std::string&, int, int)> g_textHeight; // how high it is, wrapped at a width
 
 		// (before the window is up: its markup left out, a symbol about two letters wide)
@@ -192,6 +195,12 @@ namespace oc4::host
 			printPythonError(e);
 		}
 		return places;
+	}
+
+	std::array<bool, 4> mapToggles(Utility& utility)
+	{
+		const Interface& ui = utility.gameInterface();
+		return { utility.engine().grid.load(), ui.bareMap.load(), ui.showYields.load(), ui.scores.load() };
 	}
 
 	void registerScreenFunctions(Utility& utility)
@@ -267,6 +276,24 @@ namespace oc4::host
 		// (the graphic options it has: the game core and the window ask the utility)
 		host.def("set_graphic_option", [&utility](int option, bool on) { utility.setGraphicOption(option, on); });
 		host.def("reset_graphic_options", [&utility] { utility.resetGraphicOptions(); });
+		// The map's toggles by the minimap the original keeps in the player's profile (the plot
+		// grid, the bare map, the yields, the scores: CyUserProfile's getGrid, getMap, getYields,
+		// getScores): the profile's, as loaded, and what they are now (Screens::frame keeps them).
+		host.def("map_toggles", [&utility] { return mapToggles(utility); });
+		const auto setMapToggles = [&utility, &ui](bool grid, bool bareMap, bool yields, bool scores) {
+			utility.engine().grid = grid;
+			ui.bareMap = bareMap;
+			ui.showYields = yields;
+			ui.scores = scores;
+			ui.setDirty(Score_DIRTY_BIT, true);
+			ui.setDirty(GlobeLayer_DIRTY_BIT, true); // (the buttons' states)
+		};
+		// (the profile's, as read; a script's switch, as the game's controls do it)
+		host.def("load_map_toggles", [&utility, setMapToggles](bool grid, bool bareMap, bool yields, bool scores) {
+			setMapToggles(grid, bareMap, yields, scores);
+			g_profileToggles = mapToggles(utility);
+		});
+		host.def("set_map_toggles", setMapToggles);
 		host.def("set_ui_scale", [&utility](int percent) { utility.setUiScale(percent); });
 		// W A S D panning: the profile's, as loaded; the player's, from the options' check box.
 		host.def("set_wasd_pan", [&utility](bool on) { utility.setWasdPan(on); });
@@ -918,6 +945,20 @@ if _walls:
 			}
 		}
 		window.setAutoEndTurn(m_utility.autoEndTurn());
+		// (a minimap toggle switched, by its button or its key: kept in the profile, as the
+		// original keeps it at once, for every game after)
+		if (const auto toggles = mapToggles(m_utility); g_profileToggles && toggles != *g_profileToggles)
+		{
+			g_profileToggles = toggles;
+			try
+			{
+				py::module_::import("oc4options").attr("setMapToggles")(toggles[0], toggles[1], toggles[2], toggles[3]);
+			}
+			catch (py::error_already_set& e)
+			{
+				printPythonError(e);
+			}
+		}
 		if (!m_menu) // (the main menu has no map to scroll)
 			window.setEdgeScroll(m_utility.edgeScroll());
 		g_display = window.uiDisplay();

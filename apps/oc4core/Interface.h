@@ -215,7 +215,14 @@ namespace oc4::host
 		bool updateCursorType() override { return false; }
 		bool isFocusedWidget() override { return false; }
 		bool isFocused() override { return false; }
-		bool isScoresVisible() override { return false; }
+		// The scores by the minimap (CONTROL_SCORES), shown as the player's profile has them.
+		std::atomic<bool> scores = true;
+		bool isScoresVisible() override { return scores; }
+		void toggleScoresVisible() override
+		{
+			scores = !scores;
+			setDirty(Score_DIRTY_BIT, true);
+		}
 		// The tech splash (the scripts' CvTechSplashScreen, with the tech's quote): only with the
 		// game's screens up (Screens::start); without them the game core plays the short sound instead.
 		bool techSplash = false;
