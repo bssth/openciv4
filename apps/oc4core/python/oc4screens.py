@@ -151,6 +151,7 @@ class _Screen(object):
 		self.helpText = u''
 		self.minimap = None
 		self.mm = None         # its own minimap's layers (not the main interface's): see _Minimap
+		self.mmSeq = 0         # its own minimap's place among its widgets (initMinimap, bringMinimapToFront)
 		self.hideLists = {}
 		self.endTurn = None    # (text, shown)
 		self.closeOnEscape = True
@@ -1287,6 +1288,17 @@ class CyGInterfaceScreen(object):
 		if self._s.minimap != r:
 			self._s.minimap = r
 			_changed()
+		self._placeMinimap()
+
+	def _placeMinimap(self):
+		# (a screen's own minimap is drawn in its widgets' order, where it was made or brought to
+		# the front: a widget made after it covers it, as the military advisor's SIT-REP panel does
+		# in the original, which BUG never hides the DEPLOYMENT tab's map under)
+		s = self._s
+		if not s.main:
+			s.seq += 1
+			s.mmSeq = s.seq
+			_changed()
 
 	def _mm(self):
 		if self._s.mm is None:
@@ -1338,7 +1350,7 @@ class CyGInterfaceScreen(object):
 
 	def setMinimapNoRender(self, *args): pass
 	def setMinimapSectionOverride(self, *args): pass
-	def bringMinimapToFront(self): pass
+	def bringMinimapToFront(self): self._placeMinimap()
 
 	def minimapClearAllFlashingTiles(self):
 		mm = self._s.mm
@@ -1736,6 +1748,17 @@ def display():
 			w = s.widgets.get(name)
 			if w is not None:
 				_display_widget(s, w, ox, oy, None, [ox, oy, True, 0, 0], items)
+		# (a screen's own minimap, the military advisor's, the replay's: among its widgets, in the
+		# order it was placed (_placeMinimap), from the screen's corner as they are; a panel made
+		# after it that covers it whole hides it and takes its clicks: BUG's SIT-REP and STRATEGIC
+		# ADVANTAGES tabs lay their panel over the DEPLOYMENT tab's map, which they leave)
+		if s.minimap is not None and not s.main and s.mm is not None:
+			l, t, r, b = s.minimap
+			l, t, r, b = l + ox, t + oy, r + ox, b + oy
+			if not any(i[1] == 'panel' and i[22] > s.mmSeq and i[21] <= 0.0 and i[7] not in ('', 'PANEL_STYLE_EMPTY') and
+					i[2] <= l and i[3] <= t and i[4] >= r and i[5] >= b for i in items):
+				items.append(((s.id, '__minimap', -1), 'minimap', l, t, r, b, None, '__screenmap', u'', '', '', 0, 0, False, True, 0, None,
+					-1, -1, -1, False, 0.0, s.mmSeq))
 		# farther first (GFC's z: smaller is nearer), then in the order they came
 		items.sort(key=lambda i: (-i[21], i[22]))
 		out.extend(items)
@@ -1743,12 +1766,6 @@ def display():
 		if s.minimap is not None and s.main:
 			l, t, r, b = s.minimap
 			out.append(((s.id, '__minimap', -1), 'minimap', l, t, r, b, None, '', u'', '', '', 0, 0, False, True, 0, None, -1, -1, -1, False, 0, 0))
-		# (a screen's own, over what it shows: the military advisor's, the replay's; placed from
-		# the screen's corner as its widgets)
-		elif s.minimap is not None and s.mm is not None:
-			l, t, r, b = s.minimap
-			out.append(((s.id, '__minimap', -1), 'minimap', l + ox, t + oy, r + ox, b + oy, None, '__screenmap', u'', '', '', 0, 0, False, True, 0, None,
-				-1, -1, -1, False, 0, 0))
 	_dropList(out)
 	return out
 

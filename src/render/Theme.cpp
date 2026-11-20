@@ -726,6 +726,12 @@ namespace oc4::render
 				if (const Value* combine = resolve(s, has("FactorCombine"));
 					combine && combine->kind == Value::Kind::Call && !combine->args.empty() && combine->args[0].text == "Modulate")
 					tinted = colour(s, f, tint, tintAlpha);
+			// (FactorCombine's second part is the alpha's: "Source" keeps the image's own, the colour
+			// tints only; PANEL_STYLE_MAIN's, opaque as in the original, so the military advisor's
+			// SIT-REP panel hides what is under it)
+			if (const Value* combine = resolve(s, has("FactorCombine"));
+				tinted && combine && combine->args.size() > 1 && combine->args[1].text == "Source")
+				tintAlpha = 1;
 			if (const Value* v = has("Image"))
 				l.image = bitmap(s, v, tinted ? &tint : nullptr, tintAlpha);
 			if (const Value* v = has("Center"))
