@@ -1519,8 +1519,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 		void buildRiverMask()
 		{
 			const int R = kBorderRes, TW = map.width * R, TH = map.height * R;
-			riverMask.assign(size_t(TW) * size_t(TH), 0);
-			riverMaskChanged = true;
+			// (the borders are drawn again only when it changed: a new road or farm leaves it as it was)
+			std::vector<uint8_t> mask(size_t(TW) * size_t(TH), 0);
 			const float toTexel = float(R) / S();
 			for (const Instance& d : decor)
 			{
@@ -1565,7 +1565,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 								const uint32_t ax = std::min(uint32_t(u * float(w.width)), w.width - 1), ay = std::min(uint32_t(v * float(w.height)), w.height - 1);
 								if ((*w.alpha)[size_t(ay) * w.width + ax])
 								{
-									riverMask[size_t(wy) * size_t(TW) + size_t(wx)] = 1;
+									mask[size_t(wy) * size_t(TW) + size_t(wx)] = 1;
 									break;
 								}
 							}
@@ -1580,16 +1580,20 @@ float4 PSTerrain(PSIn i) : SV_Target
 					tx = (tx % TW + TW) % TW;
 				if (map.wrapY)
 					ty = (ty % TH + TH) % TH;
-				return tx >= 0 && ty >= 0 && tx < TW && ty < TH && riverMask[size_t(ty) * TW + tx] != 0;
+				return tx >= 0 && ty >= 0 && tx < TW && ty < TH && mask[size_t(ty) * TW + tx] != 0;
 			};
-			std::vector<uint8_t> closed = riverMask;
+			std::vector<uint8_t> closed = mask;
 			for (int ty = 0; ty < TH; ++ty)
 				for (int tx = 0; tx < TW; ++tx)
-					if (!riverMask[size_t(ty) * TW + tx] &&
+					if (!mask[size_t(ty) * TW + tx] &&
 						((water(tx - 1, ty) && water(tx + 1, ty)) || (water(tx, ty - 1) && water(tx, ty + 1)) ||
 							(water(tx - 1, ty - 1) && water(tx + 1, ty + 1)) || (water(tx - 1, ty + 1) && water(tx + 1, ty - 1))))
 						closed[size_t(ty) * TW + tx] = 1;
-			riverMask = std::move(closed);
+			if (closed != riverMask)
+			{
+				riverMask = std::move(closed);
+				riverMaskChanged = true;
+			}
 		}
 
 		// The culture borders, kBorderRes texels a plot side: whose ground each texel is, and how
@@ -2248,12 +2252,63 @@ float4 PSTerrain(PSIn i) : SV_Target
 			}
 			if (cuts.empty() && waters.empty())
 				return;
+			// A river piece's triangles where they lie on the map, and for each cell of a grid
+			// over them the triangles that reach into it (in their order): a point is tested
+			// against those only. (Every triangle for every point of every tree near a river
+			// took most of a second whenever an improvement or a road changed.)
+			struct RiverCells
+			{
+				std::vector<Vec3> corners; // (placed)
+				float x0 = 0, y0 = 0, size = 1;
+				int columns = 0, rows = 0;
+				std::vector<std::vector<uint32_t>> cells; // the first corner of each triangle
+			};
+			std::unordered_map<const Instance*, RiverCells> riverCells;
+			const auto cellsOf = [&](const Instance& river) -> const RiverCells& {
+				auto [it, added] = riverCells.try_emplace(&river);
+				RiverCells& g = it->second;
+				if (!added)
+					return g;
+				const LoadedModel::Water& w = *river.model->water;
+				const size_t n = w.corners.size() / 3 * 3;
+				g.corners.reserve(n);
+				for (size_t i = 0; i < n; ++i)
+					g.corners.push_back(river.place.point(w.corners[i]));
+				if (g.corners.empty())
+					return g;
+				// (a triangle's box a little larger: a point just outside it counts, below)
+				const float slack = 0.01f * S();
+				float x0 = g.corners[0].x, y0 = g.corners[0].y, x1 = x0, y1 = y0;
+				for (const Vec3& c : g.corners)
+					x0 = std::min(x0, c.x), y0 = std::min(y0, c.y), x1 = std::max(x1, c.x), y1 = std::max(y1, c.y);
+				g.size = S() / 8;
+				g.x0 = x0 - slack, g.y0 = y0 - slack;
+				g.columns = std::max(1, int((x1 + slack - g.x0) / g.size) + 1);
+				g.rows = std::max(1, int((y1 + slack - g.y0) / g.size) + 1);
+				g.cells.resize(size_t(g.columns) * size_t(g.rows));
+				for (size_t t = 0; t < n; t += 3)
+				{
+					const Vec3 &a = g.corners[t], &b = g.corners[t + 1], &c = g.corners[t + 2];
+					const int cx0 = std::clamp(int((std::min({ a.x, b.x, c.x }) - slack - g.x0) / g.size), 0, g.columns - 1);
+					const int cx1 = std::clamp(int((std::max({ a.x, b.x, c.x }) + slack - g.x0) / g.size), 0, g.columns - 1);
+					const int cy0 = std::clamp(int((std::min({ a.y, b.y, c.y }) - slack - g.y0) / g.size), 0, g.rows - 1);
+					const int cy1 = std::clamp(int((std::max({ a.y, b.y, c.y }) + slack - g.y0) / g.size), 0, g.rows - 1);
+					for (int cy = cy0; cy <= cy1; ++cy)
+						for (int cx = cx0; cx <= cx1; ++cx)
+							g.cells[size_t(cy) * size_t(g.columns) + size_t(cx)].push_back(uint32_t(t));
+				}
+				return g;
+			};
 			// In a river piece's water: the texture's alpha where the point is on its grid.
 			const auto inWater = [&](const Instance& river, Vec3 p) {
 				const LoadedModel::Water& w = *river.model->water;
-				for (size_t t = 0; t + 2 < w.corners.size(); t += 3)
+				const RiverCells& g = cellsOf(river);
+				const float fx = (p.x - g.x0) / g.size, fy = (p.y - g.y0) / g.size;
+				if (g.cells.empty() || !(fx >= 0 && fy >= 0 && fx < float(g.columns) && fy < float(g.rows)))
+					return false;
+				for (const uint32_t t : g.cells[size_t(fy) * size_t(g.columns) + size_t(fx)])
 				{
-					const Vec3 a = river.place.point(w.corners[t]), b = river.place.point(w.corners[t + 1]), c = river.place.point(w.corners[t + 2]);
+					const Vec3 &a = g.corners[t], &b = g.corners[t + 1], &c = g.corners[t + 2];
 					const float d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
 					if (std::abs(d) < 1e-6f)
 						continue;
