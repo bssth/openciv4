@@ -3144,6 +3144,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 		void clipSounds(const Instance& inst, const anim::Sequence& seq, float now, bool sounds = true)
 		{
 			auto& [clip, last] = clipTimes[inst.unit * 31 + uint64_t(inst.figureIndex)];
+			// (a little back is not a new start: a founding's clip time comes from the last capture,
+			// which lags the frame by a moment, and steps back so at each one; its keys were heard)
+			if (clip == &seq && now < last && last - now < 0.5f)
+				return;
 			const float from = clip == &seq && now >= last ? last : -1;
 			clip = &seq, last = now;
 			for (const auto& [keyTime, text] : seq.textKeys())
@@ -3164,8 +3168,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 				}
 				if (!sounds || !onSound || text.size() < 6 || _strnicmp(text.c_str(), "SOUND:", 6) != 0)
 					continue;
-				// (the script is the last of its comma-separated parts that names one)
-				std::string tag;
+				// (every comma-separated part that names a script plays, together, as the original's:
+				// a settler's founding is "SOUND:AS3D_UN_FOUND_CITY,AS3D_UN_MOVE_SACK", a fall
+				// "AS3D_UN_BODY_FALL,AS3D_UN_FOOT_UNIT"; an old key's other parts, a name and a time
+				// as in "WarriorAttackA,316,AS3D_UN_SWOOSH_WEAPON", are none)
 				size_t begin = 6;
 				while (begin <= text.size())
 				{
@@ -3173,12 +3179,12 @@ float4 PSTerrain(PSIn i) : SV_Target
 					std::string part = text.substr(begin, comma - begin);
 					while (!part.empty() && part.front() == ' ')
 						part.erase(part.begin());
+					while (!part.empty() && (part.back() == ' ' || part.back() == '\r' || part.back() == '\n'))
+						part.pop_back();
 					if (part.rfind("AS", 0) == 0)
-						tag = part;
+						onSound(part, inst.soundAt.x, inst.soundAt.y);
 					begin = comma + 1;
 				}
-				if (!tag.empty())
-					onSound(tag, inst.soundAt.x, inst.soundAt.y);
 			}
 		}
 
