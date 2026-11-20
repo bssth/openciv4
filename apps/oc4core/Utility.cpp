@@ -426,7 +426,9 @@ namespace oc4::host
 
 	void Utility::enumerateFiles(std::vector<CvString>& files, const char* szPattern)
 	{
-		// "xml\\text\\*.xml" -> every matching asset key across all layers (highest layer wins).
+		// "xml\\text\\*.xml" -> every matching asset key across all layers (a file in a higher layer
+		// replaces the same name below it), lowest layer first: the DLL adds the texts in this order
+		// and the last text of a key stays, so BtS's override the base game's and a mod's both.
 		// ('*' does not cross folders, but under modules\: a mod's modules are folders of folders,
 		// AND2's civilization packs keep their texts three deep; "modules\\*_CIV4GameText*.xml")
 		const std::string pattern = makeAssetKey(szPattern ? szPattern : "");
@@ -436,7 +438,7 @@ namespace oc4::host
 		const std::string ext = dot == std::string::npos || pattern.find_first_of("*?", dot) != std::string::npos ? std::string() : pattern.substr(dot);
 		const bool deep = prefix.starts_with("modules/");
 		std::set<std::string> seen;
-		for (const auto& loc : m_assets.list(ext))
+		for (const auto& loc : m_assets.listByLayer(ext))
 		{
 			const std::string& k = loc.key;
 			if (!k.starts_with(prefix) || !wildcard(pattern, k, deep))

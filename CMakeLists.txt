@@ -385,6 +385,12 @@ target_link_libraries(xml_decode_test PRIVATE oc4_options)
 add_test(NAME xml_decode COMMAND xml_decode_test)
 set_target_properties(xml_decode_test PROPERTIES FOLDER "tests")
 
+add_executable(asset_layers_test tests/asset_layers_test.cpp)
+target_include_directories(asset_layers_test PRIVATE src)
+target_link_libraries(asset_layers_test PRIVATE oc4_options oc4_core)
+add_test(NAME asset_layers COMMAND asset_layers_test)
+set_target_properties(asset_layers_test PROPERTIES FOLDER "tests")
+
 add_executable(pad_map_test tests/pad_map_test.cpp)
 target_include_directories(pad_map_test PRIVATE src)
 add_test(NAME pad_map COMMAND pad_map_test)
