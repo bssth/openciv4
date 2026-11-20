@@ -725,7 +725,7 @@ float4 PSOverlay(Out p) : SV_Target
 		key.src = int(toSdl(m.alphaBlend ? m.srcBlend : scene::Blend::SrcAlpha));
 		key.dst = int(toSdl(m.alphaBlend ? m.dstBlend : scene::Blend::InvSrcAlpha));
 		key.zTest = m.zTest;
-		key.zWrite = !particles && m.zWrite && (!blended(m) || m.alphaTest);
+		key.zWrite = !particles && m.zWrite && (!blended(m) || m.alphaTest || m.blendWritesDepth);
 		key.cull = particles ? int(scene::Cull::None) : int(m.cull);
 		return pipeline(key);
 	}
@@ -1159,7 +1159,7 @@ float4 PSOverlay(Out p) : SV_Target
 			const scene::Material& material = i < materials.size() ? materials[i] : mesh.material;
 			if (material.alphaAnimated && material.alpha <= 0.001f)
 				continue;
-			if (!blended(material))
+			if (!blended(material) || material.blendUnsorted)
 			{
 				drawMesh(mesh, material, world, teamColor, onGround);
 				continue;

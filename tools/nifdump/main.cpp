@@ -69,6 +69,10 @@ namespace
 						sd->bones.empty() ? 0 : sd->bones[0].weights.size());
 			}
 			for (const Ref p : obj->properties)
+				if (const auto* ap = f.get<NiAlphaProperty>(p))
+					std::cout << std::format("{}    alpha [{}]: flags=0x{:04X} blend={} src={} dst={} test={} func={} threshold={} noSorter={}\n", indent, p, ap->flags,
+						ap->blendEnabled(), ap->srcBlend(), ap->dstBlend(), ap->testEnabled(), ap->testFunc(), ap->threshold, ap->noSorter());
+			for (const Ref p : obj->properties)
 				if (const auto* tp = f.get<NiTexturingProperty>(p))
 					for (size_t s = 0; s < tp->shaderMaps.size(); ++s)
 						if (const auto& sm = tp->shaderMaps[s]; sm.map)

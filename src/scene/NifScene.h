@@ -99,6 +99,12 @@ namespace oc4::scene
 
 		bool zTest = true;
 		bool zWrite = true;
+		// Blended, and its depth written all the same (the leaders' shader: what it draws hides
+		// what comes after it, its see-through parts too).
+		bool blendWritesDepth = false;
+		// Blended, but drawn where its model has it, not sorted by distance with the scene's
+		// other blended things (Gamebryo's alpha property's "no sorter", or no such property).
+		bool blendUnsorted = false;
 		Cull cull = Cull::Back;
 
 		// NiVertexColorProperty: 0 ignore, 1 emissive, 2 ambient+diffuse

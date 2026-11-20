@@ -434,23 +434,23 @@ namespace oc4::scene
 					m.zWrite = false;
 				if (p.stencil)
 					m.cull = p.stencil->drawMode == 3 ? Cull::None : p.stencil->drawMode == 2 ? Cull::Front : Cull::Back;
-				// The leaderheads' skin shaders (TLeaderheadShader*) draw it opaque: the alpha of
-				// their colour map is a mask of their own, not where the skin is.
-				// Their see-through parts (brows, moustaches: "..._trans") keep their alpha. The
-				// shader sets the depth state itself: what it draws hides what is behind it (Pacal's
+				// The leaders' shaders (TLeaderheadShader*) set their own state, whatever the
+				// properties say (Civ4LeaderheadShader.fx's pass): every mesh blended by its colour
+				// map's alpha (SrcAlpha, InvSrcAlpha), no alpha test, depth tested and written (Pacal's
 				// face has the property's "no depth writes", and drawn so its lips and teeth showed
-				// through it).
+				// through it). Their skin's alpha is 1; brows, beards and fringes fade into it (Zara
+				// Yaqob's "zara_hair", Louis XIV's "hair_jobber"). Which order they go in is still the
+				// alpha property's: as the model has them (its "no sorter", or none), or sorted by
+				// distance with the rest.
 				if (m.shaderName.starts_with("TLeaderheadShader"))
 				{
-					std::string name = geom.name;
-					for (char& c : name)
-						c = char(std::tolower(static_cast<unsigned char>(c)));
-					if (name.find("trans") == std::string::npos)
-					{
-						m.alphaBlend = false;
-						m.alphaTest = false;
-					}
+					m.blendUnsorted = !(m.alphaBlend && !p.alpha->noSorter());
+					m.alphaBlend = true;
+					m.srcBlend = Blend::SrcAlpha;
+					m.dstBlend = Blend::InvSrcAlpha;
+					m.alphaTest = false;
 					m.zTest = m.zWrite = true;
+					m.blendWritesDepth = true;
 				}
 				return m;
 			}
