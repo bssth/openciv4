@@ -997,8 +997,12 @@ namespace oc4::host
 			m_queued.push_front({ info, active });
 			next = m_queued.begin();
 		}
-		// (one wonder's movie after the other, each once the last is closed)
-		if (next->info && next->info->getButtonPopupType() == BUTTONPOPUP_PYTHON_SCREEN && screenUp && screenUp())
+		// A screen of its own up over the map (a new tech's splash, an advisor, a wonder's movie):
+		// the game's popups wait until it is closed, as the original's (a tech discovered shows its
+		// splash alone; the civic and research questions come after it, so Esc closes the splash
+		// first). One wonder's movie after the other, each once the last is closed. What is opened
+		// at once (the game's menu, a script's popup) shows over it.
+		if (next->info && (next->info->getButtonPopupType() == BUTTONPOPUP_PYTHON_SCREEN || !next->added) && screenUp && screenUp())
 			return;
 		if (next->ready)
 		{
