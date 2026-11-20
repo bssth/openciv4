@@ -528,25 +528,28 @@ namespace oc4::host
 		if (improvement == NO_IMPROVEMENT || m_plotNodes.empty())
 			return -1;
 		const std::string improvementName = text(GC.getImprovementInfo(improvement).getType());
-		if (improvementName != "IMPROVEMENT_FARM")
-			return -1;
-		const PlayerTypes owner = plot.getOwner();
+		// (an unowned plot: as the player looking at it, as the original draws it; Wine's test
+		// map has the industrial quarry and pasture outside any border for an industrial Rome)
+		const PlayerTypes owner = plot.getOwner() != NO_PLAYER ? plot.getOwner() : GC.getGame().getActivePlayer();
 		const int era = owner != NO_PLAYER ? int(player(owner).getCurrentEra()) : int(GC.getGame().getCurrentEra());
+		const int artStyle = owner != NO_PLAYER ? int(player(owner).getArtStyleType()) : -1;
 		ImprovementTypes shown = NO_IMPROVEMENT;
 		bool worked = false;
 		const_cast<CvPlot&>(plot).getVisibleImprovementState(shown, worked);
 		const bool irrigated = plot.isIrrigationAvailable();
 		const uint32_t variant = (uint32_t(plot.getX()) * 73856093u) ^ (uint32_t(plot.getY()) * 19349663u);
 		const uint64_t key = uint64_t(uint8_t(era)) | uint64_t(uint16_t(bonus + 1)) << 8 | uint64_t(worked) << 24 | uint64_t(irrigated) << 25 |
-			uint64_t(variant % 64) << 26;
+			uint64_t(variant % 64) << 26 | uint64_t(uint16_t(improvement)) << 32 | uint64_t(uint8_t(artStyle + 1)) << 48;
 		if (const auto it = m_plotLayouts.find(key); it != m_plotLayouts.end())
 			return it->second;
 
 		const std::string eraName = era >= 0 && era < GC.getNumEraInfos() ? text(GC.getEraInfo(static_cast<EraTypes>(era)).getType()) : "";
 		const std::string bonusName = bonus >= 0 && bonus < GC.getNumBonusInfos() ? text(GC.getBonusInfo(static_cast<BonusTypes>(bonus)).getType()) : "";
+		const std::string styleName = artStyle >= 0 && artStyle < GC.getNumArtStyleTypes() ? std::string(GC.getArtStyleTypes(static_cast<ArtStyleTypes>(artStyle))) : "";
 		const auto fits = [&](const LAttributes& a) {
 			return a.allows("Era", eraName, "ERA_ALL", "NO_ERA") && a.allows("Bonus", bonusName, "BONUS_ALL", "NO_BONUS") &&
-				a.allows("Improvement", improvementName, "IMPROVEMENT_ALL", "NO_IMPROVEMENT");
+				a.allows("Improvement", improvementName, "IMPROVEMENT_ALL", "NO_IMPROVEMENT") &&
+				(styleName.empty() || a.allows("ArtStyle", styleName, "ARTSTYLE_ALL", "NO_ARTSTYLE"));
 		};
 		uint32_t random = variant * 2654435761u + 1;
 		const auto next = [&] { return (random = random * 1664525u + 1013904223u) >> 8; };
@@ -718,11 +721,211 @@ namespace oc4::host
 					std::erase(spots, spot);
 				}
 		}
+		else if (improvementName != "IMPROVEMENT_FARM")
+			layOutImprovement(improvementName, improvement, pieces, fits, next, worked);
 		const int index = pieces.empty() ? -1 : int(m_snapshot.plotLayouts.size());
 		if (!pieces.empty())
 			m_snapshot.plotLayouts.push_back(std::move(pieces));
 		m_plotLayouts.emplace(key, index);
 		return index;
+	}
+
+	// An improvement other than the farm as CIV4PlotLSystem.xml lays it out. The plot root puts
+	// some goals straight on the plot (mine, quarry, pasture, windmill, fort:
+	// Leaf_LandImprovement_4x4; whaling boats: Leaf_Water_Improvement_4x4), with the era's art
+	// (no NIF in the goal: the art define's model). A cottage, hamlet, village and town are
+	// houses of the era and art style over iCropArea cells round a lot near the plot's middle
+	// (their goal, bPlace:0, has no model of its own). A plantation and a winery are their goal
+	// on a leaf near the middle, the goal's szExtra beside it and its crops round it. Nothing
+	// for an improvement the file has no goal for: its art define's model is drawn.
+	void MapCapture::layOutImprovement(const std::string& name, int improvement, std::vector<render::PlotPiece>& pieces,
+		const std::function<bool(const LAttributes&)>& fits, const std::function<uint32_t()>& next, bool worked)
+	{
+		const float improvementScale = defineOr("IMPROVEMENT_SCALE", 1);
+		const std::string goalName = "goal:" + name;
+		// (bImprovementWorkedOnly, bBonusWorkedOnly: worked or not)
+		const auto workedFits = [&](const LArtRef& r) {
+			for (const char* s : { "bImprovementWorkedOnly", "bBonusWorkedOnly" })
+				if (const std::string v = r.scalar(s); !v.empty() && (v == "1") != worked)
+					return false;
+			return true;
+		};
+		const auto artOf = [&](const std::string& node, auto&& also) -> const LArtRef* {
+			const auto it = m_plotNodes.find(node);
+			if (it == m_plotNodes.end())
+				return nullptr;
+			std::vector<const LArtRef*> found;
+			for (const LArtRef& r : it->second)
+				if (fits(r) && workedFits(r) && also(r))
+					found.push_back(&r);
+			return found.empty() ? nullptr : found[next() % found.size()];
+		};
+		const auto twistOf = [](const LArtRef& r) { return std::strtof(r.scalar("fTwist").c_str(), nullptr); };
+		// (Rotation: the art turned by one of these, in degrees)
+		const auto turnOf = [&](const LArtRef& r) {
+			const auto it = r.lists.find("Rotation");
+			return it == r.lists.end() || it->second.empty() ? 0.0f : std::strtof(it->second[next() % it->second.size()].c_str(), nullptr);
+		};
+		constexpr float kDegrees = std::numbers::pi_v<float> / 180;
+		// (fCenterCut: the trees round it go, in world units)
+		const auto centerCut = [](const LArtRef& r) {
+			const float plot = std::max(float(GC.getPLOT_SIZE()), 1.0f);
+			return std::strtof(r.scalar("fCenterCut").c_str(), nullptr) / plot;
+		};
+		const auto whole = [&](const LArtRef& goal) {
+			if (!goal.nif.empty())
+				return modelIndex(&goal, goal.nif.c_str(), goal.kfm.c_str(), goal.scale * improvementScale);
+			const CvArtInfoImprovement* art = GC.getImprovementInfo(static_cast<ImprovementTypes>(improvement)).getArtInfo();
+			return art ? modelIndex(art, art->getNIF(), art->getKFM(), art->getScale() * improvementScale) : -1;
+		};
+
+		// Straight from the root.
+		for (const LProduction& p : m_plotProductions)
+		{
+			if (p.from != "PLOT_ROOT" || !p.lists.contains("Improvement") || !fits(p))
+				continue;
+			for (const LProduction::To& to : p.to)
+			{
+				if (to.node.rfind("Leaf_", 0) != 0)
+					continue;
+				const LArtRef* goal = artOf(to.node, [&](const LArtRef& r) { return r.name == goalName; });
+				if (!goal)
+					continue;
+				render::PlotPiece& piece = pieces.emplace_back();
+				piece.model = whole(*goal);
+				piece.x = to.x / 12;
+				piece.y = to.y / 12;
+				// (a goal with an fTwist, the forts: turned by it and a quarter more, which puts
+				// the tower on the left corner and the gate front right, as the original draws
+				// them in every era)
+				piece.yaw = twistOf(*goal) + (to.rotate + turnOf(*goal) + goal->rotate + (goal->scalar("fTwist").empty() ? 0.0f : 90.0f)) * kDegrees;
+				piece.cut = centerCut(*goal);
+				return;
+			}
+		}
+
+		// Its goal on a leaf of the plot's 12x12 cells.
+		const LArtRef* goal = nullptr;
+		std::string goalNode;
+		for (const auto& [node, refs] : m_plotNodes)
+			if (node.rfind("BLeaf_", 0) == 0)
+				if (const LArtRef* g = artOf(node, [&](const LArtRef& r) { return r.name == goalName; }))
+				{
+					goal = g, goalNode = node;
+					break;
+				}
+		if (!goal)
+			return;
+		struct Leaf
+		{
+			std::string node;
+			float x = 0, y = 0, degrees = 0;
+		};
+		std::vector<Leaf> leaves;
+		const auto expand = [&](auto&& self, const std::string& node, float x, float y, float degrees, int depth) -> void {
+			if (node.rfind("BLeaf_", 0) == 0)
+			{
+				leaves.push_back({ node, x, y, degrees });
+				return;
+			}
+			if (depth > 8 || node.rfind("Node_", 0) != 0)
+				return;
+			std::vector<const LProduction*> found;
+			for (const LProduction& p : m_plotProductions)
+				if (p.from == node && fits(p) && p.scalar("bGoalOnly") != "1" && p.scalar("bExtraGoalOnly") != "1")
+					found.push_back(&p);
+			if (found.empty())
+				return;
+			const LProduction& p = *found[next() % found.size()];
+			const float rc = std::cos(degrees * kDegrees), rs = std::sin(degrees * kDegrees);
+			for (const LProduction::To& t : p.to)
+				self(self, t.node, x + t.x * rc - t.y * rs, y + t.x * rs + t.y * rc, degrees + t.rotate, depth + 1);
+		};
+		expand(expand, "Node_12x12", 0, 0, 0, 0);
+		const auto cells = [](const std::string& node) {
+			int w = 0, h = 0;
+			std::sscanf(node.c_str() + 6, "%dx%d", &w, &h);
+			return w * h;
+		};
+		// The goal's lot: a leaf of its size near the middle (none: the middle itself).
+		float gx = 0, gy = 0, gdeg = 0;
+		{
+			int chosen = -1;
+			float best = 1e9f;
+			for (size_t i = 0; i < leaves.size(); ++i)
+				if (leaves[i].node == goalNode)
+					if (const float d = std::hypot(leaves[i].x, leaves[i].y) + float(next() % 1000) / 1000 * 3; d < best)
+						best = d, chosen = int(i);
+			if (chosen >= 0)
+			{
+				std::tie(gx, gy, gdeg) = std::tuple{ leaves[size_t(chosen)].x, leaves[size_t(chosen)].y, leaves[size_t(chosen)].degrees };
+				if (goal->scalar("bPlace") == "0")
+					leaves.insert(leaves.begin(), leaves[size_t(chosen)]); // (its lot is the first of the houses')
+				leaves.erase(leaves.begin() + std::ptrdiff_t(chosen) + (goal->scalar("bPlace") == "0" ? 1 : 0));
+			}
+		}
+		const float twist = twistOf(*goal), c = std::cos(twist), sn = std::sin(twist);
+		const auto add = [&](const LArtRef& art, float x, float y, float degrees, const std::string& leaf) {
+			render::PlotPiece& piece = pieces.emplace_back();
+			// (bCutTrees: the trees on its leaf go)
+			if (art.scalar("bCutTrees") == "1" && leaf.size() > 6)
+			{
+				int w = 0, h = 0;
+				std::sscanf(leaf.c_str() + 6, "%dx%d", &w, &h);
+				piece.cut = std::hypot(float(w), float(h)) / 2 / 12;
+			}
+			piece.cut = std::max(piece.cut, centerCut(art));
+			piece.node = art.node;
+			piece.model = art.node.empty() ? whole(art) : modelIndex(&art, art.nif.c_str(), "", art.scale);
+			piece.standing = !art.node.empty();
+			piece.x = (x * c - y * sn) / 12;
+			piece.y = (x * sn + y * c) / 12;
+			piece.yaw = twist + (degrees + turnOf(art) + art.rotate) * kDegrees;
+		};
+		if (goal->scalar("bPlace") != "0")
+			add(*goal, gx, gy, gdeg, goalNode);
+		else if (const float cut = centerCut(*goal); cut > 0)
+		{
+			// (no model: only the clearing round its lot)
+			render::PlotPiece& piece = pieces.emplace_back();
+			piece.x = (gx * c - gy * sn) / 12;
+			piece.y = (gx * sn + gy * c) / 12;
+			piece.cut = cut;
+		}
+		// The rest by their distance from the goal, a little at random.
+		std::vector<std::pair<float, const Leaf*>> nearest;
+		for (const Leaf& l : leaves)
+			nearest.push_back({ std::hypot(l.x - gx, l.y - gy) + float(next() % 1000) / 1000 * 2.5f, &l });
+		std::ranges::stable_sort(nearest, {}, &std::pair<float, const Leaf*>::first);
+		std::vector<bool> used(nearest.size());
+		// Its extra buildings (szExtra), each on the nearest leaf that has that art.
+		for (const auto& [n, extra] : goal->scalars)
+			if (n == "szExtra")
+				for (size_t i = 0; i < nearest.size(); ++i)
+					if (!used[i])
+						if (const LArtRef* art = artOf(nearest[i].second->node, [&](const LArtRef& r) { return r.name == extra && !r.nif.empty(); }))
+						{
+							add(*art, nearest[i].second->x, nearest[i].second->y, nearest[i].second->degrees, nearest[i].second->node);
+							used[i] = true;
+							break;
+						}
+		// Houses or crops round it until they cover iCropArea cells.
+		const bool houses = goal->scalar("bPlace") == "0";
+		const int wanted = std::atoi(goal->scalar("iCropArea").c_str());
+		int area = 0;
+		for (size_t i = 0; i < nearest.size() && area < wanted; ++i)
+		{
+			if (used[i])
+				continue;
+			const Leaf& l = *nearest[i].second;
+			const LArtRef* art = artOf(l.node, [&](const LArtRef& r) {
+				return !r.nif.empty() && (houses ? r.name == "art:building" : r.name != goalName && r.scalar("bExtraGoalOnly") != "1" && r.lists.contains("Improvement"));
+			});
+			if (!art)
+				continue;
+			add(*art, l.x, l.y, l.degrees, l.node);
+			area += cells(l.node);
+		}
 	}
 
 	// The houses a city of this era and art style draws from, as the LSystem's attributes say.
