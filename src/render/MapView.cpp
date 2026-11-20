@@ -17,6 +17,7 @@
 #include <deque>
 #include <format>
 #include <functional>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <queue>
@@ -1940,6 +1941,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 						return &p;
 				return nullptr;
 			};
+			// (a piece stands on the ground, or at `at.z` where that is higher: the water's level 0)
+			constexpr float kOnGround = -std::numeric_limits<float>::infinity();
 			const auto add = [&](const FeatureArt& art, const FeatureArt::Piece& piece, Vec3 at, uint32_t h) {
 				if (piece.models.empty())
 					return;
@@ -1949,13 +1952,20 @@ float4 PSTerrain(PSIn i) : SV_Target
 					return;
 				if (LoadedModel* lm = model(nif, {}))
 				{
-					at.z = ground(at.x, at.y);
+					at.z = std::max(ground(at.x, at.y), at.z);
 					features.push_back(placeStatic(lm, placement(at, -float(rotation) * std::numbers::pi_v<float> / 2, art.scale)));
 				}
 			};
 
 			// Trees and ice tile by plot corners: each corner takes the piece for the plots
-			// around it that have the feature.
+			// around it that have the feature. (The original grows no trees on water: a forest
+			// or jungle on a water plot isn't drawn, while ice, fallout and the others are.)
+			const auto shownFeature = [&](const PlotView* p) {
+				if (!p)
+					return -1;
+				const FeatureArt* art = featureArt(p->feature);
+				return art && art->tiling == FeatureArt::Tiling::Trees && p->water ? -1 : p->feature;
+			};
 			const int cornersX = map.wrapX ? W : W + 1, cornersY = map.wrapY ? H : H + 1;
 			for (int cy = 0; cy < cornersY; ++cy)
 				for (int cx = 0; cx < cornersX; ++cx)
@@ -1965,7 +1975,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 					int done[4] = { -1, -1, -1, -1 };
 					for (int k = 0; k < 4; ++k)
 					{
-						const int f = around[k] ? around[k]->feature : -1;
+						const int f = shownFeature(around[k]);
 						const FeatureArt* art = featureArt(f);
 						if (!art || (art->tiling != FeatureArt::Tiling::Trees && art->tiling != FeatureArt::Tiling::HalfTiling) ||
 							std::find(std::begin(done), std::end(done), f) != std::end(done))
@@ -1973,13 +1983,13 @@ float4 PSTerrain(PSIn i) : SV_Target
 						done[k] = f;
 						int mask = 0;
 						for (int j = 0; j < 4; ++j)
-							if (around[j] && around[j]->feature == f)
+							if (shownFeature(around[j]) == f)
 								mask |= bits[j];
 						if (art->varieties.empty())
 							continue;
 						const size_t variety = std::min<size_t>(around[k]->featureVariety, art->varieties.size() - 1);
 						if (const auto* piece = findPiece(art->varieties[variety], mask))
-							add(*art, *piece, { float(cx) * S(), float(cy) * S(), 0 }, hash(cx, cy, f));
+							add(*art, *piece, { float(cx) * S(), float(cy) * S(), kOnGround }, hash(cx, cy, f));
 					}
 				}
 			// The others stand in their plot.
@@ -1994,8 +2004,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 					const auto* piece = findPiece(pieces, 0);
 					if (!piece && !pieces.empty())
 						piece = &pieces.front();
+					// (on a water plot it stands on the water, at the level of the original's plot point
+					// there: an oasis's pool and sand over the sea, not under it on the sea floor)
 					if (piece)
-						add(*art, *piece, { (float(x) + 0.5f) * S(), (float(y) + 0.5f) * S(), 0 }, hash(x, y, p.feature));
+						add(*art, *piece, { (float(x) + 0.5f) * S(), (float(y) + 0.5f) * S(), p.water ? 0.0f : kOnGround }, hash(x, y, p.feature));
 				}
 		}
 
