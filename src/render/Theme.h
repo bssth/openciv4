@@ -99,6 +99,10 @@ namespace oc4::render
 		bool loaded() const;
 		// The folder whose Resource it came from.
 		std::filesystem::path file() const;
+		// The folders the game keeps its fonts in (it ships Sylfaen, which macOS lacks): each
+		// layer's Resource/Civ4 and Resource/Fonts and Assets/res/Fonts, then the Windows/Fonts of
+		// the Wine prefix the game is installed in, if it is. (Known once load has been called.)
+		std::vector<std::filesystem::path> fontFolders() const;
 		// Problems met while reading (unknown syntax, missing pictures), once each.
 		const std::vector<std::string>& problems() const;
 

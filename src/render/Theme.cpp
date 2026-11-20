@@ -847,6 +847,36 @@ namespace oc4::render
 
 	std::filesystem::path Theme::file() const { return m->base; }
 
+	std::vector<fs::path> Theme::fontFolders() const
+	{
+		std::vector<fs::path> out;
+		std::error_code ec;
+		const auto add = [&](const fs::path& p) {
+			if (fs::is_directory(p, ec) && std::ranges::find(out, p) == out.end())
+				out.push_back(p);
+		};
+		for (const fs::path& layer : m->roots) // (each layer's Assets folder's parent)
+		{
+			add(layer / "Resource" / "Civ4");
+			add(layer / "Resource" / "Fonts");
+			add(layer / "Assets" / "res" / "Fonts");
+		}
+		// A Wine prefix: .../drive_c/Program Files/... holds the Windows fonts the original had.
+		for (const fs::path& layer : m->roots)
+			for (fs::path p = layer; p.has_relative_path() && p != p.parent_path(); p = p.parent_path())
+				if (lower(utf8Path(p.filename())) == "drive_c")
+				{
+					for (const char* fonts : { "windows/Fonts", "Windows/Fonts", "windows/fonts" }) // (the first there: one folder)
+						if (fs::is_directory(p / fonts, ec))
+						{
+							add(p / fonts);
+							break;
+						}
+					break;
+				}
+		return out;
+	}
+
 	bool Theme::loaded() const { return m->loaded; }
 	const std::vector<std::string>& Theme::problems() const { return m->problems; }
 

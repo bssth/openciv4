@@ -402,6 +402,12 @@ target_link_libraries(theme_combine_test PRIVATE oc4_options oc4_render)
 add_test(NAME theme_combine COMMAND theme_combine_test)
 set_target_properties(theme_combine_test PROPERTIES FOLDER "tests")
 
+add_executable(game_fonts_test tests/game_fonts_test.cpp)
+target_include_directories(game_fonts_test PRIVATE src)
+target_link_libraries(game_fonts_test PRIVATE oc4_options oc4_render)
+add_test(NAME game_fonts COMMAND game_fonts_test)
+set_target_properties(game_fonts_test PROPERTIES FOLDER "tests")
+
 if(WIN32 AND TARGET freetype)
 	add_executable(text_layout_freetype_test tests/text_layout_test.cpp src/render/TextLayout.cpp src/render/FontFreeType.cpp)
 	target_include_directories(text_layout_freetype_test PRIVATE src)

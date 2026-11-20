@@ -83,6 +83,8 @@ namespace oc4::render
 		void resetShadow() { setShadow({ 0, 0, 0 }, 0.8f); }
 		// The face for all text, and the pixel sizes of the markup's <font=0..4> (the theme's).
 		void setFonts(std::wstring family, const std::array<float, 5>& sizes);
+		// Folders whose fonts count as installed (the game's own, Wine's): Fonts::addFolders.
+		void addFontFolders(const std::vector<std::filesystem::path>& folders);
 
 		// Drawing only inside the rectangle until unclip.
 		void clip(float x0, float y0, float x1, float y1);

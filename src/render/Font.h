@@ -5,6 +5,7 @@
 // FreeType elsewhere (FontFreeType.cpp).
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
@@ -20,7 +21,13 @@ namespace oc4::render
 		Fonts(const Fonts&) = delete;
 		Fonts& operator=(const Fonts&) = delete;
 
-		// A face of the family (or a default one when it is missing); faces are numbered from 0.
+		// More folders whose fonts count as installed: the game's own (it ships Sylfaen in
+		// Resource/Civ4), a Wine prefix's Windows/Fonts. Families asked for before and missing
+		// are looked for again.
+		void addFolders(const std::vector<std::filesystem::path>& folders);
+
+		// A face of the family (or a stand-in when it is missing: a serif one for a serif family);
+		// faces are numbered from 0.
 		int face(const std::wstring& family, bool bold, bool italic);
 
 		// In ems (times the size in pixels).

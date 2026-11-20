@@ -91,8 +91,11 @@ namespace oc4::render
 			overlay = std::make_unique<Overlay>(*renderer);
 			updateUiScale();
 			overlay->setArt(&art);
-			// The game's interface theme: the screens' and the popups' look, the text's face.
-			if (theme.load(assets.layerRoots()))
+			// The game's interface theme: the screens' and the popups' look, the text's face (the
+			// game's own Sylfaen, from its folders or Wine's, where the system lacks it).
+			const bool themed = theme.load(assets.layerRoots());
+			overlay->addFontFolders(theme.fontFolders());
+			if (themed)
 			{
 				std::array<float, 5> sizes{};
 				for (int i = 0; i < 5; ++i)

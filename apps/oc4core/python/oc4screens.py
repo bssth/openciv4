@@ -915,14 +915,17 @@ class CyGInterfaceScreen(object):
 		w = self._s.add(szName, 'text', szAttachTo, 'flow')
 		w.text, w.font, w.wt, w.d1, w.d2 = _text(text), _int(eFont, 1), _int(eType), _int(iData1), _int(iData2)
 
+	# A multiline text is in the theme's normal font (Civ4Theme_Common.thm's .Normal: size 3, Sylfaen
+	# 16), as a setText is; font 3 (the menus') draws and measures it so. Dawn of Man's body, for one,
+	# is 16 px in the original.
 	def addMultilineText(self, szName, szText, iX, iY, iWidth, iHeight, eType=-1, iData1=-1, iData2=-1, iJustify=_FONT_LEFT):
 		w = self._s.add(szName, 'multiline')
 		w.text, w.x, w.y, w.w, w.h = _text(szText), int(iX), int(iY), int(iWidth), int(iHeight)
-		w.wt, w.d1, w.d2, w.flags = _int(eType), _int(iData1), _int(iData2), _int(iJustify, _FONT_LEFT)
+		w.wt, w.d1, w.d2, w.flags, w.font = _int(eType), _int(iData1), _int(iData2), _int(iJustify, _FONT_LEFT), 3
 
 	def attachMultilineText(self, szAttachTo, szName, szText, eType=-1, iData1=-1, iData2=-1, iJustify=_FONT_LEFT):
 		w = self._s.add(szName, 'multiline', szAttachTo, 'flow')
-		w.text, w.wt, w.d1, w.d2, w.flags = _text(szText), _int(eType), _int(iData1), _int(iData2), _int(iJustify, _FONT_LEFT)
+		w.text, w.wt, w.d1, w.d2, w.flags, w.font = _text(szText), _int(eType), _int(iData1), _int(iData2), _int(iJustify, _FONT_LEFT), 3
 
 	# The engine's own: the end of turn message ("EndTurnText") and the end turn button
 	# ("EndTurnButton", its state "Red" or "Green").
