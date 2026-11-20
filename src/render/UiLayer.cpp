@@ -420,6 +420,16 @@ namespace oc4::render
 			case Kind::ImageButton:
 				if (icon(it.texture, x0, y0, x1, y1, alpha))
 				{
+					// (a pulsing button: what the unit is recommended to do; the original's has a blue rim
+					// that glows round it, a little brighter and dimmer a second a beat, the picture tinted blue)
+					if (it.pulse)
+					{
+						const float beat = 0.5f - 0.5f * std::cos(float(clock) * 2 * std::numbers::pi_v<float>);
+						constexpr Color kGlow{ 0.2f, 0.55f, 1.0f };
+						o.rect(x0, y0, x1, y1, kGlow, 0.18f * alpha, 3);
+						o.frame(x0 - 2, y0 - 2, x1 + 2, y1 + 2, kGlow, (0.25f + 0.15f * beat) * alpha, 5, 3);
+						o.frame(x0, y0, x1, y1, { 0.45f, 0.75f, 1.0f }, (0.75f + 0.25f * beat) * alpha, 3, 2);
+					}
 					if (hot)
 						o.frame(x0, y0, x1, y1, kHot, 1, 3, 2);
 				}

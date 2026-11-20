@@ -38,6 +38,9 @@
 // --screenshot and --view-seconds that game is played offscreen. OC4_PLAY_LOG=1 prints the
 // popups as they come, the actions the keys run and the widgets clicked; OC4_UI_DUMP=<file>
 // writes the interface's widgets there when they change.
+// In --keys, "?<x,y>" also moves the mouse to that pixel of the window, "/<x,y>" presses the
+// right button there and holds it, "\<x,y>" lets it go there (a drag, as the mouse's), and "%x"
+// types Esc into the window (where '~' is the game's Esc).
 //
 // --menu (and no options at all) opens the window on a temporary main menu: a new game, with
 // the leader, map script, world and difficulty to choose, or a saved one, played as with
@@ -388,6 +391,7 @@ namespace
 		case 'e': return render::key::Return;
 		case 't': return render::key::Tab;
 		case 'b': return render::key::Back;
+		case 'x': return render::key::Escape; // (into the window: what holds the right button sees it first)
 		default: return 0;
 		}
 	}
@@ -1168,6 +1172,17 @@ namespace
 					click.right = script.front() == '(';
 					clicks.push_back(click);
 					script.erase(0, close + 1);
+				}
+				else if (int px = 0, py = 0; (script.front() == '?' || script.front() == '/' || script.front() == '\\') && script.size() > 1 && script[1] == '<' &&
+					script.find('>') != std::string::npos && std::sscanf(script.c_str() + 2, "%d,%d", &px, &py) == 2)
+				{
+					// "?<x,y>": the mouse moved to that pixel; "/<x,y>" the right button pressed there and
+					// held, "\<x,y>" let go there (a drag, as the mouse's).
+					if (script.front() == '?')
+						window.mouseMove(px, py);
+					else
+						window.mouseButton(px, py, false, script.front() == '/');
+					script.erase(0, script.find('>') + 1);
 				}
 				else if (int px = 0, py = 0; script.front() == '<' && script.find('>') != std::string::npos && std::sscanf(script.c_str() + 1, "%d,%d", &px, &py) == 2)
 				{

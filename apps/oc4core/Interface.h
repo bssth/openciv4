@@ -224,7 +224,12 @@ namespace oc4::host
 		CvPlot* getLookAtPlot() override { return nullptr; }
 		CvPlot* getGotoPlot() override { return m_gotoPlot; }
 		// Where the right button held would send the selection (the game core's plot help then gives the odds of an attack there).
-		void setGotoPlot(CvPlot* plot) { m_gotoPlot = plot; }
+		// (the action buttons again: the main interface's recommend what to do there, CvUnit::isActionRecommended)
+		void setGotoPlot(CvPlot* plot)
+		{
+			if (std::exchange(m_gotoPlot, plot) != plot)
+				m_dirty[SelectionButtons_DIRTY_BIT] = true;
+		}
 
 		// The end of the player's turn as CvGame::updateTestEndTurn works it out with the
 		// interface: when no unit waits for orders, it raises the "press Enter" message or, after

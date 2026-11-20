@@ -216,6 +216,7 @@ namespace oc4::render
 			int font = 1;       // FontTypes
 			int flags = 1;      // 1 left, 2 right, 4 centred (x0 is the anchor)
 			bool state = false, enabled = true;
+			bool pulse = false; // (a button that glows on and off: the action recommended, GFC's multi list pulse)
 			bool interactive = false; // takes clicks and has help
 			bool mainInterface = false; // the main interface's: under a menu the keys do not reach it
 			bool blocks = false;      // a screen's own panel or picture over the main interface: what is under it takes no clicks
@@ -362,6 +363,9 @@ namespace oc4::render
 		// A left click at that pixel as the mouse makes it (scripted tests): on a popup, the
 		// screens, the action bar or the map, whichever takes it there.
 		void mouseClick(int x, int y);
+		// The mouse moved to that pixel; a button pressed or let go there (a scripted game's drags).
+		void mouseMove(int x, int y);
+		void mouseButton(int x, int y, bool left, bool down);
 		// The mouse's cursor over the window: a cursor file (.cur, .ani: the game's res/Cursors);
 		// none, the system's arrow.
 		void setCursorFile(const std::filesystem::path& file);
