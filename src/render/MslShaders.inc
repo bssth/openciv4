@@ -63,99 +63,104 @@ struct VSMain_in
 vertex VSMain_out VSMain(VSMain_in in [[stage_in]], constant Frame& _46 [[buffer(0)]], constant Object& _229 [[buffer(1)]], constant Bones& _267 [[buffer(2)]], texture2d<float> groundHeights [[texture(0)]], sampler groundSampler [[sampler(0)]])
 {
     VSMain_out out = {};
-    float3 _494;
-    float3 _914;
+    float3 _517;
+    float3 _959;
     if ((_229.flags & 128u) != 0u)
     {
-        _494 = float3(0.0);
-        uint _533 = in.i_boneIdx.x * 3u;
-        float4 _669 = float4(in.i_pos, 1.0);
-        _494 += (float3(dot(_267.bones[_533], _669), dot(_267.bones[_533 + 1u], _669), dot(_267.bones[_533 + 2u], _669)) * in.i_boneW.x);
-        uint _931 = in.i_boneIdx.y * 3u;
-        float4 _945 = float4(in.i_pos, 1.0);
-        _494 += (float3(dot(_267.bones[_931], _945), dot(_267.bones[_931 + 1u], _945), dot(_267.bones[_931 + 2u], _945)) * in.i_boneW.y);
-        uint _982 = in.i_boneIdx.z * 3u;
-        float4 _996 = float4(in.i_pos, 1.0);
-        _494 += (float3(dot(_267.bones[_982], _996), dot(_267.bones[_982 + 1u], _996), dot(_267.bones[_982 + 2u], _996)) * in.i_boneW.z);
-        uint _1033 = in.i_boneIdx.w * 3u;
-        float4 _1047 = float4(in.i_pos, 1.0);
-        _494 += (float3(dot(_267.bones[_1033], _1047), dot(_267.bones[_1033 + 1u], _1047), dot(_267.bones[_1033 + 2u], _1047)) * in.i_boneW.w);
-        _914 = (((float3(dot(_267.bones[_533].xyz, in.i_nrm), dot(_267.bones[_533 + 1u].xyz, in.i_nrm), dot(_267.bones[_533 + 2u].xyz, in.i_nrm)) * in.i_boneW.x) + (float3(dot(_267.bones[_931].xyz, in.i_nrm), dot(_267.bones[_931 + 1u].xyz, in.i_nrm), dot(_267.bones[_931 + 2u].xyz, in.i_nrm)) * in.i_boneW.y)) + (float3(dot(_267.bones[_982].xyz, in.i_nrm), dot(_267.bones[_982 + 1u].xyz, in.i_nrm), dot(_267.bones[_982 + 2u].xyz, in.i_nrm)) * in.i_boneW.z)) + (float3(dot(_267.bones[_1033].xyz, in.i_nrm), dot(_267.bones[_1033 + 1u].xyz, in.i_nrm), dot(_267.bones[_1033 + 2u].xyz, in.i_nrm)) * in.i_boneW.w);
+        _517 = float3(0.0);
+        uint _557 = in.i_boneIdx.x * 3u;
+        float4 _713 = float4(in.i_pos, 1.0);
+        _517 += (float3(dot(_267.bones[_557], _713), dot(_267.bones[_557 + 1u], _713), dot(_267.bones[_557 + 2u], _713)) * in.i_boneW.x);
+        uint _976 = in.i_boneIdx.y * 3u;
+        float4 _990 = float4(in.i_pos, 1.0);
+        _517 += (float3(dot(_267.bones[_976], _990), dot(_267.bones[_976 + 1u], _990), dot(_267.bones[_976 + 2u], _990)) * in.i_boneW.y);
+        uint _1027 = in.i_boneIdx.z * 3u;
+        float4 _1041 = float4(in.i_pos, 1.0);
+        _517 += (float3(dot(_267.bones[_1027], _1041), dot(_267.bones[_1027 + 1u], _1041), dot(_267.bones[_1027 + 2u], _1041)) * in.i_boneW.z);
+        uint _1078 = in.i_boneIdx.w * 3u;
+        float4 _1092 = float4(in.i_pos, 1.0);
+        _517 += (float3(dot(_267.bones[_1078], _1092), dot(_267.bones[_1078 + 1u], _1092), dot(_267.bones[_1078 + 2u], _1092)) * in.i_boneW.w);
+        _959 = (((float3(dot(_267.bones[_557].xyz, in.i_nrm), dot(_267.bones[_557 + 1u].xyz, in.i_nrm), dot(_267.bones[_557 + 2u].xyz, in.i_nrm)) * in.i_boneW.x) + (float3(dot(_267.bones[_976].xyz, in.i_nrm), dot(_267.bones[_976 + 1u].xyz, in.i_nrm), dot(_267.bones[_976 + 2u].xyz, in.i_nrm)) * in.i_boneW.y)) + (float3(dot(_267.bones[_1027].xyz, in.i_nrm), dot(_267.bones[_1027 + 1u].xyz, in.i_nrm), dot(_267.bones[_1027 + 2u].xyz, in.i_nrm)) * in.i_boneW.z)) + (float3(dot(_267.bones[_1078].xyz, in.i_nrm), dot(_267.bones[_1078 + 1u].xyz, in.i_nrm), dot(_267.bones[_1078 + 2u].xyz, in.i_nrm)) * in.i_boneW.w);
     }
     else
     {
-        float4 _702 = float4(in.i_pos, 1.0);
-        _494 = float3(dot(_229.world[0], _702), dot(_229.world[1], _702), dot(_229.world[2], _702));
-        _914 = float3(dot(_229.world[0].xyz, in.i_nrm), dot(_229.world[1].xyz, in.i_nrm), dot(_229.world[2].xyz, in.i_nrm));
+        float4 _746 = float4(in.i_pos, 1.0);
+        _517 = float3(dot(_229.world[0], _746), dot(_229.world[1], _746), dot(_229.world[2], _746));
+        _959 = float3(dot(_229.world[0].xyz, in.i_nrm), dot(_229.world[1].xyz, in.i_nrm), dot(_229.world[2].xyz, in.i_nrm));
     }
     if ((_229.flags & 256u) != 0u)
     {
-        float2 _514 = _494.xy;
-        float _910;
+        float2 _537 = _517.xy;
+        float _954;
         do
         {
             if (_46.groundGrid.y <= 0.0)
             {
-                _910 = 0.0;
+                _954 = 0.0;
                 break;
             }
             if (_46.groundGrid.w > 0.0)
             {
-                _514.x -= (floor(_514.x / _46.groundGrid.w) * _46.groundGrid.w);
+                _537.x -= (floor(_537.x / _46.groundGrid.w) * _46.groundGrid.w);
             }
-            _910 = groundHeights.sample(groundSampler, (((_514 * _46.groundGrid.x) + float2(0.5)) / _46.groundGrid.yz), level(0.0)).x;
+            _954 = groundHeights.sample(groundSampler, (((_537 * _46.groundGrid.x) + float2(0.5)) / _46.groundGrid.yz), level(0.0)).x;
             break;
         } while(false);
-        _494.z += _910;
+        _517.z += _954;
     }
-    float3 _611 = _494;
-    float3 _516 = _611;
-    float3 _911;
+    float3 _635 = _517;
+    float3 _539 = _635;
+    float3 _955;
     do
     {
         if (_46.globe.z <= 0.0)
         {
-            _911 = _611;
+            _955 = _635;
             break;
         }
-        float2 _775 = _611.xy - _46.globe.xy;
+        float2 _819 = _635.xy - _46.globe.xy;
         if (_46.globe.w > 0.0)
         {
-            _775.x -= (_46.globe.w * rint(_775.x / _46.globe.w));
+            _819.x -= (_46.globe.w * rint(_819.x / _46.globe.w));
         }
-        float _814 = length(_775);
-        float _819 = fast::min(_814 / _46.globe.z, 3.141590118408203125);
-        float _832 = _46.globe.z + _516.z;
-        _911 = float3(_46.globe.xy + ((select(float2(0.0), _775 / float2(_814), bool2(_814 > 9.9999997473787516355514526367188e-05)) * _832) * sin(_819)), (_832 * cos(_819)) - _46.globe.z);
+        float _858 = length(_819);
+        float _863 = fast::min(_858 / _46.globe.z, 3.141590118408203125);
+        float _876 = _46.globe.z + _539.z;
+        _955 = float3(_46.globe.xy + ((select(float2(0.0), _819 / float2(_858), bool2(_858 > 9.9999997473787516355514526367188e-05)) * _876) * sin(_863)), (_876 * cos(_863)) - _46.globe.z);
         break;
     } while(false);
-    _494 = _911;
-    float4 _623 = float4(_911, 1.0) * _46.viewProj;
-    float4 _919;
+    _517 = _955;
+    float3 _643 = float3(_46.eyePos) - _955;
+    if (((_229.flags & 256u) != 0u) && (dot(_643, _643) > 1.0))
+    {
+        _517 += (fast::normalize(_643) * 6.0);
+    }
+    float4 _667 = float4(_517, 1.0) * _46.viewProj;
+    float4 _964;
     if (_229.treesCut != 0u)
     {
-        uint _643 = uint(rint(in.i_col.x * 255.0));
-        float4 _920;
-        if (((_643 >= 1u) && (_643 <= 32u)) && (((_229.treesCut >> (_643 - 1u)) & 1u) != 0u))
+        uint _687 = uint(rint(in.i_col.x * 255.0));
+        float4 _965;
+        if (((_687 >= 1u) && (_687 <= 32u)) && (((_229.treesCut >> (_687 - 1u)) & 1u) != 0u))
         {
-            _920 = float4(0.0, 0.0, -1.0, 1.0);
+            _965 = float4(0.0, 0.0, -1.0, 1.0);
         }
         else
         {
-            _920 = _623;
+            _965 = _667;
         }
-        _919 = _920;
+        _964 = _965;
     }
     else
     {
-        _919 = _623;
+        _964 = _667;
     }
-    out.gl_Position = _919;
-    out._entryPointOutput_nrm = _914;
+    out.gl_Position = _964;
+    out._entryPointOutput_nrm = _959;
     out._entryPointOutput_uv = in.i_uv;
     out._entryPointOutput_col = in.i_col;
-    out._entryPointOutput_world = _911;
-    out._entryPointOutput_flat = _611.xy;
+    out._entryPointOutput_world = _517;
+    out._entryPointOutput_flat = _635.xy;
     return out;
 }
 

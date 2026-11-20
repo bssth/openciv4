@@ -277,6 +277,11 @@ namespace oc4::host
 				s.greatWallSegment = a;
 			else if (a.type == "ART_GREAT_WALL_POST")
 				s.greatWallPost = a;
+			else if (a.type == "ROUTE_BRIDGE")
+				s.routeBridge = a;
+			else if (a.type == "RAILROAD_BRIDGE")
+				s.railroadBridge = a;
+		s.railroadRoute = GC.getInfoTypeForString("ROUTE_RAILROAD", true);
 	}
 
 	void MapCapture::loadArtList(std::vector<render::MapSnapshot::Attachable>& out, const char* file, const char* element)

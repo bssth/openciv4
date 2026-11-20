@@ -254,6 +254,10 @@ namespace oc4::render
 		};
 		std::vector<WallEdge> greatWall;
 		Attachable greatWallSegment, greatWallPost;
+		// Bridges where a route crosses a river between two plots (ROUTE_BRIDGE; RAILROAD_BRIDGE
+		// where both have railroads, route type railroadRoute).
+		Attachable routeBridge, railroadBridge;
+		int railroadRoute = -1;
 		// The effects (CIV4EffectInfos) the figures' animations set off by type ("Effect:<node>:<type>").
 		std::vector<Attachable> effects;
 		// The city layout: generic houses, the sets of them per era and art style (indices into

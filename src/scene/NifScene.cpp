@@ -382,6 +382,7 @@ namespace oc4::scene
 					m.baseSlot = baseSlot;
 					m.baseUv = toUv(baseDesc);
 					m.baseClamp = static_cast<TexClamp>(std::min<uint32_t>(baseDesc.clampMode, 3));
+					m.baseFilter = baseDesc.filterMode;
 					if (const auto* src = m_file.get<NiSourceTexture>(baseDesc.source); src && named(*src))
 					{
 						m.baseTexture = src->fileName;

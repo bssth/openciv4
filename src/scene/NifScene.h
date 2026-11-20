@@ -78,6 +78,9 @@ namespace oc4::scene
 		size_t baseSlot = 0;     // TexSlot the base texture came from (mech units: detail)
 		UvTransform baseUv;
 		TexClamp baseClamp = TexClamp::WrapWrap;
+		// The base map's NiTexturingProperty filter mode: 2 trilinear, 6 anisotropic (Gamebryo's
+		// TexFilterMode).
+		uint32_t baseFilter = 2;
 		// Civ4 units put a "TeamColor" placeholder in the base slot and the real
 		// texture in decal 0; the decal's alpha reveals the player colour. Mech
 		// units put a damage atlas there instead, windowed by animated UVs.

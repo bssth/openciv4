@@ -295,7 +295,8 @@ float3 globeBend(float3 p)
 			uint32_t bytes);
 		void upload(SDL_GPUBuffer* buffer, uint32_t offset, const void* data, uint32_t bytes);
 		void drawMesh(const GpuModel::Mesh& mesh, const scene::Material& material, std::span<const Affine> world, Vec3 teamColor, bool onGround);
-		void bindModelTextures(const GpuImage* base, const GpuImage* decal, const scene::Material& m, const GpuImage* const* leader);
+		void bindModelTextures(const GpuImage* base, const GpuImage* decal, const scene::Material& m, const GpuImage* const* leader,
+			bool onGround = false);
 		SDL_GPUSampler* sampler(int clamp) const { return m_samplers[clamp]; }
 
 		SDL_Window* m_window = nullptr;
@@ -318,6 +319,7 @@ float3 globeBend(float3 p)
 		SDL_GPUShader* m_overlayPs = nullptr;
 		std::map<PipelineKey, SDL_GPUGraphicsPipeline*> m_pipelines;
 		SDL_GPUSampler* m_samplers[4]{}; // by scene::TexClamp
+		SDL_GPUSampler* m_trilinearSamplers[4]{}; // the same without anisotropy
 		SDL_GPUSampler* m_linearClamp = nullptr;
 		std::shared_ptr<GpuImage> m_white, m_noHeights, m_noPlots;
 		const GpuImage* m_ground = nullptr;

@@ -488,6 +488,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			Vec3 anchor, offset;
 			float yaw = 0, scale = 1;
 			bool onGround = false; // heights over the terrain (roads)
+			bool route = false;    // a road or railroad piece: trees beside it go (cutTrees)
 			int plot = -1;         // the plot it belongs to (fog of war)
 			uint64_t unit = 0;     // a unit's figure: owner and id
 			const anim::Sequence* sequence = nullptr; // animated: what it plays (none: its idle)
@@ -513,6 +514,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 
 		Renderer& renderer;
 		const AssetResolver& assets;
+		std::unordered_map<std::string, std::vector<std::string>> routeVariants; // routeFiles: by the XML's file
 		MapSnapshot map;
 		bool hasMap = false;
 		uint64_t artGeneration = ~0ull;
@@ -2091,7 +2093,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 
 		// A piece laid on the terrain (roads, rivers): heights over it, a little above it
 		// against z-fighting; turned clockwise.
-		void addOnGround(const std::string& nif, Vec3 at, int degrees, float lift)
+		void addOnGround(const std::string& nif, Vec3 at, int degrees, float lift, bool route = false)
 		{
 			LoadedModel* lm = model(nif, {});
 			if (!lm)
@@ -2105,6 +2107,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			inst.center = { at.x, at.y, ground(at.x, at.y) };
 			inst.radius = lm->bounds.radius() + 0.2f * S();
 			inst.onGround = true;
+			inst.route = route;
 			decor.push_back(std::move(inst));
 		}
 
@@ -2172,6 +2175,28 @@ float4 PSTerrain(PSIn i) : SV_Target
 				}
 		}
 
+		// The files of a route piece the XML names. Most of the original's road pieces exist only as
+		// variants: no RoadB03.nif, but RoadB03-000.nif to RoadB03-003.nif (the "a" to "d" of the
+		// artists' road key, art/terrain/routes/roadkeypage*.jpg), and the game draws one of them.
+		// Empty when there is none that loads (some files the XML lists do not exist, in the
+		// original either).
+		const std::vector<std::string>& routeFiles(const std::string& nif)
+		{
+			const auto [it, added] = routeVariants.try_emplace(nif);
+			if (!added)
+				return it->second;
+			const auto loads = [&](const std::string& file) { return assets.locate(makeAssetKey(file)) && model(file, {}); };
+			if (loads(nif))
+				it->second.push_back(nif);
+			else if (nif.size() > 4 && toLowerAscii(nif.substr(nif.size() - 4)) == ".nif")
+				for (int i = 0; i < 100; ++i)
+					if (const std::string file = std::format("{}-{:03}.nif", nif.substr(0, nif.size() - 4), i); loads(file))
+						it->second.push_back(file);
+					else
+						break;
+			return it->second;
+		}
+
 		// Route pieces: the one whose connections, turned, are the neighbours with routes;
 		// else one piece per neighbour.
 		void addRoute(int x, int y, const PlotView& p)
@@ -2182,13 +2207,16 @@ float4 PSTerrain(PSIn i) : SV_Target
 				if (const PlotView* q = map.plot(x + kDx[d], y + kDy[d]); q && q->route >= 0)
 					mask |= 1 << d;
 			const Vec3 center{ (float(x) + 0.5f) * S(), (float(y) + 0.5f) * S(), 0 };
-			const auto place = [&](const RouteArt& r, int degrees) { addOnGround(r.nif, center, degrees, 0.6f); };
+			// (one of the piece's variants, the same for the plot each time the decor is built)
+			const auto place = [&](const RouteArt& r, int degrees) {
+				const auto& files = routeFiles(r.nif);
+				addOnGround(files[hash(x, y, 41) % files.size()], center, degrees, 0.6f, true);
+			};
 			const auto find = [&](int wanted) -> std::pair<const RouteArt*, int> {
 				for (const RouteArt& r : map.routes)
 					if (r.route == p.route)
 						for (const int degrees : r.rotations.empty() ? std::vector<int>{ 0 } : r.rotations)
-							// (some files the XML lists do not exist, in the original either)
-							if (turned(r.connections, degrees) == wanted && assets.locate(makeAssetKey(r.nif)) && model(r.nif, {}))
+							if (turned(r.connections, degrees) == wanted && !routeFiles(r.nif).empty())
 								return { &r, degrees };
 				return { nullptr, 0 };
 			};
@@ -2201,6 +2229,33 @@ float4 PSTerrain(PSIn i) : SV_Target
 				if (mask & (1 << d))
 					if (const auto [r, degrees] = find(1 << d); r)
 						place(*r, degrees);
+		}
+
+		// Bridges: where a road crosses a river between two plots side by side (not corner to
+		// corner), across the middle of the edge, along the road; a railroad bridge between two
+		// railroads. On the higher of the banks: the river's bed is lower.
+		void addBridges()
+		{
+			const auto bridge = [&](const PlotView& a, const PlotView& b, Vec3 at, float yaw) {
+				const auto& art = a.route == map.railroadRoute && b.route == map.railroadRoute && !map.railroadBridge.nif.empty() ? map.railroadBridge : map.routeBridge;
+				LoadedModel* lm = art.nif.empty() ? nullptr : model(art.nif, "");
+				if (!lm)
+					return;
+				at.z = std::max(ground(at.x, at.y), 0.5f * (ground(at.x - S() / 2 * std::cos(yaw), at.y - S() / 2 * std::sin(yaw)) +
+					ground(at.x + S() / 2 * std::cos(yaw), at.y + S() / 2 * std::sin(yaw))));
+				decor.push_back(placeStatic(lm, placement(at, yaw, art.scale > 0 ? art.scale : 1)));
+			};
+			for (int y = 0; y < map.height; ++y)
+				for (int x = 0; x < map.width; ++x)
+				{
+					const PlotView& p = map.plots[size_t(x) + size_t(y) * size_t(map.width)];
+					if (p.route < 0)
+						continue;
+					if (const PlotView* east = map.plot(x + 1, y); east && east->route >= 0 && p.riverEast)
+						bridge(p, *east, { float(x + 1) * S(), (float(y) + 0.5f) * S(), 0 }, 0);
+					if (const PlotView* south = map.plot(x, y - 1); south && south->route >= 0 && p.riverSouth)
+						bridge(p, *south, { (float(x) + 0.5f) * S(), float(y) * S(), 0 }, std::numbers::pi_v<float> / 2);
+				}
 		}
 
 		void buildDecor()
@@ -2221,11 +2276,14 @@ float4 PSTerrain(PSIn i) : SV_Target
 					if (p.bonus >= 0 && size_t(p.bonus) < map.bonuses.size())
 						addDecor(map.bonuses[size_t(p.bonus)], center, 0, hash(x, y, 8), p.bonusState, !p.water);
 				}
+			addBridges();
 			buildRiverMask();
 		}
 
 		// Trees inside the tree cut spheres of the improvements, resources, roads and rivers go:
 		// a tree that is a node of its own, or one of a forest piece's trees (DrawItem::trees).
+		static constexpr float kRouteTreeCut = 0.12f;
+
 		void cutTrees()
 		{
 			std::unordered_map<int, std::vector<std::pair<Vec3, float>>> cuts; // by plot
@@ -2245,6 +2303,16 @@ float4 PSTerrain(PSIn i) : SV_Target
 				}
 				if (d.model->water)
 					waters[plotKey(d.place.translation.x, d.place.translation.y)].push_back(&d);
+				// (a road or railroad clears a lane through a forest, as in the original: the trees
+				// within kRouteTreeCut plots of its points go; its points are 10-15 units apart)
+				if (d.route)
+					for (const scene::DrawItem& item : d.model->model.items)
+						if (item.node >= 0 && size_t(item.node) < d.world.size())
+							for (const auto& v : item.vertices)
+							{
+								const Vec3 w = d.world[size_t(item.node)].point(v.position);
+								cuts[plotKey(w.x, w.y)].push_back({ w, kRouteTreeCut * S() });
+							}
 			}
 			if (cuts.empty() && waters.empty())
 				return;

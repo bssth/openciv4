@@ -181,6 +181,12 @@ PSIn VSMain(VSIn i)
 	PSIn o;
 	o.flat = p.xy;
 	p = globeBend(p);
+	// (laid on the terrain: a few units towards the eye, which moves it nowhere on screen. Its
+	// points follow the terrain, but between them a hill bulges over its straight edges: roads
+	// had holes on hills.)
+	const float3 toEye = eyePos - p;
+	if ((flags & 256) && dot(toEye, toEye) > 1)
+		p += normalize(toEye) * 6;
 	o.pos = mul(float4(p, 1), viewProj);
 	o.nrm = n;
 	o.uv = i.uv;
@@ -496,6 +502,8 @@ float4 PSOverlay(Out p) : SV_Target
 			SDL_ReleaseGPUShader(m_device, s);
 		for (SDL_GPUSampler* s : m_samplers)
 			SDL_ReleaseGPUSampler(m_device, s);
+		for (SDL_GPUSampler* s : m_trilinearSamplers)
+			SDL_ReleaseGPUSampler(m_device, s);
 		SDL_ReleaseGPUSampler(m_device, m_linearClamp);
 		m_textures.clear();
 		m_white.reset();
@@ -634,9 +642,11 @@ float4 PSOverlay(Out p) : SV_Target
 			sd.address_mode_u = (clamp & 2) ? SDL_GPU_SAMPLERADDRESSMODE_REPEAT : SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
 			sd.address_mode_v = (clamp & 1) ? SDL_GPU_SAMPLERADDRESSMODE_REPEAT : SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
 			sd.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+			sd.max_lod = 1000;
+			if (!(m_trilinearSamplers[clamp] = SDL_CreateGPUSampler(m_device, &sd)))
+				fail("SDL_CreateGPUSampler");
 			sd.enable_anisotropy = true;
 			sd.max_anisotropy = 8;
-			sd.max_lod = 1000;
 			if (!(m_samplers[clamp] = SDL_CreateGPUSampler(m_device, &sd)))
 				fail("SDL_CreateGPUSampler");
 		}
@@ -1015,9 +1025,15 @@ float4 PSOverlay(Out p) : SV_Target
 		return gpu;
 	}
 
-	void Renderer::bindModelTextures(const GpuImage* base, const GpuImage* decal, const scene::Material& m, const GpuImage* const* leader)
+	void Renderer::bindModelTextures(const GpuImage* base, const GpuImage* decal, const scene::Material& m, const GpuImage* const* leader,
+		bool onGround)
 	{
-		SDL_GPUSampler* baseSampler = sampler(int(m.baseClamp));
+		// A piece laid on the ground (a road, a river) is sampled as its file asks: the road
+		// pieces' trilinear, without anisotropy. Their texture runs along the road, squeezed 4:1
+		// across it, and its hand-painted mips go darker and yellower: the original, sampling
+		// without anisotropy, shows those mips, an olive road with soft edges; anisotropic
+		// sampling showed the top level, a pale grey road with a black outline.
+		SDL_GPUSampler* baseSampler = onGround && m.baseFilter != 6 ? m_trilinearSamplers[int(m.baseClamp)] : sampler(int(m.baseClamp));
 		const auto tex = [&](const GpuImage* i) { return (i ? i : m_white.get())->texture; };
 		const SDL_GPUTextureSamplerBinding fragment[7] = {
 			{ tex(base), baseSampler },
@@ -1066,7 +1082,7 @@ float4 PSOverlay(Out p) : SV_Target
 		}
 		if (SDL_GPUGraphicsPipeline* p = modelPipeline(m); p != m_bound)
 			SDL_BindGPUGraphicsPipeline(m_pass, m_bound = p);
-		bindModelTextures(mesh.texture, mesh.decal, m, mesh.leader[0] ? mesh.leader : nullptr);
+		bindModelTextures(mesh.texture, mesh.decal, m, mesh.leader[0] ? mesh.leader : nullptr, onGround);
 		const SDL_GPUBufferBinding vb{ mesh.vb->buffer, 0 }, ib{ mesh.ib->buffer, 0 };
 		SDL_BindGPUVertexBuffers(m_pass, 0, &vb, 1);
 		SDL_BindGPUIndexBuffer(m_pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
