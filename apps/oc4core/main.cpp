@@ -540,7 +540,7 @@ namespace
 		const auto hear = [&] {
 			const auto look = window.look();
 			const float closeness = std::clamp((cameraTop - look.distance) / (cameraTop - cameraNearest), 0.0f, 1.0f);
-			sounds.update({ look.x, look.y, look.distance, closeness }, era);
+			sounds.update({ look.x, look.y, look.distance, closeness, look.eyeX, look.eyeY, look.eyeZ }, era);
 			std::vector<std::pair<std::string, float>> lines;
 			// (none over a talk: the leader's face is where they are; the turn log keeps them)
 			if (!utility.diplomacy().active())

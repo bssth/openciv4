@@ -192,6 +192,7 @@ namespace oc4::render
 		struct Look
 		{
 			float x = 0, y = 0, distance = 0;
+			float eyeX = 0, eyeY = 0, eyeZ = 0; // where the camera is (plot units, its height too)
 		};
 		Look look() const;
 

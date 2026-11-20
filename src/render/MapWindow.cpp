@@ -2576,7 +2576,8 @@ namespace oc4::render
 	MapWindow::Look MapWindow::look() const
 	{
 		const float p = m->view ? m->view->plotSize() : 1;
-		return { m->camera.target.x / p, m->camera.target.y / p, m->camera.distance / p };
+		const Vec3 eye = m->camera.eye();
+		return { m->camera.target.x / p, m->camera.target.y / p, m->camera.distance / p, eye.x / p, eye.y / p, eye.z / p };
 	}
 	std::vector<uint32_t> MapWindow::terrainColors() const { return m->view ? m->view->terrainColors() : std::vector<uint32_t>{}; }
 	void MapWindow::setPopupHelp(std::function<std::string(int item)> help) { m->popupHelp = std::move(help); }

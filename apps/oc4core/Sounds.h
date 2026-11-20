@@ -67,6 +67,9 @@ namespace oc4::host
 		{
 			float x = 0, y = 0, distance = 9;
 			float closeness = 1; // 1 at the camera's closest zoom, 0 at its farthest
+			// Where the camera is (plot units, its height too): a sound on the map is heard from
+			// there, as the original's listener is the camera.
+			float eyeX = 0, eyeY = 0, eyeZ = 9;
 		};
 		void update(const Listener& listener, const std::string& eraType);
 

@@ -74,6 +74,7 @@ namespace oc4::host
 			AudioScripts::Table table = AudioScripts::Script2D;
 			int script = -1;
 			std::optional<Place> place;
+			float heard = -1; // (a soundscape's sound: this far from the listener, world units)
 		};
 		std::mutex mutex; // (the requests and the talk's music, from any thread)
 		std::vector<Request> queue;
@@ -230,6 +231,7 @@ namespace oc4::host
 					const float d = pick(e->minListenerDistance, e->maxListenerDistance) / kPlotSize;
 					const float a = std::uniform_real_distribution<float>(0, 6.2831853f)(rng);
 					r.place = Place{ l.x + d * std::cos(a), l.y + d * std::sin(a) };
+					r.heard = d * kPlotSize;
 				}
 				request(r, l, now);
 			}
@@ -318,12 +320,18 @@ namespace oc4::host
 			float gain = pick(s.minVolume, s.maxVolume) / 100 * kindGain(s.kind) * userGain(s.kind), pan = 0;
 			if (r.place)
 			{
-				const float dx = r.place->x - l.x, dy = r.place->y - l.y, d = std::hypot(dx, dy) * kPlotSize;
+				// As the original's 3D sounds (the Miles sound system's): heard from the camera, at
+				// full volume within the script's iMinDistanceForMaxVolume, then falling as that
+				// distance over the distance, not at all past its cutoff. A unit's sound at the
+				// middle of the screen is as far as the camera is (2200 at the start's zoom): a
+				// worker's hoe (full within 50-100) is a whisper there, a settler's founding (500)
+				// still clear.
+				const float dx = r.place->x - l.x;
+				const float d = r.heard >= 0 ? r.heard : std::hypot(r.place->x - l.eyeX, r.place->y - l.eyeY, l.eyeZ) * kPlotSize;
 				if (s.cutoffDistance > 0 && d > float(s.cutoffDistance))
 					return;
 				if (s.fullVolumeDistance > 0 && d > float(s.fullVolumeDistance))
 					gain *= float(s.fullVolumeDistance) / d;
-				gain *= std::clamp(9.0f / std::max(l.distance, 1.0f), 0.35f, 1.0f);
 				pan = std::clamp(dx / 8, -1.0f, 1.0f) * 0.8f;
 			}
 			if (gain < 0.01f)
@@ -335,7 +343,7 @@ namespace oc4::host
 			if (const auto v = device->play(pcm, gain, pan, pitch, false))
 				effects.push_back(v);
 			if (playLog())
-				std::printf("  sound: %s%s\n", s.id.c_str(), r.place ? " (on the map)" : "");
+				std::printf("  sound: %s%s gain %.3f\n", s.id.c_str(), r.place ? " (on the map)" : "", gain);
 		}
 
 		void request(const Request& r, const Listener& l, Clock::time_point now)
