@@ -69,6 +69,13 @@ namespace
 						sd->bones.empty() ? 0 : sd->bones[0].weights.size());
 			}
 			for (const Ref p : obj->properties)
+				if (const auto* mp = f.get<NiMaterialProperty>(p))
+					std::cout << std::format("{}    material: ambient=({:.2f},{:.2f},{:.2f}) diffuse=({:.2f},{:.2f},{:.2f}) emissive=({:.2f},{:.2f},{:.2f}) specular=({:.2f},{:.2f},{:.2f}) alpha={:.2f}\n", indent,
+						mp->ambient.r, mp->ambient.g, mp->ambient.b, mp->diffuse.r, mp->diffuse.g, mp->diffuse.b, mp->emissive.r, mp->emissive.g, mp->emissive.b,
+						mp->specular.r, mp->specular.g, mp->specular.b, mp->alpha);
+				else if (const auto* ap = f.get<NiAlphaProperty>(p))
+					std::cout << std::format("{}    alpha: flags=0x{:04X} threshold={}\n", indent, ap->flags, ap->threshold);
+			for (const Ref p : obj->properties)
 				if (const auto* tp = f.get<NiTexturingProperty>(p))
 					for (size_t s = 0; s < tp->shaderMaps.size(); ++s)
 						if (const auto& sm = tp->shaderMaps[s]; sm.map)

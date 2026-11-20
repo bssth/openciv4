@@ -114,6 +114,7 @@ namespace oc4::scene
 			const NiZBufferProperty* zbuffer = nullptr;
 			const NiStencilProperty* stencil = nullptr;
 			int materialOwner = -1, texturingOwner = -1;
+			bool contour = false; // under (or on) an object marked "ContourGeometry..."
 
 			void apply(const File& f, const std::vector<Ref>& props, int node)
 			{
@@ -188,6 +189,9 @@ namespace oc4::scene
 				if (obj->hidden())
 					++m_model.hiddenNodes;
 				props.apply(m_file, obj->properties, m_nodeOf.at(ref));
+				for (const Ref e : obj->extraData)
+					if (const auto* s = m_file.get<NiStringExtraData>(e); s && s->value.starts_with("ContourGeometry"))
+						props.contour = true;
 
 				if (const auto* ps = dynamic_cast<const NiParticleSystem*>(obj))
 				{
@@ -495,6 +499,7 @@ namespace oc4::scene
 				item.material = makeMaterial(geom, props, uvSet);
 				item.materialOwner = props.materialOwner;
 				item.texturingOwner = props.texturingOwner;
+				item.contour = props.contour;
 
 				const size_t n = data->vertices.size();
 				item.vertices.resize(n);

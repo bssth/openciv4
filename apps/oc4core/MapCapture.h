@@ -9,6 +9,7 @@
 #include "render/MapWindow.h"
 #include "Interface.h"
 
+#include <functional>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -95,6 +96,8 @@ namespace oc4::host
 			};
 			std::vector<To> to;
 		};
+		void layOutImprovement(const std::string& name, int improvement, std::vector<render::PlotPiece>& pieces,
+			const std::function<bool(const LAttributes&)>& fits, const std::function<uint32_t()>& next, bool worked);
 		std::map<std::string, std::vector<LArtRef>> m_plotNodes; // by LNode name: its art
 		std::vector<LProduction> m_plotProductions;
 		std::map<uint64_t, int> m_plotLayouts; // into the snapshot's plotLayouts

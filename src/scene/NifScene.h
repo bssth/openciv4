@@ -140,6 +140,11 @@ namespace oc4::scene
 
 		Bounds bindBounds; // world space, bind pose
 
+		// Laid on the terrain where it stands ("ContourGeometry" / "ContourGeometryUseZ" text on it
+		// or a node over it: the original's ContourShader.fx adds the ground's height to its
+		// heights): a mine's ground patch, a resource's piles.
+		bool contour = false;
+
 		// A forest piece: where its trees stand (its node's space), tree i (the red of its
 		// vertices' colour) at [i - 1]; not a number where there is none.
 		std::vector<nif::Vec2> trees;

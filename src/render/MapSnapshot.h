@@ -95,6 +95,8 @@ namespace oc4::render
 		int model = -1;
 		std::string node; // empty: the whole model, standing
 		float x = 0, y = 0, yaw = 0, scale = 1;
+		bool standing = false; // (a node: stands on the ground as a house, not laid on it as crops)
+		float cut = 0; // trees within this many plots of it go (bCutTrees, fCenterCut); 0: none
 	};
 
 	// A generic house of the city LSystem (CIV4CityLSystem.xml): one node of a NIF that
@@ -140,6 +142,7 @@ namespace oc4::render
 		bool revealed = true, visible = true; // to the active team
 		bool riverSouth = false, riverEast = false; // a river along the plot's south / east edge
 		uint8_t bonusState = 0; // the resource's look (CvPlot::getVisibleBonusState): 1 not improved, 2 improved, 3 improved and worked
+		uint8_t improvementState = 0; // the improvement's (CvPlot::getVisibleImprovementState): 2 not worked, 3 worked (its KFM's NotWorked / On)
 		int16_t layout = -1; // what the plot LSystem lays out on it instead of the improvement's art: into MapSnapshot::plotLayouts
 	};
 
