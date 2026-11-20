@@ -225,7 +225,8 @@ namespace oc4::render
 			case Kind::Panel:
 				if (const Theme::Panel* p = themedPanel(it))
 				{
-					if (!p->inner.empty() || !p->border.empty())
+					if (Theme::covers(p->inner, it.x0, it.y0, it.x1, it.y1, float(x), float(y)) ||
+						Theme::covers(p->border, it.x0, it.y0, it.x1, it.y1, float(x), float(y)))
 						return true;
 				}
 				else if (!emptyPanel(it.style))

@@ -108,6 +108,7 @@ namespace oc4::render
 			bool onFigure = false; // on a unit's figure (the plot is the unit's)
 			bool either = false;   // (the gamepad's plot cursor: `right` is the host's to say, see PadAction::Kind::PlotAct)
 			bool clear = false;    // (the gamepad's B: no plot's click, the selection let go)
+			bool twice = false;    // the second click of a double click
 		};
 		void setPlaying(bool playing);
 		std::vector<PlotClick> takeClicks();

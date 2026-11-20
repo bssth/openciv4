@@ -358,6 +358,7 @@ namespace oc4::host
 		InterfaceVisibility m_showBeforeWorldBuilder = INTERFACE_SHOW;
 		CLinkList<IDInfo> m_cities;
 		std::vector<IDInfo> m_citiesShown; // (asked for production when the city screen closes, if idle)
+		std::vector<IDInfo> m_selectionUnderCity; // the units selected when the city screen opened: selected again when it closes
 		bool m_cityScreen = false;
 		void selectionChanged(); // (the dirty bits a new selection sets)
 		void cityScreenChanged(bool wasUp); // (what the main interface hides in the city screen is redrawn)

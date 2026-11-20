@@ -682,6 +682,17 @@ namespace oc4::host
 				if (CvCity* c = cityOf(id); c && c->getOwner() == id.eOwner)
 					c->updateSelectedCity(true);
 			m_citiesShown.clear();
+			// The units selected before the screen opened are selected again (those still there and
+			// the player's), as the original keeps them; the game core picks the next one only if
+			// none is left.
+			if (m_selection.getLength() == 0)
+				for (const IDInfo& id : m_selectionUnderCity)
+					if (CvUnit* u = unitOf(id); u && u->getOwner() == GC.getGame().getActivePlayer() && !selected(u))
+					{
+						m_selection.insertAtEnd(id);
+						m_lastSelected = u;
+					}
+			m_selectionUnderCity.clear();
 		}
 		if (isCityScreenUp() != wasUp)
 			for (const InterfaceDirtyBits bit : { PercentButtons_DIRTY_BIT, ResearchButtons_DIRTY_BIT, GameData_DIRTY_BIT, Score_DIRTY_BIT })
@@ -696,6 +707,15 @@ namespace oc4::host
 		m_cities.clear();
 		if (pNewValue)
 		{
+			// A city's screen and selected units go not together: the units are let go (as
+			// CvGame::selectUnit lets go of the cities), and selected again when the screen closes.
+			if (!wasUp)
+			{
+				m_selectionUnderCity.clear();
+				for (CLLNode<IDInfo>* n = m_selection.head(); n; n = m_selection.next(n))
+					m_selectionUnderCity.push_back(n->m_data);
+			}
+			m_selection.clear();
 			m_cities.insertAtEnd(pNewValue->getIDInfo());
 			m_cityScreen = true;
 			lookAtX = pNewValue->getX();

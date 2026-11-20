@@ -1281,6 +1281,23 @@ namespace
 						ui.clearSelectionList();
 					continue;
 				}
+				// The city screen up: the clicks are the game core's, as the original engine hands them
+				// over. A plot the city can work is worked or let go (CvCity::alterWorkingPlot: the
+				// city's own plot gives its citizens back to the governor); a right click takes away
+				// the forced choice; a click outside closes the screen (CITY_SCREEN_CLICK_WILL_EXIT),
+				// as does a double click on the city.
+				if (CvCity* city = ui.isCityScreenUp() ? ui.getHeadSelectedCity() : nullptr)
+				{
+					if (log)
+						std::printf("  city screen %s at %d,%d\n", click.right && !click.either ? "right click" : click.twice ? "double click" : "click", plot->getX(), plot->getY());
+					if (click.right && !click.either)
+						game.handleCityScreenPlotRightPicked(city, plot, click.alt, click.shift, click.ctrl);
+					else if (click.twice)
+						game.handleCityScreenPlotDoublePicked(city, plot, click.alt, click.shift, click.ctrl);
+					else
+						game.handleCityScreenPlotPicked(city, plot, click.alt, click.shift, click.ctrl);
+					continue;
+				}
 				// The gamepad's plot cursor: one's own units or city there are selected, as a left click;
 				// anywhere else the selected units go there, as a right one (an interface mode's plot is a left click).
 				if (click.either)
