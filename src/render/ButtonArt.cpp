@@ -53,18 +53,20 @@ namespace oc4::render
 	void ButtonArt::setFontLayout(std::vector<FontGroup> groups)
 	{
 		m_fontLayout = std::move(groups);
-		m_glyphsRead = false;
-		m_glyphs.clear();
+		for (FontSheet& sheet : m_sheets)
+			sheet = {};
 	}
 
 	// The game font: rows of cells split by magenta lines and columns (the letters' rows
 	// first, then the icons' rows, as tall as the last one). The icon cells are counted on
 	// across the rows (mods' rows are longer than 25); each of the DLL's groups takes its
 	// rows of 25 of them, its characters by their distance from the group's first code.
-	const ButtonArt::Picture* ButtonArt::readFont()
+	const ButtonArt::Picture* ButtonArt::readFont(int sheet)
 	{
 		constexpr int kFirstCode = 8483, kRow = 25;
-		const Picture* font = picture("res/fonts/gamefont.tga");
+		const Picture* font = picture(sheet ? "res/fonts/gamefont_75.tga" : "res/fonts/gamefont.tga");
+		auto& glyphs = m_sheets[sheet].glyphs;
+		bool& read = m_sheets[sheet].read;
 		if (!font)
 			return nullptr;
 		const uint32_t w = font->width, h = font->height;
@@ -72,9 +74,9 @@ namespace oc4::render
 			const uint8_t* p = font->bgra.data() + (size_t(y) * w + x) * 4;
 			return p[0] == 255 && p[1] == 0 && p[2] == 255;
 		};
-		if (!m_glyphsRead)
+		if (!read)
 		{
-			m_glyphsRead = true;
+			read = true;
 			std::vector<std::pair<uint32_t, uint32_t>> bands; // rows of cells: y0, y1
 			for (uint32_t y = 0, start = 0; y <= h; ++y)
 			{
@@ -120,9 +122,18 @@ namespace oc4::render
 					// (the DLL starts every group but the first at a multiple of 25; a mod's bonuses
 					// are numbered by their FontButtonIndex, the first one need not be 0)
 					const int base = std::max(kFirstCode, *std::ranges::min_element(group.codes) / kRow * kRow);
+					// (every cell of the group's rows, not only the DLL's codes: mods draw more icons
+					// there, by their offset from one it names: BUG's attitude faces, war and peace
+					// after the symbols, FontUtil's addOffsetSymbol; the last group, the symbols, to
+					// the font's end)
+					const bool last = &group == &m_fontLayout.back();
+					const int count = last ? int(cells.size() - std::min(groupStart, cells.size())) : group.rows * kRow;
+					for (int k = 0; k < count; ++k)
+						if (const size_t cell = groupStart + size_t(k); cell < cells.size())
+							glyphs.try_emplace(base + k, cells[cell]);
 					for (const int code : group.codes)
 						if (const size_t cell = groupStart + size_t(code - base); cell < cells.size())
-							m_glyphs[code] = cells[cell];
+							glyphs[code] = cells[cell];
 				}
 				groupStart += size_t(group.rows) * kRow;
 			}
@@ -132,24 +143,33 @@ namespace oc4::render
 
 	bool ButtonArt::fontGlyph(int code, Icon& icon)
 	{
-		const Picture* font = readFont();
-		if (!font)
-			return false;
-		const uint32_t w = font->width;
-		const auto it = m_glyphs.find(code);
-		if (it == m_glyphs.end())
-			return false;
-		const auto [x0, y0, x1, y1] = it->second;
-		icon.width = x1 - x0;
-		icon.height = y1 - y0;
-		icon.bgra.resize(size_t(icon.width) * icon.height * 4);
-		for (uint32_t y = 0; y < icon.height; ++y)
-			std::copy_n(font->bgra.begin() + ptrdiff_t((size_t(y0 + y) * w + x0) * 4), icon.width * 4,
-				icon.bgra.begin() + ptrdiff_t(size_t(y) * icon.width * 4));
-		bool any = false;
-		for (size_t i = 3; i < icon.bgra.size(); i += 4)
-			any |= icon.bgra[i] != 0;
-		return any;
+		// (the game font's cell; one it leaves empty from the 75 % font: mods draw some icons only
+		// there, BUG its attitude faces, war and peace, and the original then shows them, as at
+		// 1600x900)
+		for (int sheet = 0; sheet < 2; ++sheet)
+		{
+			const Picture* font = readFont(sheet);
+			if (!font)
+				continue;
+			const auto& glyphs = m_sheets[sheet].glyphs;
+			const auto it = glyphs.find(code);
+			if (it == glyphs.end())
+				continue;
+			const uint32_t w = font->width;
+			const auto [x0, y0, x1, y1] = it->second;
+			icon.width = x1 - x0;
+			icon.height = y1 - y0;
+			icon.bgra.resize(size_t(icon.width) * icon.height * 4);
+			for (uint32_t y = 0; y < icon.height; ++y)
+				std::copy_n(font->bgra.begin() + ptrdiff_t((size_t(y0 + y) * w + x0) * 4), icon.width * 4,
+					icon.bgra.begin() + ptrdiff_t(size_t(y) * icon.width * 4));
+			bool any = false;
+			for (size_t i = 3; i < icon.bgra.size(); i += 4)
+				any |= icon.bgra[i] != 0;
+			if (any)
+				return true;
+		}
+		return false;
 	}
 
 	// Button art: a DDS of its own, or ",<file>,<atlas>,<column>,<row>": the atlas cell (64

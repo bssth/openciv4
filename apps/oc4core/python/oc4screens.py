@@ -88,7 +88,7 @@ class _Widget(object):
 	__slots__ = ('name', 'kind', 'parent', 'mode', 'x', 'y', 'z', 'w', 'h', 'style', 'pstyle', 'text', 'help', 'tex', 'tex2',
 		'wt', 'd1', 'd2', 'opt', 'flags', 'font', 'shown', 'enabled', 'state', 'hittest', 'seq', 'vertical', 'scroll', 'children',
 		'bars', 'lists', 'columns', 'rows', 'headers', 'iconw', 'iconh', 'items', 'selected', 'color', 'size', 'defw', 'defh', 'points',
-		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed')
+		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed', 'grow')
 
 	def __init__(self, name, kind):
 		self.name = name
@@ -135,6 +135,7 @@ class _Widget(object):
 		self.cells = None      # tables: {(row, column): the name of the control attached there}
 		self.sort = None       # tables that sort: (column, descending) the rows are shown by, or (-1, False)
 		self.inset = 0         # scroll panels (addScrollPanel): where what is placed in them (attach...At) starts
+		self.grow = 0          # panels in a vertical panel's flow: higher by this, their share of its free height
 
 
 class _Screen(object):
@@ -682,6 +683,9 @@ class CyGInterfaceScreen(object):
 		size = {0: 46, 1: 32, 2: 24, 3: 16}.get(_int(eSize, 1), 32)
 		w = self._image('imagebutton', szName, szAttachTo, szTexture, 0, 0, size, size, eWidgetType, iData1, iData2, 'flow')
 		w.opt = bool(bOption)
+		# (BUTTON_SIZE_CUSTOM: as high as the row it is in, square; the foreign advisor's ACTIVE tab
+		# leaders, 58 in a row of 66)
+		w.size = -1 if _int(eSize, 1) == 4 else 0
 
 	def setButtonGFC(self, szName, szText, szTexture, iX, iY, iWidth, iHeight, eWidgetType=-1, iData1=-1, iData2=-1, eStyle=0):
 		w = self._image('button', szName, None, szTexture, iX, iY, iWidth, iHeight, eWidgetType, iData1, iData2, 'abs')
@@ -1497,8 +1501,12 @@ def _size(s, w):
 	if w.mode == 'full':
 		return _resolution[0], _resolution[1]
 	if w.kind in ('label', 'text'):
-		# (a text, setText, is in the theme's size 3 whatever font it names; a label in its own)
-		return max(w.w, _textWidth(w.text, 3 if w.kind == 'text' else w.font)), _TEXT_HEIGHT.get(w.font, 18)
+		# (a text, setText, is in the theme's size 3 whatever font it names; a label in its own;
+		# one of spaces as wide as they are: the foreign advisor's "   " before a leader)
+		width = _textWidth(w.text, 3 if w.kind == 'text' else w.font)
+		if not width and w.text and not w.text.strip():
+			width = len(w.text) * _SPACE
+		return max(w.w, width), _TEXT_HEIGHT.get(w.font, 18)
 	if w.kind == 'multiline':
 		# (one placed with a height, addMultilineText, is that high: a longer text scrolls in it)
 		if w.mode != 'flow' and w.h > 0:
@@ -1517,10 +1525,19 @@ def _size(s, w):
 		for cw in held:
 			if cw.mode == 'rel':
 				height = max(height, cw.y + _size(s, cw)[1] + 4)
-		return w.w, height
+		return w.w, height + _title(w) + w.grow
 	if w.kind == 'button' and not w.w:
 		return len(w.text) * 8 + 16, w.h or 24
 	return w.w, w.h
+
+
+_SPACE = 4    # a space's width in the theme's normal font
+_TITLE = 28   # a panel's title: over its box, in a strip this high (the original's panels with a title)
+
+
+def _title(w):
+	"""How much higher than its box a panel is for its title."""
+	return _TITLE if w.kind == 'panel' and w.text else 0
 
 
 def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
@@ -1542,13 +1559,27 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 		x, y = flow[0], flow[1]
 	width, height = _size(s, w)
 	if w.mode == 'flow':
-		# (one of no width of its own takes the rest of its parent's; a text then wraps there)
-		if not width:
+		# (one of no width of its own takes the rest of its parent's; a text then wraps there; a
+		# label or text is as wide as it is)
+		if w.kind == 'imagebutton' and w.size == -1 and len(flow) > 5 and flow[5] > 0:
+			width = height = flow[5]
+		if not width and w.kind not in ('label', 'text'):
 			width = max(0, flow[3] - (x - flow[4]))
 		if w.kind == 'multiline' and width:
 			height = max(w.h, _textHeight(w.text, width, w.font))
+		if not flow[2] and len(flow) > 5 and flow[5] > height and w.kind != 'panel':
+			# (in a row as high as its panel, in the middle of its height, as the original's: the
+			# foreign advisor's INFO rows, their leaders, civics and numbers)
+			y += (flow[5] - height) / 2
 		if flow[2]:
 			flow[1] += height + 2
+		elif w.kind == 'text' or (w.kind == 'imagebutton' and w.size != -1 and width == 46):
+			# (in a row, attachTextGFC's texts and the 46 pixel buttons each in a cell at least 46
+			# wide, a text in its middle, 18 apart: the foreign advisor's INFO tab, its columns under
+			# their headers, measured in the original)
+			cell = max(width, 46)
+			x += (cell - width) / 2
+			flow[0] += cell + 18
 		else:
 			flow[0] += width + 4
 	# (a text attached at a place in its parent, setTextAt, starts there whatever its justification:
@@ -1656,9 +1687,13 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 			w.hittest, None, w.wt, w.d1, w.d2, w.opt, w.z, w.seq))
 		return
 	if kind == 'line':
+		# (drawn on its draw control, addLineGFC's: in its place among the others, under what came
+		# after it; the foreign advisor's relations run under the leaders' buttons, as the original)
 		x0, y0, x1, y1 = w.points
+		owner = s.widgets.get(w.parent) if w.parent else None
+		z, seq = (owner.z, owner.seq + w.seq * 1e-7) if owner is not None else (w.z, w.seq)
 		out.append((base + (-1,), 'line', ox + x0, oy + y0, ox + x1, oy + y1, clip, '', u'', '', '', 0, 0, False, True, 4, w.color, -1, -1, -1, False,
-			w.z, w.seq))
+			z, seq))
 		return
 	if kind == 'bar':
 		start = 0.0
@@ -1675,7 +1710,15 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 	text = w.text
 	if kind == 'edit' and _editFocus[0] == (s.id, w.name):
 		text = text + u'|' # (the caret: typed into)
-	out.append((base + (-1,), kind, x, y, x + width, y + height, clip, w.style if w.style else w.pstyle, text, w.tex, w.tex2, w.font, flags,
+	title = _title(w)
+	if title:
+		# (a panel's title over its box, at its left, in the theme's normal font: the foreign
+		# advisor's "Surplus Resources", its ACTIVE tab's leaders' names; measured in the original
+		# at 11 right of the box's edge, the box 28 down)
+		out.append((base + (-2,), 'text', x + 11, y + 3, x + 11 + _textWidth(text, 3), y + 3 + 18, clip, '', text, '', '', 1, _FONT_LEFT,
+			False, True, 0, None, -1, -1, -1, False, w.z, w.seq))
+		text = u''
+	out.append((base + (-1,), kind, x, y + title, x + width, y + height, clip, w.style if w.style else w.pstyle, text, w.tex, w.tex2, w.font, flags,
 		w.state, w.enabled, w.hittest, color, w.wt, w.d1, w.d2, w.opt, w.z, w.seq))
 	if w.children:
 		inner, left, top = clip, x, y
@@ -1683,7 +1726,20 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 		if scrolls:
 			inner, left, top = _clipTo(clip, (x, y, x + width, y + height)), x - w.hoffset, y - w.offset
 		first = len(out)
-		childFlow = [left + 4, top + 4 + (18 if w.text else 0), w.vertical, max(0, width - 8), left + 4]
+		held = [cw for cw in [s.widgets.get(c) for c in w.children] if cw is not None and cw.shown and cw.mode == 'flow']
+		if kind == 'panel' and w.vertical:
+			# (the panels in a vertical panel's flow share what is left of its height, as the
+			# original lays them out: the foreign advisor's GLANCE, ACTIVE and INFO rows fill it)
+			for cw in held:
+				cw.grow = 0
+			grow = [cw for cw in held if cw.kind == 'panel' and not cw.h]
+			if grow and height > 0:
+				free = height - title - 8 - sum([_size(s, cw)[1] + 2 for cw in held])
+				for cw in grow:
+					cw.grow = max(0, free / len(grow))
+		# (and the rows of a horizontal one: as high as it is, inside its margins; a custom sized
+		# button is that high)
+		childFlow = [left + 4, top + 4 + title, w.vertical, max(0, width - 8), left + 4, 0 if w.vertical else max(0, height - title - 8)]
 		for c in w.children:
 			cw = s.widgets.get(c)
 			if cw is not None:
