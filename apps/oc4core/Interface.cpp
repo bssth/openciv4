@@ -214,7 +214,7 @@ namespace oc4::host
 				pszIcon, eFlashColor, iFlashX, iFlashY, bShowOffScreenArrows, bShowOnScreenArrows));
 		if (ePlayer != GC.getGame().getActivePlayer())
 			return;
-		show(szString.c_str(), iLength);
+		show(szString.c_str(), iLength, eFlashColor);
 		if (sounds && pszSound && *pszSound)
 			sounds->play(pszSound);
 	}
@@ -234,7 +234,7 @@ namespace oc4::host
 	}
 
 	// (the messages of the last turn again, when a game is loaded: CvPlayer::showMissedMessages)
-	void Interface::showMessage(CvTalkingHeadMessage& msg) { show(msg.getDescription(), msg.getLength()); }
+	void Interface::showMessage(CvTalkingHeadMessage& msg) { show(msg.getDescription(), msg.getLength(), msg.getFlashColor()); }
 
 	void Interface::clearEventMessages()
 	{
@@ -242,14 +242,22 @@ namespace oc4::host
 		m_shown.clear();
 	}
 
-	void Interface::show(const std::wstring& text, int seconds)
+	// As the original: a message's line shows at once, in its flash colour (white if it has
+	// none; colours in its text stay), for its length in seconds, and goes at once; the newest
+	// six are shown, newest at the top, and one pushed out by newer ones does not come back.
+	void Interface::show(const std::wstring& text, int seconds, ColorTypes color)
 	{
 		if (text.empty())
 			return;
 		if (seconds <= 0)
 			seconds = GC.getEVENT_MESSAGE_TIME();
+		NiColorA colour(1, 1, 1, 1);
+		if (color > NO_COLOR && color < GC.getNumColorInfos())
+			colour = GC.getColorInfo(color).getColor();
 		std::lock_guard lock(m_shownMutex);
-		const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(seconds, 1));
+		const auto now = std::chrono::steady_clock::now();
+		std::erase_if(m_shown, [&](const Shown& s) { return s.until <= now; });
+		const auto until = now + std::chrono::seconds(std::max(seconds, 1));
 		// (the same one again while it is up, as a mod's weather has it plot after plot: one line,
 		// counted, moved to the newest)
 		int count = 1;
@@ -258,8 +266,8 @@ namespace oc4::host
 			count = same->count + 1;
 			m_shown.erase(same);
 		}
-		m_shown.push_back({ text, until, count });
-		while (m_shown.size() > 12) // (the oldest go first when many come at once)
+		m_shown.push_back({ text, colour, until, count });
+		while (m_shown.size() > kShownLines)
 			m_shown.pop_front();
 	}
 
@@ -268,9 +276,9 @@ namespace oc4::host
 		const auto now = std::chrono::steady_clock::now();
 		std::lock_guard lock(m_shownMutex);
 		std::vector<ShownMessage> out;
-		for (const Shown& s : m_shown)
-			if (const float left = std::chrono::duration<float>(s.until - now).count(); left > 0)
-				out.push_back({ s.count > 1 ? s.text + L" (x" + std::to_wstring(s.count) + L")" : s.text, std::min(1.0f, left) }); // (the last second fades it)
+		for (auto s = m_shown.rbegin(); s != m_shown.rend(); ++s)
+			if (s->until > now)
+				out.push_back({ s->count > 1 ? s->text + L" (x" + std::to_wstring(s->count) + L")" : s->text, s->color });
 		return out;
 	}
 

@@ -308,27 +308,29 @@ namespace oc4::host
 		void showMessage(CvTalkingHeadMessage& msg) override;
 		void clearEventMessages() override;
 		// The messages on the screen now (the active player's, as the original shows them at the
-		// top for their length in seconds), oldest first, each with how much of it is left to
-		// fade (1 shown, towards 0 going). Any thread.
+		// top for their length in seconds, the newest six), newest first, each in its colour (the
+		// message's flash colour; white if it has none). Any thread.
 		struct ShownMessage
 		{
 			std::wstring text;
-			float alpha = 1;
+			NiColorA color{ 1, 1, 1, 1 };
 		};
 		std::vector<ShownMessage> shownMessages() const;
 		std::vector<uint32_t> minimapTerrainColors;
 
 	private:
-		void show(const std::wstring& text, int seconds);
+		void show(const std::wstring& text, int seconds, ColorTypes color = NO_COLOR);
 		bool m_exiting = false;
 		struct Shown
 		{
 			std::wstring text;
+			NiColorA color{ 1, 1, 1, 1 };
 			std::chrono::steady_clock::time_point until;
 			int count = 1; // (the same message again while it is up: one line, "(x3)")
 		};
 		mutable std::mutex m_shownMutex;
 		std::deque<Shown> m_shown;
+		static constexpr size_t kShownLines = 6; // (the original's box holds six)
 		mutable std::vector<unsigned char> m_minimapBase;
 		bool selected(const CvUnit* pUnit) const;
 

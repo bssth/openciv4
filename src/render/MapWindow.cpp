@@ -191,7 +191,7 @@ namespace oc4::render
 		std::wstring actionHelpText;
 		bool downOnActions = false;
 		std::wstring info;
-		std::vector<std::pair<std::wstring, float>> messages;
+		std::vector<std::pair<std::wstring, Color>> messages; // (newest first)
 		MapWindow::ScreenMinimap screenMinimap;
 		MapWindow::Layers layers, layersApplied;
 		MapWindow::PlotMarks plotMarks;
@@ -1913,17 +1913,25 @@ namespace oc4::render
 			}
 		}
 
-		// The messages: centred lines under the top of the interface, the newest lowest.
+		// The messages as the original's: a see-through black box under the top bar, 606 wide in
+		// the middle, a line of 18 for each, newest at the top, each line a bullet and its text in
+		// its colour with a shadow (measured in Wine at 1600 x 900: box 500-1106 x 50-159 for six
+		// lines, black at a quarter, bullets at 507, text at 514).
 		void drawMessages()
 		{
 			if (messages.empty())
 				return;
-			const float size = ui.textSize(2), line = std::round(size * 1.4f), cx = overlay->screenWidth() / 2;
-			float y = ui.active() ? 74 : 70;
-			for (const auto& [text, alpha] : messages)
+			constexpr float kWidth = 606, kTop = 50, kLine = 18, kBullet = 7, kText = 14;
+			const float size = ui.textSize(2), x0 = std::round(overlay->screenWidth() / 2 - kWidth / 2);
+			const float y1 = kTop + kLine * float(messages.size()) + 1;
+			overlay->rect(x0, kTop, x0 + kWidth, y1, { 0, 0, 0 }, 0.25f, 0);
+			float y = kTop;
+			for (const auto& [text, colour] : messages)
 			{
-				overlay->richText(text, cx, y, size, false, { 0.93f, 0.93f, 0.9f }, alpha, Overlay::Align::Center);
-				y += line;
+				const float h = overlay->richHeight(text, 4096, size, false), ty = std::round(y + 1 + (kLine - h) / 2);
+				overlay->rect(x0 + kBullet, y + kLine / 2, x0 + kBullet + 2, y + kLine / 2 + 2, { 0.85f, 0.85f, 0.85f }, 1, 0);
+				overlay->richText(text, x0 + kText, ty, size, false, colour, 1, Overlay::Align::Left);
+				y += kLine;
 			}
 		}
 
@@ -2546,11 +2554,11 @@ namespace oc4::render
 		c.x = p.first, c.y = p.second, c.right = right, c.onFigure = figure.has_value();
 		return c;
 	}
-	void MapWindow::setMessages(std::vector<std::pair<std::string, float>> messages)
+	void MapWindow::setMessages(const std::vector<Message>& messages)
 	{
 		m->messages.clear();
-		for (auto& [text, alpha] : messages)
-			m->messages.push_back({ widen(text), alpha });
+		for (const Message& message : messages)
+			m->messages.push_back({ widen(message.text), message.color });
 	}
 	void MapWindow::setPopup(const PopupView* popup) { m->popup.set(popup); }
 	std::optional<MapWindow::PopupAnswer> MapWindow::takePopupAnswer() { return m->popup.takeAnswer(); }

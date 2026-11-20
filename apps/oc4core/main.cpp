@@ -541,11 +541,11 @@ namespace
 			const auto look = window.look();
 			const float closeness = std::clamp((cameraTop - look.distance) / (cameraTop - cameraNearest), 0.0f, 1.0f);
 			sounds.update({ look.x, look.y, look.distance, closeness }, era);
-			std::vector<std::pair<std::string, float>> lines;
+			std::vector<render::MapWindow::Message> lines;
 			// (none over a talk: the leader's face is where they are; the turn log keeps them)
 			if (!utility.diplomacy().active())
 				for (const auto& m : ui.shownMessages())
-					lines.push_back({ host::gameMarkup(m.text.c_str()), m.alpha });
+					lines.push_back({ host::gameMarkup(m.text.c_str()), { m.color.r, m.color.g, m.color.b } });
 			window.setMessages(std::move(lines));
 			// (and what the game's controls show of the map)
 			window.setLayers({ ui.showYields, utility.engine().resourceLayer, utility.engine().unitLayer, ui.bareMap, utility.engine().grid });

@@ -133,8 +133,13 @@ namespace oc4::render
 		// Shown in the lower left corner (the selected unit), lines.
 		void setInfo(const std::string& text);
 		// The game's messages to the player, at the top in the middle as the original shows them:
-		// lines with the screens' markup (UTF-8), oldest first, each with its opacity.
-		void setMessages(std::vector<std::pair<std::string, float>> messages);
+		// lines with the screens' markup (UTF-8), newest first, each in its colour.
+		struct Message
+		{
+			std::string text;
+			Color color{ 1, 1, 1 };
+		};
+		void setMessages(const std::vector<Message>& messages);
 
 		// A popup to answer (the game's own: what to build, what to research, ...), over the
 		// map; while it is up, clicks and keys go to it.
