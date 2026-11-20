@@ -503,6 +503,10 @@ namespace
 		for (const FAStarNode* n = gDLL->getFAStarIFace()->GetLastNode(finder); n; n = n->m_pParent)
 			way.points.push_back({ n->m_iX, n->m_iY, n->m_iData2 });
 		std::ranges::reverse(way.points);
+		// (an enemy the units see there: the move ends in an attack, its ring red; a worker's road
+		// there, Route To: its rings green)
+		way.attack = GC.getMap().plot(destX, destY)->isVisibleEnemyUnit(head->getOwner());
+		way.route = ui.getInterfaceMode() == INTERFACEMODE_ROUTE_TO;
 		return way;
 	}
 
@@ -711,6 +715,7 @@ namespace
 		std::vector<int> actionIds; // the action of each button the window shows
 		std::optional<std::pair<int, int>> pathShown; // where the way the window shows leads
 		std::pair<const void*, int> pathFrom{};        // (the unit it starts from and its plot: the gamepad's plot cursor shows it all the while)
+		int pathFoundIn = NO_INTERFACEMODE;            // (the interface mode it was found in: Route To's rings are green)
 		std::tuple<const void*, const void*, int, int> coloredFor{}; // what was selected when the plots were last coloured
 		uint64_t marksShown = ~0ull; // the marks the window has
 		uint64_t globeShown = 0;      // ... and the globe's state it shows (engine.globeVersion)
@@ -1373,10 +1378,11 @@ namespace
 			// original does. (none in the WorldBuilder, where the right button takes away what is on a plot)
 			const bool playing = player.isTurnActive() && !ui.worldBuilder();
 			window.setGoingTo(playing && ui.getInterfaceMode() == INTERFACEMODE_GO_TO && pathHead && pathHead->getOwner() == me);
-			if (const auto target = playing ? window.pathTarget() : std::nullopt; target != pathShown || (target && from != pathFrom))
+			if (const auto target = playing ? window.pathTarget() : std::nullopt; target != pathShown || (target && (from != pathFrom || ui.getInterfaceMode() != pathFoundIn)))
 			{
 				pathShown = target;
 				pathFrom = from;
+				pathFoundIn = ui.getInterfaceMode();
 				ui.setGotoPlot(target ? GC.getMap().plot(target->first, target->second) : nullptr);
 				window.setPath(target ? findPath(ui, *target) : render::MapWindow::PathView{});
 			}

@@ -1867,49 +1867,136 @@ namespace oc4::render
 				}
 		}
 
-		// The way the right button shows: from plot to plot on the ground, the number of turns
-		// where each turn's move ends and at its end; a red circle alone where they cannot go.
+		// The way the right button shows, as the original engine draws it (measured in Wine at
+		// 1600 x 900, backlog #47): white dots on the ground from the units to the plot, sliding the
+		// way they go; at each turn's end a ring laid on the ground, turning, with the number of
+		// turns over it and an arrow along the way on. The last ring red for an attack; a red ring
+		// alone where they cannot go; a green ring without a number at the end of a worker's road (Route To).
 		void drawPath()
 		{
 			if ((!pathing && !goingTo && !padShowsPath()) || path.points.empty())
 				return;
+			// (sizes in plots; the art is the original's: Art/Units/Selection Effect and its number font)
+			constexpr float kRing = 0.66f, kArrow = 0.13f, kArrowOut = 0.40f, kDot = 0.09f, kDotStep = 0.2f, kDotSpeed = 0.1f;
+			constexpr float kDigit = 0.185f; // the digits' height
+			constexpr float kSpin = 0.785f;  // the ring's turn, radians a second (clockwise from above)
+			const ButtonArt::Icon* ring = art.icon("Art/Units/Selection Effect/GroundSelectionWaypoint.dds");
+			const ButtonArt::Icon* arrow = art.icon("Art/Units/Selection Effect/GroundSelectionWaypointArrow.dds");
+			const ButtonArt::Icon* dot = art.icon("Art/Units/Selection Effect/CircleDot.dds");
+			const ButtonArt::Icon* digits = art.icon("res/Fonts/NumberFont-Sylfaen64px.tga");
 			const XMMATRIX vp = viewProjection();
-			const auto toScreen = [&](const MapWindow::PathView::Point& p, float& sx, float& sy) {
-				float wx = (float(p.x) + 0.5f) * plot(), wy = (float(p.y) + 0.5f) * plot();
-				// (on a wrapping map, the copy of the plot nearest the camera)
-				if (const Vec3 size = view->worldSize(); view->map().wrapX && size.x > 0)
-					while (std::abs(wx - camera.target.x) > size.x / 2)
-						wx += wx < camera.target.x ? size.x : -size.x;
+			const float size = plot();
+			const auto project = [&](float wx, float wy, float wz, float& sx, float& sy) {
 				XMFLOAT4 c;
-				XMStoreFloat4(&c, XMVector4Transform(XMVectorSet(wx, wy, view->groundHeight(wx, wy) + 2, 1), vp));
+				XMStoreFloat4(&c, XMVector4Transform(XMVectorSet(wx, wy, wz, 1), vp));
 				if (c.w <= 0)
 					return false;
 				sx = (c.x / c.w * 0.5f + 0.5f) * overlay->screenWidth();
 				sy = (0.5f - c.y / c.w * 0.5f) * overlay->screenHeight();
 				return true;
 			};
-			const Color way = path.reachable ? Color{ 0.95f, 0.95f, 0.85f } : Color{ 1, 0.3f, 0.25f };
-			std::vector<std::pair<float, float>> at(path.points.size());
-			std::vector<bool> shown(path.points.size());
-			for (size_t i = 0; i < path.points.size(); ++i)
-				shown[i] = toScreen(path.points[i], at[i].first, at[i].second);
-			// (no way there: only a red circle where it would lead, as the original)
-			for (size_t i = 1; path.reachable && i < at.size(); ++i)
-				if (shown[i - 1] && shown[i])
-				{
-					overlay->line(at[i - 1].first, at[i - 1].second, at[i].first, at[i].second, { 0, 0, 0 }, 0.6f, 5);
-					overlay->line(at[i - 1].first, at[i - 1].second, at[i].first, at[i].second, way, 0.95f, 2.5f);
-				}
+			// The plots' centres in the world, each beside the one before (on a wrapping map, the
+			// way across its edge; the first the copy nearest the camera).
+			const Vec3 world = view->worldSize();
+			const bool wrap = view->map().wrapX && world.x > 0;
+			std::vector<std::array<float, 2>> at(path.points.size());
+			for (size_t i = 0; i < at.size(); ++i)
+			{
+				float wx = (float(path.points[i].x) + 0.5f) * size;
+				const float from = i == 0 ? camera.target.x : at[i - 1][0];
+				while (wrap && std::abs(wx - from) > world.x / 2)
+					wx += wx < from ? world.x : -world.x;
+				at[i] = { wx, (float(path.points[i].y) + 0.5f) * size };
+			}
+			// A picture laid flat on the ground around (x, y), `side` plots wide, turned `angle`
+			// radians (anticlockwise from above; its top to the north at 0), times `tint`.
+			const auto lay = [&](const ButtonArt::Icon* ic, float x, float y, float side, float angle, Color tint) {
+				if (!ic)
+					return;
+				constexpr int n = 4;
+				const float half = side * size / 2, c = std::cos(angle), s = std::sin(angle);
+				std::vector<std::array<float, 2>> points;
+				points.reserve((n + 1) * (n + 1));
+				for (int j = 0; j <= n; ++j)
+					for (int i = 0; i <= n; ++i)
+					{
+						const float u = (float(i) / n * 2 - 1) * half, v = (1 - float(j) / n * 2) * half;
+						const float wx = x + u * c - v * s, wy = y + u * s + v * c;
+						float px = 0, py = 0;
+						if (!project(wx, wy, view->groundHeight(wx, wy) + 2, px, py))
+							return;
+						points.push_back({ px, py });
+					}
+				overlay->imageMesh(ic->key, ic->bgra, ic->width, ic->height, points, n, 0, 0, float(ic->width), float(ic->height), tint);
+			};
+			const Color white{ 1, 1, 1 }, red{ 1, 0, 0 }, green{ 0, 1, 0 };
+			const float spin = float(-std::fmod(clock * kSpin, 2 * std::numbers::pi));
+			// (no way there: a red ring alone where it would lead, its arrow to the north)
+			if (!path.reachable)
+			{
+				const auto& t = at.back();
+				lay(ring, t[0], t[1], kRing, spin, red);
+				lay(arrow, t[0], t[1] + kArrowOut * size, kArrow, 0, red);
+				return;
+			}
+			// The dots, kDotStep apart along the way from the units' plot to the last, moving on.
+			std::vector<float> legs(at.size(), 0);
+			for (size_t i = 1; i < at.size(); ++i)
+				legs[i] = std::hypot(at[i][0] - at[i - 1][0], at[i][1] - at[i - 1][1]);
+			float length = 0;
+			for (float l : legs)
+				length += l;
+			size_t leg = 1;
+			float legStart = 0;
+			for (float d = std::fmod(float(clock) * kDotSpeed * size, kDotStep * size); at.size() > 1 && d <= length; d += kDotStep * size)
+			{
+				while (leg + 1 < at.size() && legStart + legs[leg] < d)
+					legStart += legs[leg++];
+				const float f = legs[leg] > 0 ? std::clamp((d - legStart) / legs[leg], 0.0f, 1.0f) : 0;
+				lay(dot, at[leg - 1][0] + (at[leg][0] - at[leg - 1][0]) * f, at[leg - 1][1] + (at[leg][1] - at[leg - 1][1]) * f, kDot, 0, white);
+			}
+			// The rings where each turn's move ends, with their arrows and numbers.
+			const Vec3 up = camera.up();
 			for (size_t i = 1; i < at.size(); ++i)
 			{
-				const bool last = i + 1 == at.size(), turnEnds = last || path.points[i + 1].turn != path.points[i].turn;
-				if (!shown[i] || !turnEnds)
+				const bool last = i + 1 == at.size();
+				// (Route To: the ring at its end alone)
+				if (!last && (path.route || path.points[i + 1].turn == path.points[i].turn))
 					continue;
-				const float r = last ? 11.0f : 9.0f;
-				overlay->ellipse(at[i].first, at[i].second, r, r, { 0.05f, 0.06f, 0.1f }, 0.85f, r * 2);
-				overlay->ellipse(at[i].first, at[i].second, r, r, way, 0.95f, 1.5f);
-				if (path.reachable)
-					overlay->text(std::to_wstring(path.points[i].turn), at[i].first, at[i].second - 8, 13, way, 1, true, Overlay::Align::Center);
+				const Color tint = path.route ? green : last && path.attack ? red : white;
+				const auto& c = at[i];
+				lay(ring, c[0], c[1], kRing, spin, tint);
+				// (the arrow along the way on from here; at the end along the way there)
+				const auto& a = last ? at[i - 1] : at[i];
+				const auto& b = last ? at[i] : at[i + 1];
+				const float angle = std::atan2(b[1] - a[1], b[0] - a[0]);
+				lay(arrow, c[0] + std::cos(angle) * kArrowOut * size, c[1] + std::sin(angle) * kArrowOut * size, kArrow,
+					angle - std::numbers::pi_v<float> / 2, tint);
+				if (path.route || !digits)
+					continue;
+				// The number upright to the screen, kDigit plots tall where it stands, in the
+				// original's number font (1-5 over 6-0, 64 pixels a row; each digit's ink measured).
+				static constexpr int kInk[10][2] = { { 173, 207 }, { 4, 28 }, { 33, 67 }, { 74, 107 }, { 113, 149 }, { 157, 190 }, { 4, 39 },
+					{ 48, 82 }, { 89, 123 }, { 131, 165 } };
+				constexpr float kTop = 3, kInkHeight = 55, kGap = 4;
+				const float z = view->groundHeight(c[0], c[1]) + 2, tall = kDigit * size;
+				float cx = 0, cy = 0, tx = 0, ty = 0;
+				if (!project(c[0], c[1], z, cx, cy) || !project(c[0] + up.x * tall, c[1] + up.y * tall, z + up.z * tall, tx, ty))
+					continue;
+				const float h = std::hypot(tx - cx, ty - cy), scale = h / kInkHeight;
+				const std::string number = std::to_string(path.points[i].turn);
+				float width = -kGap;
+				for (const char ch : number)
+					width += float(kInk[ch - '0'][1] - kInk[ch - '0'][0] + 1) + kGap;
+				float x = cx - width * scale / 2;
+				for (const char ch : number)
+				{
+					const int d = ch - '0';
+					const float w = float(kInk[d][1] - kInk[d][0] + 1), top = kTop + (d >= 1 && d <= 5 ? 0.0f : 64.0f);
+					overlay->imagePart(digits->key, digits->bgra, digits->width, digits->height, 1, x, cy - h / 2, x + w * scale, cy + h / 2,
+						float(kInk[d][0]), top, float(kInk[d][1] + 1), top + kInkHeight);
+					x += (w + kGap) * scale;
+				}
 			}
 		}
 

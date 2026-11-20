@@ -324,6 +324,8 @@ namespace oc4::render
 			};
 			std::vector<Point> points;
 			bool reachable = true;
+			bool attack = false; // the move ends in an attack: its last ring red
+			bool route = false;  // a worker's road there (Route To): green rings, no turns
 		};
 		void setPath(PathView path);
 		// An effect the game sets off there (MapView::triggerEffect).
