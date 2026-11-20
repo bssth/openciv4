@@ -299,7 +299,7 @@ float4 PSMain(PSIn i, bool front : SV_IsFrontFace) : SV_Target
 	c *= base;
 	if ((flags & 2) && !passes(alphaFunc, round(c.a * 255.0), alphaRef))
 		discard;
-	c.rgb *= fogAt(i.world.xy);
+	c.rgb *= fogAt(i.world.xy) * distanceFog(i.world);
 	if (flags & 1024)
 		c.a = 1; // (opaque on a picture on nothing: its texture's alpha is no coverage)
 	return c;
@@ -342,7 +342,7 @@ float4 PSOverlay(Out p) : SV_Target
 			XMFLOAT3 ambientLight;
 			float pad2;
 			XMFLOAT3 eyePos;
-			float pad3;
+			float fogDistance;
 			XMFLOAT4 groundGrid;
 			XMFLOAT4 fogGrid;
 			XMFLOAT4 globe;
@@ -1106,6 +1106,7 @@ float4 PSOverlay(Out p) : SV_Target
 		fc.lightColor = { 0.85f, 0.82f, 0.75f };
 		fc.ambientLight = { 0.45f, 0.47f, 0.52f };
 		fc.eyePos = { eye.x, eye.y, eye.z };
+		fc.fogDistance = camera.distance;
 		fc.globe = { m_globe[0], m_globe[1], m_globe[2], m_globe[3] };
 		fc.groundGrid = m_ground ? XMFLOAT4{ 1.0f / m_groundCell, float(m_groundColumns), float(m_groundRows), m_groundWrap } : XMFLOAT4{ 0, 0, 0, 0 };
 		fc.fogGrid = m_fog ? XMFLOAT4{ m_fogPlot, float(m_fogColumns), float(m_fogRows), float(m_fogWrap) } : XMFLOAT4{ 0, 0, 0, 0 };
@@ -1185,6 +1186,19 @@ float4 PSOverlay(Out p) : SV_Target
 		d.material = material;
 		d.vertices = std::move(vertices);
 		m_particleDraws.push_back(std::move(d));
+	}
+
+	void Renderer::drawGroundBlended()
+	{
+		std::vector<Deferred> ground;
+		std::erase_if(m_deferred, [&](const Deferred& d) {
+			if (d.onGround)
+				ground.push_back(d);
+			return d.onGround;
+		});
+		std::ranges::stable_sort(ground, std::greater<>(), &Deferred::distance);
+		for (const auto& d : ground)
+			drawMesh(*d.mesh, m_deferredMaterials[d.material], m_deferredWorlds[d.world], d.teamColor, d.onGround);
 	}
 
 	void Renderer::endFrame()
