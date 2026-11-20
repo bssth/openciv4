@@ -416,6 +416,7 @@ float4 PSOverlay(Out p) : SV_Target
 			case TextureFormat::BC2: return SDL_GPU_TEXTUREFORMAT_BC2_RGBA_UNORM;
 			case TextureFormat::BC3: return SDL_GPU_TEXTUREFORMAT_BC3_RGBA_UNORM;
 			case TextureFormat::R8: return SDL_GPU_TEXTUREFORMAT_R8_UNORM;
+			case TextureFormat::RG8: return SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
 			case TextureFormat::R32Float: return SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
 			case TextureFormat::RGBA16: return SDL_GPU_TEXTUREFORMAT_R16G16B16A16_UNORM;
 			}

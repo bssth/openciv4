@@ -47,7 +47,7 @@ namespace oc4::render
 	enum class TextureFormat : uint8_t
 	{
 		// RGBA16 is unorm: SDL GPU cannot sample integer formats, so shaders read whole values as round(v * 65535).
-		BGRA8, BC1, BC2, BC3, R8, R32Float, RGBA16
+		BGRA8, BC1, BC2, BC3, R8, RG8, R32Float, RGBA16
 	};
 
 	// A texture (2D or an array of them) on the GPU, released with its last owner.
