@@ -1929,6 +1929,82 @@ float4 PSTerrain(PSIn i) : SV_Target
 			return inst;
 		}
 
+		// Ice (the only half-tiling art): its slabs stand 9 to 17.5 units over their origin (16
+		// at most for nearly all their rims). On the sea they stand on its floor. The original
+		// lays the same pieces on land, whose ground it raises 15 units over the water (flat land
+		// is 64 in its height maps, the water iWaterHeight 49, fZScale 1) and keeps there to near
+		// the shore, so only their highest bits come through: small white patches, not a slab
+		// over the plot. This terrain's land is lower and slopes to the sea over half a plot, so
+		// over land the ice lies that much under the ground under each of its points.
+		static constexpr float kOriginalLandOverWater = 15; // world units
+
+		// The share of land at a point: its plot's, blended with the next plot's over the last
+		// fifth of a plot to their edge.
+		float landShare(float wx, float wy) const
+		{
+			const float cx = wx / S() - 0.5f, cy = wy / S() - 0.5f;
+			const int ix = int(std::floor(cx)), iy = int(std::floor(cy));
+			const auto edge = [](float t) { return smoother(std::clamp((t - 0.5f) / 0.4f + 0.5f, 0.0f, 1.0f)); };
+			const float fx = edge(cx - float(ix)), fy = edge(cy - float(iy));
+			const auto land = [&](int x, int y) {
+				const PlotView* p = map.plot(x, y);
+				return p && !p->water ? 1.0f : 0.0f;
+			};
+			const float a = land(ix, iy) + (land(ix + 1, iy) - land(ix, iy)) * fx;
+			const float b = land(ix, iy + 1) + (land(ix + 1, iy + 1) - land(ix, iy + 1)) * fx;
+			return a + (b - a) * fy;
+		}
+
+		// A piece of ice placed at `place` (on the ground under its corner), each point over land
+		// lowered to lie the original's land height under the ground there (a copy, shared by the
+		// pieces lowered alike), or the piece itself where it reaches no land.
+		LoadedModel* iceOverLand(LoadedModel& lm, const std::string& nif, const Affine& place)
+		{
+			scene::Model sunk = lm.model;
+			std::string key = "ice-over-land|" + makeAssetKey(nif);
+			bool reaches = false;
+			for (auto& item : sunk.items)
+			{
+				if (item.node < 0 || item.skinned)
+					continue;
+				const Affine toWorld = place * lm.bindWorld[size_t(item.node)];
+				const Mat33 back = transpose(toWorld.rotation);
+				for (auto& v : item.vertices)
+				{
+					const Vec3 w = toWorld.point(v.position);
+					const float share = landShare(w.x, w.y);
+					const float drop = share > 0 ? share * (place.translation.z - (ground(w.x, w.y) - kOriginalLandOverWater)) : 0;
+					const int16_t step = int16_t(std::lround(drop * 16));
+					key.append(reinterpret_cast<const char*>(&step), sizeof step);
+					if (step == 0)
+						continue;
+					reaches = true;
+					v.position = v.position + back * Vec3{ 0, 0, -drop / toWorld.scale };
+				}
+			}
+			if (!reaches)
+				return &lm;
+			auto& slot = models[key];
+			if (!slot)
+			{
+				slot = std::make_unique<LoadedModel>();
+				LoadedModel& copy = *slot;
+				if (const auto loc = assets.locate(makeAssetKey(nif)))
+				{
+					copy.model = std::move(sunk);
+					copy.gpu = renderer.upload(copy.model, assets, *loc);
+					copy.bindLocals = lm.bindLocals;
+					copy.bindWorld = lm.bindWorld;
+					copy.bindVisible = lm.bindVisible;
+					copy.bounds = lm.bounds;
+					copy.spread = lm.spread;
+					copy.top = lm.top;
+					copy.ok = true;
+				}
+			}
+			return slot->ok ? slot.get() : &lm;
+		}
+
 		void buildFeatures()
 		{
 			features.clear();
@@ -1950,7 +2026,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 				if (LoadedModel* lm = model(nif, {}))
 				{
 					at.z = ground(at.x, at.y);
-					features.push_back(placeStatic(lm, placement(at, -float(rotation) * std::numbers::pi_v<float> / 2, art.scale)));
+					const Affine place = placement(at, -float(rotation) * std::numbers::pi_v<float> / 2, art.scale);
+					features.push_back(placeStatic(art.tiling == FeatureArt::Tiling::HalfTiling ? iceOverLand(*lm, nif, place) : lm, place));
 				}
 			};
 
