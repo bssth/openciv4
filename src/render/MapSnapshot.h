@@ -273,6 +273,13 @@ namespace oc4::render
 		// how big the world is nor where in it the team is.
 		bool minimapCentered = true;
 		float plotSize = 120, hillScale = 0.13f, peakScale = 0.44f;
+		// The water plane (CIV4WaterPlaneInfos): its texture, the texture's scale (texture units a
+		// world unit) and scroll rates (texture units a frame, at 30 a second), its alpha over the sea floor.
+		struct WaterPlane
+		{
+			std::string texture;
+			float scale = 0.0020822511f, rateU = 0.000150003f, rateV = 0.000029169f, alpha = 0.5f;
+		} water;
 		// The camera (GlobalDefines, CAMERA_*): its field of view across the screen (FIELD_OF_VIEW,
 		// which BUG's slider sets), its distances from the ground it looks at, and the pitches it
 		// tilts between, in degrees below the horizon: the lower one at the closest zoom, the upper

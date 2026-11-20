@@ -13,6 +13,7 @@
 #include "CvPopupInfo.h"
 #include "CvGlobals.h"
 #include "CvInfos.h"
+#include "CvInfoWater.h"
 #include "CvMap.h"
 #include "CvPlayerAI.h"
 #include "CvPlot.h"
@@ -181,6 +182,15 @@ namespace oc4::host
 			for (int mask = 1; mask < 16; ++mask)
 				for (const auto& [slot, rotation] : info->getBlendList(mask))
 					art.slots[size_t(mask)].push_back({ slot, rotation });
+		}
+		if (GC.getNumWaterPlaneInfos() > 0)
+		{
+			CvWaterPlaneInfo& info = GC.getWaterPlaneInfo(0);
+			s.water.texture = text(info.getBaseTexture());
+			s.water.scale = info.getTextureScaling();
+			s.water.rateU = info.getTextureScrollRateU();
+			s.water.rateV = info.getTextureScrollRateV();
+			s.water.alpha = info.getMaterialAlpha();
 		}
 		s.hillTerrain = GC.getInfoTypeForString("TERRAIN_HILL", true);
 		s.peakTerrain = GC.getInfoTypeForString("TERRAIN_PEAK", true);

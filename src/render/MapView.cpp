@@ -34,8 +34,9 @@ namespace oc4::render
 		constexpr int kSub = 8;          // terrain quads per plot side
 		constexpr size_t kMaxPlayers = 256;
 		constexpr uint16_t kNoOverlay = 0xFFFF;
-		constexpr int kBorderRes = 16;       // culture border texels per plot side
+		constexpr int kBorderRes = 32;       // culture border texels per plot side
 		constexpr float kBorderReach = 0.75f; // plots: the border texture's distances go this far
+		constexpr float kBorderCorner = 0.11f; // plots: the ground within this of a texel decides its owner (rounds the borders' corners)
 
 		// DirectionTypes bits, as in the game's connection masks.
 		constexpr int kNorthEast = 1 << 1, kSouthEast = 1 << 3, kSouthWest = 1 << 5, kNorthWest = 1 << 7;
@@ -62,7 +63,7 @@ Texture2DArray atlas : register(t1, space2);     // 32 tiles per terrain
 Texture2DArray decals : register(t2, space2);    // features painted on the ground (flood plains)
 Texture2DArray details : register(t3, space2);   // the terrains' detail textures (grey around one half)
 Texture2D cells : register(t4, space2);          // 16-bit unorm, two texels a tile: its layers lowest first (atlas slice | rotation << 14), 0xFFFF none
-Texture2D borders : register(t5, space2);        // 16-bit unorm, kBorderRes texels a plot side: owner + 1, distance to another owner's ground / kBorderReach
+Texture2D borders : register(t5, space2);        // 8-bit unorm, kBorderRes texels a plot side: owner + 1, distance to the edge of its ground / kBorderReach
 SamplerState atlasSampler : register(s1, space2);
 SamplerState decalSampler : register(s2, space2);
 SamplerState detailSampler : register(s3, space2);
@@ -78,12 +79,14 @@ struct PSIn
 	float4 pos : SV_Position;
 	float3 world : TEXCOORD0;
 	float3 nrm : NORMAL;
+	float3 drawn : TEXCOORD1; // where it is drawn (the copy, bent round the globe): the distance fog's
 };
 
 PSIn VSTerrain(VSIn i)
 {
 	PSIn o;
-	o.pos = mul(float4(globeBend(i.pos + worldOffset), 1), viewProj);
+	o.drawn = globeBend(i.pos + worldOffset);
+	o.pos = mul(float4(o.drawn, 1), viewProj);
 	o.world = i.pos;
 	o.nrm = i.nrm;
 	return o;
@@ -107,7 +110,7 @@ uint4 borderAt(int2 t, int2 size)
 	int2 w = t - int2(fs * floor((float2(t) + 0.5) / fs));
 	t.x = wrapX ? w.x : clamp(t.x, 0, size.x - 1);
 	t.y = wrapY ? w.y : clamp(t.y, 0, size.y - 1);
-	return uint4(round(borders.Load(int3(t, 0)) * 65535.0));
+	return uint4(round(borders.Load(int3(t, 0)) * 255.0));
 }
 
 // An atlas slice turned by quarter turns clockwise.
@@ -159,6 +162,70 @@ float valueNoise(float2 p, float scale)
 }
 
 static const int2 kCorner[4] = { int2(0, 1), int2(1, 1), int2(1, 0), int2(0, 0) }; // top left, top right, bottom right, bottom left
+
+// The culture borders: the owner's colour along the edge of its ground, a line with a wash
+// towards the inside, as the original's border tiles (art/terrain/routes/rivers/
+// noriverborder*.dds): from the distance to another owner's ground, signed for the owner of the
+// texel the pixel is in and blended between texels. As colour and alpha to lay over the ground.
+float4 cultureBorder(float2 p, float2 pw)
+{
+	const float res = 32;      // kBorderRes
+	const float reach = 0.75;  // kBorderReach
+	int2 tsize = mapSize * int(res);
+	float2 t = p * res - 0.5;
+	int2 t0 = int2(floor(t));
+	float2 ft = t - t0;
+	// (the pixel is the ground of the owner, of the four texels round it, whose distance
+	// blended between them is inside its edge: the edge runs smoothly between the texels)
+	uint2 b[4];
+	[unroll] for (int k = 0; k < 4; ++k)
+		b[k] = borderAt(t0 + int2(k & 1, k >> 1), tsize).rg;
+	uint owner = 0;
+	float dist = 0; // plots
+	[unroll] for (int c = 0; c < 4; ++c)
+	{
+		float v[4];
+		[unroll] for (int k = 0; k < 4; ++k)
+		{
+			float d = b[k].y / 255.0 * reach;
+			v[k] = b[k].x == b[c].x ? d : -d;
+		}
+		float inside = lerp(lerp(v[0], v[1], ft.x), lerp(v[2], v[3], ft.x), ft.y);
+		if (inside > dist)
+		{
+			dist = inside;
+			owner = b[c].x;
+		}
+	}
+	if (owner == 0)
+		return 0;
+	float3 oc = playerColors[min(owner - 1, 255)].rgb;
+	float aa = max(max(pw.x, pw.y), 1e-5);
+	// (the tiles' alpha: 0.48 beside the line, falling evenly to nothing 0.48 of a plot in, on
+	// land and water alike; no noise in it, the mottle seen on land is the ground through it)
+	float wash = saturate(0.49 - dist);
+	float stroke = (1 - smoothstep(0.022 - aa * 0.5, 0.022 + aa * 0.5, dist)) * 0.95;
+	// (the wash, and the line over it, as one layer)
+	float a = 1 - (1 - wash) * (1 - stroke);
+	return float4((oc * wash * (1 - stroke) + oc * 0.85 * stroke) / max(a, 1e-5), a);
+}
+
+// What the active team knows of the ground at p, blended between plot centres: 0 where it has
+// not been, 0.55 where it does not see now, 1 where it does.
+float fogAt(float2 p)
+{
+	float2 c = p - 0.5;
+	int2 cell = int2(floor(c));
+	float2 w = smoothstep(0, 1, c - cell);
+	float2 known[4];
+	[unroll] for (int k = 0; k < 4; ++k)
+	{
+		uint a = plotAt(cell + kCorner[k]).a;
+		known[k] = float2((a & 4) ? 1 : 0, (a & 8) ? 1 : 0);
+	}
+	float2 k = lerp(lerp(known[3], known[2], w.x), lerp(known[0], known[1], w.x), w.y);
+	return k.x * lerp(0.55, 1, k.y);
+}
 
 float4 PSTerrain(PSIn i) : SV_Target
 {
@@ -242,48 +309,9 @@ float4 PSTerrain(PSIn i) : SV_Target
 	float ndl = saturate(dot(n, -lightDir));
 	color *= ambientLight * 1.25 + lightColor * ndl * 0.7;
 
-	// Water by its depth over the ground, so that shores have no edge: tint and sun glint.
-	float depth = saturate((waterZ - i.world.z) / (0.04 * plotSize));
-	if (depth > 0)
-	{
-		float3 v = normalize(eyePos - (i.world + worldOffset));
-		float glint = pow(saturate(dot(reflect(lightDir, float3(0, 0, 1)), v)), 160);
-		color = lerp(color, float3(0.08, 0.20, 0.28), depth * 0.35) + glint * 0.18 * depth;
-	}
-
 	int2 plot = int2(floor(p));
 	float2 g = p - plot;
 	float2 pw = fwidth(p);
-	if (showBorders)
-	{
-		// The owner's colour along the edge of its ground, a line with a glow towards the
-		// inside, as the game's borders: from the distance to another owner's ground, signed
-		// for the owner of the texel the pixel is in and blended between texels.
-		const float res = 16;      // kBorderRes
-		const float reach = 0.75;  // kBorderReach
-		int2 tsize = mapSize * int(res);
-		float2 t = p * res - 0.5;
-		int2 t0 = int2(floor(t));
-		float2 ft = t - t0;
-		uint owner = borderAt(int2(floor(p * res)), tsize).r;
-		if (owner != 0)
-		{
-			float v[4];
-			[unroll] for (int k = 0; k < 4; ++k)
-			{
-				uint2 b = borderAt(t0 + int2(k & 1, k >> 1), tsize).rg;
-				float dist = b.y / 65535.0 * reach;
-				v[k] = b.x == owner ? dist : -dist;
-			}
-			float dist = max(lerp(lerp(v[0], v[1], ft.x), lerp(v[2], v[3], ft.x), ft.y), 0); // plots
-			float3 oc = playerColors[min(owner - 1, 255)].rgb;
-			float aa = max(max(pw.x, pw.y), 1e-5);
-			float glow = 1 - saturate(dist / 0.45);
-			float stroke = 1 - smoothstep(0.022 - aa * 0.5, 0.022 + aa * 0.5, dist);
-			color = lerp(color, oc, glow * sqrt(glow) * 0.6);
-			color = lerp(color, oc * 0.85, stroke * 0.95);
-		}
-	}
 	if (showGrid)
 	{
 		float2 e = min(g, 1 - g) / max(pw, 1e-5);
@@ -297,7 +325,32 @@ float4 PSTerrain(PSIn i) : SV_Target
 		float2 k = lerp(lerp(known[3], known[2], w.x), lerp(known[0], known[1], w.x), w.y);
 		color *= k.x * lerp(0.55, 1, k.y);
 	}
-	return float4(color, 1);
+	return float4(color * distanceFog(i.drawn), 1);
+}
+
+// The culture borders as their own layer, as the original's (CultureBorderShader.fx): drawn
+// after the water, over it at full strength (the water does not dim them), on the ground and
+// at the water's level where the ground is under it; not lit, darkened by the fog of war.
+PSIn VSBorder(VSIn i)
+{
+	PSIn o;
+	// (a hair above the ground, so that it is never behind it)
+	float3 pos = float3(i.pos.xy, max(i.pos.z, waterZ) + 0.002 * plotSize);
+	o.drawn = globeBend(pos + worldOffset);
+	o.pos = mul(float4(o.drawn, 1), viewProj);
+	o.world = pos;
+	o.nrm = i.nrm;
+	return o;
+}
+
+float4 PSBorder(PSIn i) : SV_Target
+{
+	float2 p = i.world.xy / plotSize;
+	float4 b = cultureBorder(p, fwidth(p));
+	clip(b.a - 1.0 / 255);
+	if (showFog)
+		b.rgb *= fogAt(p);
+	return float4(b.rgb * distanceFog(i.drawn), b.a);
 }
 )hlsl";
 
@@ -316,6 +369,150 @@ float4 PSTerrain(PSIn i) : SV_Target
 			float waterZ;
 			uint32_t showFog, pad[3];
 			float playerColors[kMaxPlayers][4];
+		};
+
+		// The water plane, as the original's Water.fx draws it: over the ground (the sea floor is
+		// the coast and ocean terrains' own tiles), one texture (CIV4WaterPlaneInfos: Water.dds)
+		// twice, scrolling, half and half; their alphas multiplied are added as sparkles; the whole
+		// laid over the floor at the plane's material alpha, faded in from the shore. Unlit: no
+		// reflections, no sun glint. Darkened by the fog of war as the ground is.
+		constexpr char kWaterHlsl[] = R"hlsl(
+cbuffer Water : register(b1, UNIFORMS)
+{
+	float4 waterUv1;   // u = dot(world.xy, xy), v = dot(world.xy, zw), world units
+	float4 waterUv2;
+	float4 waterScroll; // texture offsets: xy the first, zw the second
+	float3 waterOffset; // the copy of the map drawn (wrapping)
+	float waterAlpha;   // the plane's material alpha
+	int2 waterMapSize;
+	int waterWrapX;
+	int waterWrapY;
+	float waterPlotSize;
+	uint waterShowFog;
+	float waterShore;   // world units: how deep the ground is where the water's shore is
+	float waterShoreWidth; // world units of depth over which it fades in there
+};
+
+static const float kWaterRedOffset = 14.0 / 255;
+
+Texture2D waterTex : register(t0, space2);   // the water plane's base texture
+Texture2D waterPlots : register(t1, space2); // as the terrain's plots: flags in alpha (4 revealed, 8 visible)
+SamplerState waterSampler : register(s0, space2);
+
+struct WaterIn
+{
+	float3 pos : TEXCOORD0;   // world, at the water's level
+	float depth : TEXCOORD1;  // of the land/water levels under it, world units
+	float bed : TEXCOORD2;    // how far a river's bed is carved below those levels there, world units
+};
+
+struct WaterOut
+{
+	float4 pos : SV_Position;
+	float2 uv1 : TEXCOORD0;
+	float2 uv2 : TEXCOORD1;
+	float2 plot : TEXCOORD2;
+	float depth : TEXCOORD3;
+	float bed : TEXCOORD4;
+	float3 drawn : TEXCOORD5; // (the distance fog's)
+};
+
+WaterOut VSWater(WaterIn i)
+{
+	WaterOut o;
+	o.drawn = globeBend(i.pos + waterOffset);
+	o.pos = mul(float4(o.drawn, 1), viewProj);
+	o.uv1 = float2(dot(i.pos.xy, waterUv1.xy), dot(i.pos.xy, waterUv1.zw)) + waterScroll.xy;
+	o.uv2 = float2(dot(i.pos.xy, waterUv2.xy), dot(i.pos.xy, waterUv2.zw)) + waterScroll.zw;
+	o.plot = i.pos.xy / waterPlotSize;
+	o.depth = i.depth;
+	o.bed = i.bed;
+	return o;
+}
+
+int2 waterWrap(int2 p)
+{
+	float2 size = float2(waterMapSize);
+	int2 w = p - int2(size * floor((float2(p) + 0.5) / size));
+	p.x = waterWrapX ? w.x : clamp(p.x, 0, waterMapSize.x - 1);
+	p.y = waterWrapY ? w.y : clamp(p.y, 0, waterMapSize.y - 1);
+	return p;
+}
+
+float2 waterKnown(int2 p)
+{
+	uint a = uint(round(waterPlots.Load(int3(waterWrap(p), 0)).a * 65535.0));
+	return float2((a & 4) ? 1 : 0, (a & 8) ? 1 : 0);
+}
+
+// Smooth noise in [0, 1], `scale` cells a plot, without a seam where the map wraps.
+float waterNoise(float2 p, float scale)
+{
+	float2 q = p * scale;
+	float2 c = floor(q), f = q - c;
+	f = f * f * (3 - 2 * f);
+	float2 period = float2(waterMapSize) * scale;
+	float v[4];
+	[unroll] for (int k = 0; k < 4; ++k)
+	{
+		float2 at = c + float2(k & 1, k >> 1);
+		if (waterWrapX)
+			at.x -= period.x * floor(at.x / period.x);
+		if (waterWrapY)
+			at.y -= period.y * floor(at.y / period.y);
+		uint h = uint(at.x) * 0x9E3779B1u ^ uint(at.y) * 0x85EBCA77u;
+		h ^= h >> 15;
+		h *= 0x2C1B3C6Du;
+		h ^= h >> 12;
+		v[k] = float(h & 0xFFFF) / 65535.0;
+	}
+	return lerp(lerp(v[0], v[1], f.x), lerp(v[2], v[3], f.x), f.y);
+}
+
+float4 PSWater(WaterOut i) : SV_Target
+{
+	// The shore: where the ground is that deep, a little in or out along it (the original's coast
+	// fade is a ragged edge), the water ending over a short way.
+	float wobble = 0.65 * waterNoise(i.plot, 1.5) + 0.35 * waterNoise(i.plot, 4) - 0.5;
+	// (in a river's mouth the sea comes in gradually, over the river's own water)
+	float mouth = saturate(i.bed / (0.25 * waterShore)) * waterShore;
+	float coast = saturate((i.depth - waterShore * (1 + 0.2 * wobble) + mouth) / (waterShoreWidth + mouth));
+	clip(coast - 1.0 / 255);
+	float4 a = waterTex.Sample(waterSampler, i.uv1);
+	float4 b = waterTex.Sample(waterSampler, i.uv2);
+	// (less red than Water.dds gives: measured in the original over open sea, coast and lakes, the
+	// water 14/255 less red at its 0.5 alpha, its sparkles as white as here; cause not found)
+	float3 color = lerp(a.rgb, b.rgb, 0.5) - float3(kWaterRedOffset, 0, 0) + a.a * b.a * coast;
+	if (waterShowFog)
+	{
+		// (as the terrain: blended between plot centres, black where never seen, dimmed where not seen now)
+		float2 c = i.plot - 0.5;
+		int2 cell = int2(floor(c));
+		float2 w = smoothstep(0, 1, c - cell);
+		float2 k = lerp(lerp(waterKnown(cell), waterKnown(cell + int2(1, 0)), w.x),
+			lerp(waterKnown(cell + int2(0, 1)), waterKnown(cell + int2(1, 1)), w.x), w.y);
+		color *= k.x * lerp(0.55, 1, k.y);
+	}
+	// (D3D fogs a pixel before blending it: the water darkens over a floor darkened as much)
+	return float4(saturate(color) * distanceFog(i.drawn), waterAlpha * coast);
+}
+)hlsl";
+
+		struct WaterVertex
+		{
+			Vec3 position;
+			float depth, bed;
+		};
+
+		struct WaterConstants
+		{
+			float uv1[4], uv2[4], scroll[4];
+			float offset[3];
+			float alpha;
+			int32_t mapW, mapH, wrapX, wrapY;
+			float plotSize;
+			uint32_t showFog;
+			float shore, shoreWidth;
 		};
 
 		uint32_t mix(uint32_t h)
@@ -469,6 +666,13 @@ float4 PSTerrain(PSIn i) : SV_Target
 			SDL_ReleaseGPUShader(renderer.device(), terrainPS);
 			SDL_ReleaseGPUSampler(renderer.device(), sampler);
 			SDL_ReleaseGPUSampler(renderer.device(), detailWrap);
+			SDL_ReleaseGPUGraphicsPipeline(renderer.device(), waterPipeline);
+			SDL_ReleaseGPUShader(renderer.device(), waterVS);
+			SDL_ReleaseGPUShader(renderer.device(), waterPS);
+			SDL_ReleaseGPUSampler(renderer.device(), waterSampler);
+			SDL_ReleaseGPUGraphicsPipeline(renderer.device(), borderPipeline);
+			SDL_ReleaseGPUShader(renderer.device(), borderVS);
+			SDL_ReleaseGPUShader(renderer.device(), borderPS);
 		}
 
 		struct Instance
@@ -549,6 +753,14 @@ float4 PSTerrain(PSIn i) : SV_Target
 		std::vector<uint64_t> decorKey;  // per plot: improvement, bonus, route
 		std::shared_ptr<GpuBuffer> vb, ib;
 		uint32_t indexCount = 0;
+		// The water plane: over the tiles with water at a corner, at the water's level.
+		std::shared_ptr<GpuBuffer> waterVb, waterIb;
+		uint32_t waterIndexCount = 0;
+		std::shared_ptr<GpuImage> waterTex;
+		SDL_GPUShader* waterVS = nullptr;
+		SDL_GPUShader* waterPS = nullptr;
+		SDL_GPUGraphicsPipeline* waterPipeline = nullptr;
+		SDL_GPUSampler* waterSampler = nullptr;
 		std::shared_ptr<GpuImage> plotTex, cellTex, atlasTex, groundTex, decalTex, detailTex, borderTex;
 		// The culture borders: where the rivers' water is, kBorderRes texels a plot side, and the
 		// owners the border texture was last worked out for.
@@ -562,6 +774,9 @@ float4 PSTerrain(PSIn i) : SV_Target
 		SDL_GPUShader* terrainVS = nullptr;
 		SDL_GPUShader* terrainPS = nullptr;
 		SDL_GPUGraphicsPipeline* terrainPipeline = nullptr;
+		SDL_GPUGraphicsPipeline* borderPipeline = nullptr;
+		SDL_GPUShader* borderVS = nullptr;
+		SDL_GPUShader* borderPS = nullptr;
 		SDL_GPUSampler* sampler = nullptr;
 		SDL_GPUSampler* detailWrap = nullptr;
 
@@ -755,6 +970,47 @@ float4 PSTerrain(PSIn i) : SV_Target
 			detailWrap = SDL_CreateGPUSampler(dev, &sd);
 			if (!sampler || !detailWrap)
 				throw std::runtime_error(std::string("terrain samplers: ") + SDL_GetError());
+
+			// The water: blended over the ground at its alpha, not writing depth. (Water.fx writes it,
+			// but OpenCiv4's river beds dip below the water's level at the coast: the rivers' deltas
+			// would end in a hard edge where the sea starts instead of running out into it.) Drawn
+			// after the rivers' water (Renderer::drawGroundBlended), so a delta's water out at sea is
+			// seen through the sea's.
+			const std::string waterSource = std::string(kFrameConstantsHlsl) + kWaterHlsl;
+			waterVS = renderer.compile(waterSource, "water.hlsl", "VSWater", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
+			waterPS = renderer.compile(waterSource, "water.hlsl", "PSWater", SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 0, 2);
+			ci.vertex_shader = waterVS;
+			ci.fragment_shader = waterPS;
+			const SDL_GPUVertexBufferDescription wvbd{ 0, sizeof(WaterVertex), SDL_GPU_VERTEXINPUTRATE_VERTEX, 0 };
+			const SDL_GPUVertexAttribute wattributes[] = { { 0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(WaterVertex, position) },
+				{ 1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, offsetof(WaterVertex, depth) },
+				{ 2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, offsetof(WaterVertex, bed) } };
+			ci.vertex_input_state = { &wvbd, 1, wattributes, 3 };
+			target.blend_state.enable_blend = true;
+			target.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+			target.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+			target.blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+			target.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+			target.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+			target.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+			ci.depth_stencil_state.enable_depth_write = false;
+			if (!(waterPipeline = SDL_CreateGPUGraphicsPipeline(dev, &ci)))
+				throw std::runtime_error(std::string("water pipeline: ") + SDL_GetError());
+			// (Water.fx's sampler: linear, mipmapped, no anisotropy; the texture repeats)
+			sd.enable_anisotropy = false;
+			sd.max_anisotropy = 1;
+			if (!(waterSampler = SDL_CreateGPUSampler(dev, &sd)))
+				throw std::runtime_error(std::string("water sampler: ") + SDL_GetError());
+
+			// The culture borders: the ground's mesh again, after the water, blended over what is
+			// drawn (as the water: not writing depth).
+			borderVS = renderer.compile(source, "terrain.hlsl", "VSBorder", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
+			borderPS = renderer.compile(source, "terrain.hlsl", "PSBorder", SDL_GPU_SHADERSTAGE_FRAGMENT, 6, 0, 2);
+			ci.vertex_shader = borderVS;
+			ci.fragment_shader = borderPS;
+			ci.vertex_input_state = { &vbd, 1, attributes, 2 };
+			if (!(borderPipeline = SDL_CreateGPUGraphicsPipeline(dev, &ci)))
+				throw std::runtime_error(std::string("border pipeline: ") + SDL_GetError());
 		}
 
 		// ------------------------------------------------------------ art
@@ -852,6 +1108,50 @@ float4 PSTerrain(PSIn i) : SV_Target
 		}
 
 		// The terrains' detail textures, one array slice of 256 pixels each (grey without one).
+		// The water plane's texture (CIV4WaterPlaneInfos), with its mips: far away the sparkles in
+		// its alpha average out, as the original's do.
+		void buildWaterArt()
+		{
+			waterTex.reset();
+			const auto loc = map.water.texture.empty() ? std::nullopt : assets.locate(makeAssetKey(map.water.texture));
+			if (!loc)
+			{
+				if (!map.water.texture.empty())
+					problem(std::format("{}: not found", map.water.texture));
+				return;
+			}
+			try
+			{
+				const gfx::Image image = gfx::loadDds(assets.read(*loc));
+				uint32_t w = image.width, h = image.height;
+				std::vector<std::vector<uint8_t>> levels{ gfx::decodeBgra(image) };
+				while (w > 1 || h > 1)
+				{
+					const uint32_t nw = std::max(w / 2, 1u), nh = std::max(h / 2, 1u);
+					const auto& up = levels.back();
+					std::vector<uint8_t> down(size_t(nw) * nh * 4);
+					for (uint32_t y = 0; y < nh; ++y)
+						for (uint32_t x = 0; x < nw; ++x)
+							for (int c = 0; c < 4; ++c)
+							{
+								const uint32_t x0 = std::min(x * 2, w - 1), x1 = std::min(x * 2 + 1, w - 1);
+								const uint32_t y0 = std::min(y * 2, h - 1), y1 = std::min(y * 2 + 1, h - 1);
+								down[(size_t(y) * nw + x) * 4 + c] = uint8_t((up[(size_t(y0) * w + x0) * 4 + c] + up[(size_t(y0) * w + x1) * 4 + c] +
+									up[(size_t(y1) * w + x0) * 4 + c] + up[(size_t(y1) * w + x1) * 4 + c] + 2) / 4);
+							}
+					levels.push_back(std::move(down));
+					w = nw;
+					h = nh;
+				}
+				const std::vector<std::span<const uint8_t>> subresources(levels.begin(), levels.end());
+				waterTex = renderer.createTexture(image.width, image.height, 1, uint32_t(levels.size()), TextureFormat::BGRA8, subresources);
+			}
+			catch (const std::exception& e)
+			{
+				problem(std::format("{}: {}", map.water.texture, e.what()));
+			}
+		}
+
 		void buildDetails()
 		{
 			detailTex.reset();
@@ -1363,6 +1663,68 @@ float4 PSTerrain(PSIn i) : SV_Target
 			ib = renderer.createBuffer(SDL_GPU_BUFFERUSAGE_INDEX, indices.data(), uint32_t(indices.size() * 4));
 		}
 
+		// The water plane: a flat grid at the water's level over every tile (between four plot
+		// centres) with water at a corner, kSub quads a plot side as the ground (the globe view
+		// bends it); each vertex knows how deep the ground under it is, for the fade at the shore.
+		void buildWater()
+		{
+			waterVb.reset();
+			waterIb.reset();
+			waterIndexCount = 0;
+			const int W = map.width, H = map.height;
+			const float step = S() / kSub;
+			const auto water = [&](int x, int y) {
+				const PlotView* p = map.plot(x, y);
+				return p && p->water;
+			};
+			std::vector<WaterVertex> vertices;
+			std::vector<uint32_t> indices;
+			// (tiles from the south-west corner's plot centre: -1 .. W-1, the map's edge included)
+			for (int ty = -1; ty < H; ++ty)
+				for (int tx = -1; tx < W; ++tx)
+				{
+					if (!(water(tx, ty) || water(tx + 1, ty) || water(tx, ty + 1) || water(tx + 1, ty + 1)))
+						continue;
+					const float x0 = std::max((float(tx) + 0.5f) * S(), 0.0f), x1 = std::min((float(tx) + 1.5f) * S(), worldW());
+					const float y0 = std::max((float(ty) + 0.5f) * S(), 0.0f), y1 = std::min((float(ty) + 1.5f) * S(), worldH());
+					const int nx = std::max(1, int(std::lround((x1 - x0) / step))), ny = std::max(1, int(std::lround((y1 - y0) / step)));
+					const uint32_t first = uint32_t(vertices.size());
+					for (int j = 0; j <= ny; ++j)
+						for (int i = 0; i <= nx; ++i)
+						{
+							const float x = x0 + (x1 - x0) * float(i) / float(nx), y = y0 + (y1 - y0) * float(j) / float(ny);
+							const float level = levelHeight(x, y);
+							vertices.push_back({ { x, y, kWaterLevel }, kWaterLevel - level, std::max(level - terrainHeight(x, y), 0.0f) });
+						}
+					for (int j = 0; j < ny; ++j)
+						for (int i = 0; i < nx; ++i)
+						{
+							const uint32_t a = first + uint32_t(j * (nx + 1) + i), b = a + 1, c = b + uint32_t(nx + 1), d = a + uint32_t(nx + 1);
+							indices.insert(indices.end(), { a, b, c, a, c, d });
+						}
+				}
+			if (indices.empty())
+				return;
+			waterIndexCount = uint32_t(indices.size());
+			waterVb = renderer.createBuffer(SDL_GPU_BUFFERUSAGE_VERTEX, vertices.data(), uint32_t(vertices.size() * sizeof(WaterVertex)));
+			waterIb = renderer.createBuffer(SDL_GPU_BUFFERUSAGE_INDEX, indices.data(), uint32_t(indices.size() * 4));
+		}
+
+		static constexpr float kWaterLevel = 0; // world units: the ground's level between land (above) and water plots
+
+		// The land and water levels alone, blended between plot centres as the ground's are: how
+		// deep the sea is from the shore out (hills, river beds and the like left out: the ground
+		// there hides the water or is not sea).
+		float levelHeight(float wx, float wy) const
+		{
+			const float cx = wx / S() - 0.5f, cy = wy / S() - 0.5f;
+			const int ix = int(std::floor(cx)), iy = int(std::floor(cy));
+			const float fx = smoother(cx - float(ix)), fy = smoother(cy - float(iy));
+			const float b0 = baseLevel(ix, iy) + (baseLevel(ix + 1, iy) - baseLevel(ix, iy)) * fx;
+			const float b1 = baseLevel(ix, iy + 1) + (baseLevel(ix + 1, iy + 1) - baseLevel(ix, iy + 1)) * fx;
+			return b0 + (b1 - b0) * fy;
+		}
+
 		// How far the minimap is moved: by none once the team's map is centred, or with the fog of
 		// war off; until then, so that what the team has seen is in its middle (on an axis the map
 		// wraps on, the seen part as the shortest stretch around it).
@@ -1593,10 +1955,11 @@ float4 PSTerrain(PSIn i) : SV_Target
 		}
 
 		// The culture borders, kBorderRes texels a plot side: whose ground each texel is, and how
-		// far it is from another owner's (in kBorderReach). Along a river between plots of
-		// different owners the ground is the plots' up to their banks, as the river bends: the
-		// plots on either side reach for it from their centres, around the water (an unowned plot
-		// goes over it: the water is outside the owner's border).
+		// far it is from the edge of that ground (in kBorderReach). The edge is the plots' edges
+		// with the corners cut round, as the original's. Along a river between plots of different
+		// owners it is the river's bank on the owner's side, as the river bends: the plots on
+		// either side reach for the ground from their centres, round the water, and the water
+		// and its bed are nobody's. Worked out in the plots along the borders only.
 		void updateBorders()
 		{
 			const int W = map.width, H = map.height, R = kBorderRes, TW = W * R, TH = H * R;
@@ -1617,6 +1980,13 @@ float4 PSTerrain(PSIn i) : SV_Target
 					py = (py % H + H) % H;
 				return px < 0 || py < 0 || px >= W || py >= H ? -1 : px + py * W;
 			};
+			const auto at = [&](int tx, int ty) -> int {
+				if (map.wrapX)
+					tx = (tx % TW + TW) % TW;
+				if (map.wrapY)
+					ty = (ty % TH + TH) % TH;
+				return tx < 0 || ty < 0 || tx >= TW || ty >= TH ? -1 : ty * TW + tx;
+			};
 			// A river along the edge between plot (px, py) and its neighbour (dx, dy) (one step).
 			const auto riverBetween = [&](int px, int py, int dx, int dy) {
 				const PlotView* q = dx > 0 || dy < 0 ? map.plot(px, py) : map.plot(px + dx, py + dy);
@@ -1624,13 +1994,9 @@ float4 PSTerrain(PSIn i) : SV_Target
 			};
 			static const int kStep[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
 
-			std::vector<int32_t> label(size_t(TW) * size_t(TH)); // the plot whose ground the texel is
-			for (int ty = 0; ty < TH; ++ty)
-				for (int tx = 0; tx < TW; ++tx)
-					label[size_t(ty) * TW + tx] = tx / R + (ty / R) * W;
-
-			// The plots along rivers between different owners compete for the ground around them.
-			std::vector<uint8_t> zone(map.plots.size(), 0);
+			// The plots along rivers between different owners (they compete for the ground around
+			// them), the plots along a border, and those next to them (the distances reach there).
+			std::vector<uint8_t> zone(map.plots.size(), 0), along(map.plots.size(), 0), work(map.plots.size(), 0);
 			bool anyZone = false;
 			for (int py = 0; py < H; ++py)
 				for (int px = 0; px < W; ++px)
@@ -1640,10 +2006,48 @@ float4 PSTerrain(PSIn i) : SV_Target
 						if (n >= 0 && owners[size_t(n)] != owners[size_t(px + py * W)] && riverBetween(px, py, s[0], s[1]))
 							zone[size_t(px + py * W)] = 1, anyZone = true;
 					}
+			const auto around = [&](int px, int py, auto&& is) {
+				for (int dy = -1; dy <= 1; ++dy)
+					for (int dx = -1; dx <= 1; ++dx)
+						if (const int n = plotIndex(px + dx, py + dy); n >= 0 && is(n))
+							return true;
+				return false;
+			};
+			for (int py = 0; py < H; ++py)
+				for (int px = 0; px < W; ++px)
+					along[size_t(px + py * W)] = around(px, py, [&](int n) { return owners[size_t(n)] != owners[size_t(px + py * W)] || zone[size_t(n)]; });
+			for (int py = 0; py < H; ++py)
+				for (int px = 0; px < W; ++px)
+					work[size_t(px + py * W)] = around(px, py, [&](int n) { return along[size_t(n)] != 0; });
+			// (the texels of the plots flagged, a row at a time, forwards or backwards)
+			const auto each = [&](const std::vector<uint8_t>& plots, bool forwards, auto&& texel) {
+				for (int j = 0; j < TH; ++j)
+				{
+					const int ty = forwards ? j : TH - 1 - j;
+					const uint8_t* row = plots.data() + size_t(ty / R) * W;
+					for (int i = 0; i < W; ++i)
+					{
+						const int px = forwards ? i : W - 1 - i;
+						if (row[px])
+							for (int k = 0; k < R; ++k)
+								texel(forwards ? px * R + k : px * R + R - 1 - k, ty);
+					}
+				}
+			};
+
+			// Each texel's owner (+ 1): its plot's.
+			std::vector<uint8_t> owner(size_t(TW) * size_t(TH));
+			for (int ty = 0; ty < TH; ++ty)
+				for (int px = 0; px < W; ++px)
+					std::memset(owner.data() + size_t(ty) * TW + size_t(px) * R, uint8_t(std::min(owners[size_t(px + (ty / R) * W)] + 1, 255)), size_t(R));
+
 			if (anyZone)
 			{
+				// The plots along the rivers reach for the ground from their centres, a texel at a
+				// time, the river's water and bed far to cross.
 				constexpr uint32_t kFar = 0xFFFFFFFFu;
-				std::vector<uint32_t> dist(label.size(), kFar);
+				std::vector<uint32_t> dist(owner.size(), kFar);
+				std::vector<int32_t> label(owner.size(), -1); // the plot whose ground the texel is
 				using Item = std::pair<uint32_t, uint32_t>;
 				std::priority_queue<Item, std::vector<Item>, std::greater<>> open;
 				for (int py = 0; py < H; ++py)
@@ -1663,7 +2067,6 @@ float4 PSTerrain(PSIn i) : SV_Target
 						continue;
 					const int tx = int(t % uint32_t(TW)), ty = int(t / uint32_t(TW));
 					const int from = label[t];
-					const bool owned = owners[size_t(from)] >= 0;
 					for (int k = 0; k < 8; ++k)
 					{
 						static const int kNeighbour[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 } };
@@ -1688,9 +2091,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 								continue;
 						}
 						const uint32_t n = uint32_t(ny * TW + nx);
-						uint32_t cost = k < 4 ? 5 : 7;
-						if (riverMask[n])
-							cost *= owned ? 12 : 1;
+						const uint32_t cost = (k < 4 ? 5 : 7) * (riverMask[n] ? 12 : 1);
 						if (d + cost < dist[n])
 						{
 							dist[n] = d + cost;
@@ -1699,103 +2100,175 @@ float4 PSTerrain(PSIn i) : SV_Target
 						}
 					}
 				}
+				each(zone, true, [&](int tx, int ty) {
+					if (const int32_t l = label[size_t(ty) * TW + tx]; l >= 0)
+						owner[size_t(ty) * TW + tx] = uint8_t(std::min(owners[size_t(l)] + 1, 255));
+				});
+				// The river between two grounds is nobody's: each owner's border on its own bank.
+				// (a river texel with the ground of different owners close by, as wide as the bed)
+				std::vector<uint32_t> nobodys;
+				const int across = std::max(2, R * 3 / 16);
+				each(zone, true, [&](int tx, int ty) {
+					const size_t i = size_t(ty) * TW + tx;
+					if (!riverMask[i])
+						return;
+					int first = -1;
+					for (int ring = 1; ring <= 2; ++ring)
+						for (int k = 0; k < 8; ++k)
+						{
+							static const int kRing[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 } };
+							const int n = at(tx + kRing[k][0] * across * ring, ty + kRing[k][1] * across * ring);
+							if (n < 0 || riverMask[size_t(n)])
+								continue;
+							if (first < 0)
+								first = owner[size_t(n)];
+							else if (owner[size_t(n)] != first)
+							{
+								nobodys.push_back(uint32_t(i));
+								return;
+							}
+						}
+				});
+				for (const uint32_t i : nobodys)
+					owner[i] = 0;
 			}
 
-			// Each texel's owner, then its distance to another owner's ground (two chamfer passes).
-			std::vector<uint16_t> owner(label.size());
-			for (size_t i = 0; i < label.size(); ++i)
-				owner[i] = uint16_t(owners[size_t(label[i])] + 1);
-			// Along the rivers the ground follows the river bed's texels: smoothed, each texel the
-			// owner of most of those around it, so that the border has no steps.
-			if (anyZone)
+			const float reach = kBorderReach * float(R);
+			std::vector<float> edge(owner.size(), reach);
+			// The borders' corners rounded: in the plots along a border each texel is the owner's
+			// of most of the ground within kBorderCorner of it (a straight edge stays where it
+			// is; a corner, outwards or inwards, is cut round), but not by a river, whose bends
+			// the border keeps. Then how far the texel is from the edge, to less than a texel:
+			// from how much of that ground is another's (a straight edge that far from the middle
+			// of a disc cuts that much off).
 			{
-				const auto texel = [&](int tx, int ty) -> int {
-					if (map.wrapX)
-						tx = (tx % TW + TW) % TW;
-					if (map.wrapY)
-						ty = (ty % TH + TH) % TH;
-					return tx < 0 || ty < 0 || tx >= TW || ty >= TH ? -1 : ty * TW + tx;
-				};
-				for (int round = 0; round < 2; ++round)
+				// (the disc's texels, and its sample points, two a texel side, as steps from the texel)
+				const float radius = kBorderCorner * float(R);
+				std::vector<std::pair<int8_t, int8_t>> disc, fine;
+				for (int j = -int(radius * 2) - 1; j <= int(radius * 2); ++j)
+					for (int i = -int(radius * 2) - 1; i <= int(radius * 2); ++i)
+					{
+						const float ox = (float(i) + 0.5f) * 0.5f, oy = (float(j) + 0.5f) * 0.5f;
+						if (ox * ox + oy * oy <= radius * radius)
+							fine.push_back({ int8_t(std::floor(ox + 0.5f)), int8_t(std::floor(oy + 0.5f)) });
+					}
+				for (int j = -int(radius); j <= int(radius); ++j)
+					for (int i = -int(radius); i <= int(radius); ++i)
+						if (float(i * i + j * j) <= radius * radius)
+							disc.push_back({ int8_t(i), int8_t(j) });
+				// (the texels with another's ground or a river near: eight points round them tell)
+				const int outer = int(std::ceil(radius)), mid = int(std::lround(radius * 0.7071f));
+				const int probes[8][2] = { { outer, 0 }, { -outer, 0 }, { 0, outer }, { 0, -outer }, { mid, mid }, { -mid, mid }, { mid, -mid }, { -mid, -mid } };
+				std::vector<uint32_t> mixed;
+				std::vector<uint8_t> byRiver;
+				each(along, true, [&](int tx, int ty) {
+					const size_t i = size_t(ty) * TW + tx;
+					bool differs = false, river = riverMask[i] != 0;
+					for (const auto& p : probes)
+						for (int half = 1; half <= 2; ++half)
+							if (const int n = at(tx + p[0] * half / 2, ty + p[1] * half / 2); n >= 0)
+								differs = differs || owner[size_t(n)] != owner[i], river = river || riverMask[size_t(n)] != 0;
+					if (differs)
+						mixed.push_back(uint32_t(i)), byRiver.push_back(river);
+				});
+				std::vector<uint8_t> rounded(mixed.size());
+				for (size_t m = 0; m < mixed.size(); ++m)
 				{
-					std::vector<uint16_t> smoothed = owner;
-					for (int ty = 0; ty < TH; ++ty)
-						for (int tx = 0; tx < TW; ++tx)
+					const int tx = int(mixed[m] % uint32_t(TW)), ty = int(mixed[m] / uint32_t(TW));
+					rounded[m] = owner[mixed[m]];
+					if (byRiver[m])
+						continue;
+					std::pair<uint8_t, int> counts[8];
+					int kinds = 0;
+					for (const auto& [dx, dy] : disc)
+					{
+						const int n = at(tx + dx, ty + dy);
+						if (n < 0)
+							continue;
+						const uint8_t o = owner[size_t(n)];
+						int k = 0;
+						while (k < kinds && counts[k].first != o)
+							++k;
+						if (k == kinds)
 						{
-							if (!zone[size_t(tx / R + (ty / R) * W)])
+							if (kinds == 8)
 								continue;
-							std::pair<uint16_t, int> counts[25];
-							int kinds = 0;
-							for (int dy = -2; dy <= 2; ++dy)
-								for (int dx = -2; dx <= 2; ++dx)
-								{
-									if (std::abs(dx) + std::abs(dy) > 3)
-										continue;
-									const int n = texel(tx + dx, ty + dy);
-									if (n < 0)
-										continue;
-									const uint16_t o = owner[size_t(n)];
-									int k = 0;
-									while (k < kinds && counts[k].first != o)
-										++k;
-									if (k == kinds)
-										counts[kinds++] = { o, 0 };
-									++counts[k].second;
-								}
-							int best = 0;
-							for (int k = 1; k < kinds; ++k)
-								if (counts[k].second > counts[best].second)
-									best = k;
-							smoothed[size_t(ty) * TW + tx] = counts[best].first;
+							counts[kinds++] = { o, 0 };
 						}
-					owner = std::move(smoothed);
+						++counts[k].second;
+					}
+					int best = 0;
+					for (int k = 1; k < kinds; ++k)
+						if (counts[k].second > counts[best].second)
+							best = k;
+					rounded[m] = counts[best].first;
+				}
+				for (size_t m = 0; m < mixed.size(); ++m)
+					owner[mixed[m]] = rounded[m];
+				// (how far from the middle of a disc of radius 1 a straight edge cuts the share q off it)
+				static const std::array<float, 65> kChord = [] {
+					std::array<float, 65> table{};
+					for (size_t k = 0; k < table.size(); ++k)
+					{
+						const float q = 0.5f * float(k) / float(table.size() - 1);
+						float lo = 0, hi = 1;
+						for (int it = 0; it < 30; ++it)
+						{
+							const float x = (lo + hi) / 2;
+							((std::acos(x) - x * std::sqrt(1 - x * x)) / std::numbers::pi_v<float> > q ? lo : hi) = x;
+						}
+						table[k] = (lo + hi) / 2;
+					}
+					return table;
+				}();
+				for (const uint32_t i : mixed)
+				{
+					const int tx = int(i % uint32_t(TW)), ty = int(i / uint32_t(TW));
+					const uint8_t own = owner[i];
+					int other = 0, all = 0;
+					for (const auto& [dx, dy] : fine)
+						if (const int n = at(tx + dx, ty + dy); n >= 0)
+							++all, other += owner[size_t(n)] != own;
+					if (other == 0)
+						continue;
+					const float q = std::min(float(other) / float(all), 0.5f) * 2 * float(kChord.size() - 1);
+					const size_t k = std::min(size_t(q), kChord.size() - 2);
+					edge[i] = std::max(0.02f, radius * std::lerp(kChord[k], kChord[k + 1], q - float(k)));
 				}
 			}
-			const auto at = [&](int tx, int ty) -> int {
-				if (map.wrapX)
-					tx = (tx % TW + TW) % TW;
-				if (map.wrapY)
-					ty = (ty % TH + TH) % TH;
-				return tx < 0 || ty < 0 || tx >= TW || ty >= TH ? -1 : ty * TW + tx;
-			};
-			const float reach = kBorderReach * float(R);
-			std::vector<float> edge(label.size(), reach);
-			for (int ty = 0; ty < TH; ++ty)
-				for (int tx = 0; tx < TW; ++tx)
-				{
-					const int i = ty * TW + tx;
-					for (const auto& s : kStep)
-						if (const int n = at(tx + s[0], ty + s[1]); n >= 0 && owner[size_t(n)] != owner[size_t(i)])
-						{
-							edge[size_t(i)] = 0.5f;
-							break;
-						}
-				}
+			// The distances on from there (two chamfer passes over the plots near the borders).
+			each(work, true, [&](int tx, int ty) {
+				const size_t i = size_t(ty) * TW + tx;
+				for (const auto& s : kStep)
+					if (const int n = at(tx + s[0], ty + s[1]); n >= 0 && owner[size_t(n)] != owner[i])
+					{
+						edge[i] = std::min(edge[i], 0.5f);
+						break;
+					}
+			});
 			constexpr float kDiagonal = 1.41421356f;
 			for (int pass = 0; pass < 2; ++pass)
 			{
 				const int step = pass == 0 ? 1 : -1;
-				for (int ty = pass == 0 ? 0 : TH - 1; ty >= 0 && ty < TH; ty += step)
-					for (int tx = pass == 0 ? 0 : TW - 1; tx >= 0 && tx < TW; tx += step)
-					{
-						float& e = edge[size_t(ty * TW + tx)];
-						const int previous[4][2] = { { -step, 0 }, { -step, -step }, { 0, -step }, { step, -step } };
-						for (int k = 0; k < 4; ++k)
-							if (const int n = at(tx + previous[k][0], ty + previous[k][1]); n >= 0)
-								e = std::min(e, edge[size_t(n)] + (k & 1 ? kDiagonal : 1.0f));
-					}
+				each(work, pass == 0, [&](int tx, int ty) {
+					float& e = edge[size_t(ty) * TW + tx];
+					const int previous[4][2] = { { -step, 0 }, { -step, -step }, { 0, -step }, { step, -step } };
+					for (int k = 0; k < 4; ++k)
+						if (const int n = at(tx + previous[k][0], ty + previous[k][1]); n >= 0)
+							e = std::min(e, edge[size_t(n)] + (k & 1 ? kDiagonal : 1.0f));
+				});
 			}
 
-			std::vector<uint16_t> data(label.size() * 4, 0);
-			for (size_t i = 0; i < label.size(); ++i)
+			std::vector<uint8_t> data(owner.size() * 2);
+			for (size_t i = 0; i < owner.size(); ++i)
 			{
-				data[i * 4 + 0] = owner[i];
-				data[i * 4 + 1] = uint16_t(std::min(edge[i] / reach, 1.0f) * 65535.0f + 0.5f);
+				data[i * 2 + 0] = owner[i];
+				data[i * 2 + 1] = uint8_t(std::min(edge[i] / reach, 1.0f) * 255.0f + 0.5f);
 			}
 			if (!borderTex || borderTex->width != uint32_t(TW) || borderTex->height != uint32_t(TH))
 			{
-				const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data.data()), data.size() * 2);
-				borderTex = renderer.createTexture(uint32_t(TW), uint32_t(TH), 1, 1, TextureFormat::RGBA16, std::span(&bytes, 1));
+				const std::span<const uint8_t> bytes(data.data(), data.size());
+				borderTex = renderer.createTexture(uint32_t(TW), uint32_t(TH), 1, 1, TextureFormat::RG8, std::span(&bytes, 1));
 			}
 			else
 				renderer.updateTexture(*borderTex, 0, 0, 0, 0, uint32_t(TW), uint32_t(TH), data.data());
@@ -2828,10 +3301,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 			return std::round((renderer.camera().target.x - x) / w) * w;
 		}
 
-		void drawTerrain(const Frustum& frustum, const MapView::Options& options)
+		TerrainConstants terrainConstants(const MapView::Options& options) const
 		{
-			if (!vb || !atlasTex || !plotTex || !detailTex || !decalTex || !cellTex || !borderTex)
-				return;
 			TerrainConstants tc{};
 			tc.mapW = map.width;
 			tc.mapH = map.height;
@@ -2851,7 +3322,13 @@ float4 PSTerrain(PSIn i) : SV_Target
 				tc.playerColors[i][2] = c.b;
 				tc.playerColors[i][3] = 1;
 			}
+			return tc;
+		}
 
+		// The ground's mesh, in every copy of the map in view (wrapping), with a pipeline whose
+		// fragment shader takes the terrain's six textures.
+		void drawGround(const Frustum& frustum, SDL_GPUGraphicsPipeline* pipeline, TerrainConstants& tc)
+		{
 			std::vector<float> copies{ 0 };
 			if (map.wrapX)
 				copies = { -worldW(), 0, worldW() };
@@ -2861,7 +3338,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			};
 			renderer.reserveSamplers(6);
 			SDL_GPURenderPass* pass = renderer.pass();
-			renderer.bindPipeline(terrainPipeline);
+			renderer.bindPipeline(pipeline);
 			const SDL_GPUTextureSamplerBinding textures[6] = { { plotTex->texture, sampler }, { atlasTex->texture, sampler },
 				{ decalTex->texture, detailWrap }, { detailTex->texture, detailWrap }, { cellTex->texture, sampler }, { borderTex->texture, sampler } };
 			SDL_BindGPUFragmentSamplers(pass, 0, textures, 6);
@@ -2878,6 +3355,80 @@ float4 PSTerrain(PSIn i) : SV_Target
 				SDL_DrawGPUIndexedPrimitives(pass, indexCount, 1, 0, 0, 0);
 			}
 		}
+
+		void drawTerrain(const Frustum& frustum, const MapView::Options& options)
+		{
+			if (!vb || !atlasTex || !plotTex || !detailTex || !decalTex || !cellTex || !borderTex)
+				return;
+			TerrainConstants tc = terrainConstants(options);
+			drawGround(frustum, terrainPipeline, tc);
+		}
+
+		// The culture borders over the ground and the water (Options::borders).
+		void drawBorders(const Frustum& frustum, const MapView::Options& options)
+		{
+			if (!options.borders || !vb || !atlasTex || !plotTex || !detailTex || !decalTex || !cellTex || !borderTex)
+				return;
+			TerrainConstants tc = terrainConstants(options);
+			drawGround(frustum, borderPipeline, tc);
+		}
+
+		void drawWater(const Frustum& frustum, const MapView::Options& options)
+		{
+			if (!waterVb || !waterTex || !plotTex)
+				return;
+			// The texture's two placements (Water.fx: mtxWaterTextureMat, ...Mat2): the plane's texture
+			// scaling in texture units a world unit, scrolled at its rates, the second the other way
+			// (measured in the original: two patterns drifting apart east and west, a little north and
+			// south, each about 0.0048 texture units a second: the rates are per frame at 30 a second).
+			const float k = map.water.scale, t = time * kWaterFrames;
+			WaterConstants wc{};
+			wc.uv1[0] = k, wc.uv1[3] = k;
+			wc.uv2[0] = k, wc.uv2[3] = k;
+			wc.scroll[0] = map.water.rateU * t, wc.scroll[1] = map.water.rateV * t;
+			wc.scroll[2] = -map.water.rateU * t, wc.scroll[3] = -map.water.rateV * t;
+			for (float& v : wc.scroll)
+				v -= std::floor(v);
+			wc.alpha = map.water.alpha;
+			wc.mapW = map.width;
+			wc.mapH = map.height;
+			wc.wrapX = map.wrapX;
+			wc.wrapY = map.wrapY;
+			wc.plotSize = S();
+			wc.showFog = options.fog;
+			wc.shore = kShoreDepth * S();
+			wc.shoreWidth = kShoreWidth * S();
+
+			std::vector<float> copies{ 0 };
+			if (map.wrapX)
+				copies = { -worldW(), 0, worldW() };
+			renderer.reserveSamplers(2);
+			SDL_GPURenderPass* pass = renderer.pass();
+			renderer.bindPipeline(waterPipeline);
+			const SDL_GPUTextureSamplerBinding textures[2] = { { waterTex->texture, waterSampler }, { plotTex->texture, sampler } };
+			SDL_BindGPUFragmentSamplers(pass, 0, textures, 2);
+			const SDL_GPUBufferBinding vbb{ waterVb->buffer, 0 }, ibb{ waterIb->buffer, 0 };
+			SDL_BindGPUVertexBuffers(pass, 0, &vbb, 1);
+			SDL_BindGPUIndexBuffer(pass, &ibb, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+			for (const float dx : copies)
+			{
+				if (!frustum.sphere({ worldW() / 2 + dx, worldH() / 2, 0 }, length(Vec3{ worldW(), worldH(), 0 }) / 2))
+					continue;
+				wc.offset[0] = dx;
+				SDL_PushGPUVertexUniformData(renderer.commands(), 1, &wc, sizeof(wc));
+				SDL_PushGPUFragmentUniformData(renderer.commands(), 1, &wc, sizeof(wc));
+				SDL_DrawGPUIndexedPrimitives(pass, waterIndexCount, 1, 0, 0, 0);
+			}
+		}
+
+		static constexpr float kWaterFrames = 30; // a second: the plane's scroll rates are per frame
+		// Of a plot: how deep the ground is under the shore, and over how much more depth the water
+		// fades in there. Measured in the original: on a straight coast the water ends about a quarter
+		// of a plot inside the water plot (the sand between is the coast's ground), and a lake of one
+		// plot is water about 0.56 of a plot across; the ground's levels (baseLevel, blended between
+		// plot centres) are that deep there.
+		static constexpr float kShoreDepth = 0.042f;
+		static constexpr float kShoreWidth = 0.003f;
 
 		// Units grow as the camera moves away, as in the game (ALLOW_UNIT_SCALE_ADJUST_ON_ZOOM).
 		float figureZoom() const { return std::clamp(1 + (renderer.camera().distance / S() - 5) / 8, 1.0f, 2.2f); }
@@ -3649,12 +4200,14 @@ float4 PSTerrain(PSIn i) : SV_Target
 		{
 			m->buildAtlas();
 			m->buildDecals();
+			m->buildWaterArt();
 			m->artGeneration = snapshot.artGeneration;
 		}
 		if (reshaped)
 		{
 			m->shape = std::move(shape);
 			m->buildTerrain();
+			m->buildWater();
 		}
 		m->updatePlots();
 		// Improvements, resources and roads first: they clear trees from the features.
@@ -3743,6 +4296,11 @@ float4 PSTerrain(PSIn i) : SV_Target
 			m->drawInstances(m->features, frustum);
 		if (options.improvements)
 			m->drawInstances(m->decor, frustum);
+		// The sea's water over what is under it: the rivers' water laid on the ground (a delta's,
+		// out at sea, seen through the sea's) and what stands in the water.
+		m->renderer.drawGroundBlended();
+		m->drawWater(frustum, options);
+		m->drawBorders(frustum, options);
 		if (options.cities)
 			m->drawInstances(m->cities, frustum);
 		m->figureHits.clear();
