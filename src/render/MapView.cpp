@@ -600,6 +600,15 @@ float4 PSTerrain(PSIn i) : SV_Target
 		};
 		std::vector<FigureHit> figureHits;
 		bool ringsDrawn = false; // the selection rings are the game's (not the overlay's own)
+		// The city bars' production symbols: a button cut round by the bar's mask, by its art.
+		std::map<std::string, ButtonArt::Icon> cityBarSymbols;
+		// Where the city bars were drawn last (in the overlay's units) and their cities' plots, in drawing order.
+		struct CityBarPlace
+		{
+			float x0, y0, x1, y1;
+			int x, y;
+		};
+		std::vector<CityBarPlace> cityBars;
 
 		// The ring the game puts under the selected units (Art/Units/Selection Effect): its
 		// circle turning (the default clip) and its dots over it as the head unit can move
@@ -3811,8 +3820,6 @@ float4 PSTerrain(PSIn i) : SV_Target
 			return;
 		const float* vp = m->renderer.viewProjection();
 		const float distance = m->renderer.camera().distance / m->S();
-		if (distance > 45)
-			return;
 		const float scale = std::clamp(1.3f - distance / 60, 0.7f, 1.1f);
 		const float W = overlay.screenWidth(), H = overlay.screenHeight();
 		const auto toScreen = [&](Vec3 p, float& x, float& y) {
@@ -3868,50 +3875,122 @@ float4 PSTerrain(PSIn i) : SV_Target
 				if (u.count > 1)
 					overlay.text(std::to_wstring(u.count), x + fw / 2 + 2, y - fh - 1, 10 * scale, { 1, 1, 1 }, 0.95f, true);
 			}
+		// The city bars, as the original's CityBar.nif lays them out (in its units: the banner
+		// 128 x 32 with its top at the origin, the population's circle at its left end, the
+		// production symbol at its right end, the icon line above), facing the screen.
+		// Placed as CIV4DetailManager's CITYBILLBOARD_RADIUS places it: its top on the ground
+		// south of the city (towards the bottom of the screen), 90 units out up close, 35 at
+		// 5000 and beyond; the original's grid shows it no closer than 70 there. Sized as
+		// measured in the original (the star's width, at camera distances of 5 to 102 plots):
+		// CITYBILLBOARD_SCALE's 1.5 up close to its 0.67 far out, in points a model unit.
+		const float plots = m->renderer.camera().distance / m->S();
+		const float civ = m->S() / 180; // (the original's units: 180 a plot)
+		const float units = plots * 180;
+		const float radius = std::max(70.0f, std::lerp(90.0f, 35.0f, std::clamp((units - 700) / 4300, 0.0f, 1.0f)));
+		const float k = [&] {
+			static constexpr std::array<std::pair<float, float>, 8> measured{ { { 3.89f, 1.39f }, { 5.18f, 1.327f }, { 8.8f, 1.16f },
+				{ 12.3f, 0.962f }, { 14.85f, 0.913f }, { 28.5f, 0.743f }, { 47.5f, 0.718f }, { 102, 0.694f } } };
+			if (plots <= measured.front().first)
+				return measured.front().second;
+			for (size_t i = 1; i < measured.size(); ++i)
+				if (plots <= measured[i].first)
+					return std::lerp(measured[i - 1].second, measured[i].second,
+						(plots - measured[i - 1].first) / (measured[i].first - measured[i - 1].first));
+			return measured.back().second;
+		}();
+		const float yaw = m->renderer.camera().yaw;
+		const Vec3 towardsScreenBottom{ std::cos(yaw), std::sin(yaw), 0 };
+		ButtonArt* art = overlay.buttonArt();
+		const auto symbol = [&](const std::string& button) -> const ButtonArt::Icon* {
+			if (!art || button.empty())
+				return nullptr;
+			if (const auto it = m->cityBarSymbols.find(button); it != m->cityBarSymbols.end())
+				return it->second.width ? &it->second : nullptr;
+			ButtonArt::Icon& out = m->cityBarSymbols[button];
+			const ButtonArt::Icon* icon = art->icon(button);
+			const ButtonArt::Icon* mask = art->icon("Art/Interface/CityBar/ProductionIconMask.tga");
+			if (!icon || !mask || !mask->width || !mask->height)
+				return nullptr;
+			out = *icon;
+			out.key = std::hash<std::string>{}("citybar-symbol:" + button);
+			for (uint32_t y = 0; y < out.height; ++y)
+				for (uint32_t x = 0; x < out.width; ++x)
+				{
+					const uint8_t* mp = mask->bgra.data() + (size_t(y * mask->height / out.height) * mask->width + x * mask->width / out.width) * 4;
+					const float keep = float(mp[3]) / 255;
+					uint8_t* p = out.bgra.data() + (size_t(y) * out.width + x) * 4;
+					for (int i = 0; i < 4; ++i)
+						p[i] = uint8_t(float(p[i]) * keep + 0.5f);
+				}
+			return &out;
+		};
+		m->cityBars.clear();
 		for (const CityView& c : m->map.cities)
 		{
 			if (options.fog && !m->map.plots[size_t(c.x) + size_t(c.y) * size_t(m->map.width)].revealed)
 				continue;
 			Vec3 p{ (float(c.x) + 0.5f) * m->S(), (float(c.y) + 0.5f) * m->S(), 0 };
 			p.x += m->wrapOffset(p.x);
-			p.z = m->ground(p.x, p.y) + 0.35f * m->S();
-			const float cw = vp[12] * p.x + vp[13] * p.y + vp[14] * p.z + vp[15];
-			if (cw <= 0)
+			p.z = m->ground(p.x, p.y);
+			p = p + towardsScreenBottom * (radius * civ);
+			float ox = 0, oy = 0;
+			if (!toScreen(p, ox, oy))
 				continue;
-			const float sx = (vp[0] * p.x + vp[1] * p.y + vp[2] * p.z + vp[3]) / cw, sy = (vp[4] * p.x + vp[5] * p.y + vp[6] * p.z + vp[7]) / cw;
-			const float x = (sx + 1) * 0.5f * W, y = (1 - sy) * 0.5f * H;
-			if (x < -200 || x > W + 200 || y < -60 || y > H + 60)
-				continue;
+			// (a point of the bar's model on the screen)
+			const auto X = [&](float u) { return ox + u * k; };
+			const auto Y = [&](float v) { return oy - v * k; };
 
-			const Color owner = c.owner >= 0 && size_t(c.owner) < m->map.players.size() ? m->map.players[size_t(c.owner)].primary : Color{};
-			const std::wstring name = (c.capital ? L"\u2605 " : L"") + wide(c.name);
-			const std::wstring pop = std::to_wstring(c.population);
-			const float size = 13 * scale, h = 20 * scale, r = h / 2;
-			const float nameW = overlay.width(name, size, true), popR = r + 1;
-			const float w = popR * 2 + 6 * scale + nameW + 10 * scale;
-			const float x0 = x - w / 2, y0 = y - h / 2;
-			overlay.rect(x0, y0, x0 + w, y0 + h, { 0.05f, 0.06f, 0.08f }, 0.72f, r);
-			overlay.frame(x0, y0, x0 + w, y0 + h, owner, 0.9f, r, 1.5f);
-			overlay.circle(x0 + popR, y, popR, c.sizeDot, 1);
-			overlay.text(pop, x0 + popR, y - size * 0.68f, size * 0.95f, c.sizeText, 1, true, Overlay::Align::Center, false);
-			overlay.text(name, x0 + popR * 2 + 6 * scale, y - size * 0.68f, size, { 1, 1, 1 }, 1, true);
-			// The bars under the banner, as the game's.
-			float by = y0 + h + 2;
-			const float bx0 = x0 + popR * 2, bx1 = x0 + w - r * 0.6f, bh = 3.5f * scale;
-			for (const auto& [stored, rate, color] :
-				{ std::tuple{ c.foodStored, c.foodRate, c.foodBar }, std::tuple{ c.productionStored, c.productionRate, c.productionBar } })
+			// (a click on it is one on the city: the population's circle to the production symbol)
+			m->cityBars.push_back({ X(-85), Y(0), X(91), Y(-32), c.x, c.y });
+
+			// The banner: its background, the growth (upper half) and production (lower half)
+			// bars, then its outline.
+			overlay.rect(X(-52.935f), Y(0), X(75.065f), Y(-32), { 0, 0, 0 }, 0.7f, 16 * k);
+			for (const auto& [stored, rate, color, top] :
+				{ std::tuple{ c.foodStored, c.foodRate, c.foodBar, 0.0f }, std::tuple{ c.productionStored, c.productionRate, c.productionBar, -16.0f } })
 			{
 				if (stored < 0)
 					continue;
-				overlay.rect(bx0, by, bx1, by + bh, { 0, 0, 0 }, 0.6f);
+				const float b0 = X(-21), b1 = X(60);
 				const float s = std::clamp(stored, 0.0f, 1.0f), e = std::clamp(stored + rate, 0.0f, 1.0f);
-				overlay.rect(bx0, by, bx0 + (bx1 - bx0) * s, by + bh, color, 0.95f);
-				overlay.rect(bx0 + (bx1 - bx0) * s, by, bx0 + (bx1 - bx0) * e, by + bh, color, 0.45f);
-				by += bh + 1;
+				overlay.rect(b0, Y(top - 3), b0 + (b1 - b0) * s, Y(top - 13), color, 0.75f);
+				overlay.rect(b0 + (b1 - b0) * s, Y(top - 3), b0 + (b1 - b0) * e, Y(top - 13), color, 0.35f);
 			}
-			if (!c.production.empty() && distance < 25)
-				overlay.richText(wide(c.production), x, by, size * 0.8f, false, { 0.85f, 0.88f, 0.95f }, 0.95f, Overlay::Align::Center);
+			overlay.art("Art/Interface/CityBar/CityBar_Base.dds", X(-52.935f), Y(0), X(75.065f), Y(-32));
+
+			// The population: the star of a capital, else the circle, in the game's colour.
+			overlay.art(c.capital ? "Art/Interface/CityBar/CityBar_Star.tga" : "Art/Interface/CityBar/CityBar_Circle.tga", X(-85), Y(16), X(-21), Y(-48),
+				c.sizeDot);
+			const float popSize = 21 * k;
+			overlay.text(std::to_wstring(c.population), X(-52.935f), Y(-16) - popSize * 0.62f, popSize, c.sizeText, 1, false, Overlay::Align::Center,
+				false);
+
+			// The production symbol: what it builds, cut round, under its bevel.
+			if (c.ownTeam)
+			{
+				const float s = 0.963f;
+				const float x0 = X(70.404f - 13 * s), x1 = X(70.404f + 21 * s), y0 = Y(-15.869f + 17 * s), y1 = Y(-15.869f - 17 * s);
+				if (const ButtonArt::Icon* icon = symbol(c.productionArt))
+					overlay.image(icon->key, icon->bgra, icon->width, icon->height, 0, x0, y0, x1, y1);
+				overlay.art("Art/Interface/CityBar/ProductionIconBevel.tga", x0, y0, x1, y1);
+			}
+
+			// The name in the upper half, what it builds in the lower, the icons above.
+			const std::wstring name = wide(c.name);
+			overlay.text(name, X(18.266f), Y(0.411f) + 1.5f * k, 12.5f * k, { 1, 1, 1 }, 1, false, Overlay::Align::Center);
+			if (!c.production.empty())
+				overlay.richText(wide(c.production), X(18.266f), Y(-15.589f) + 1.5f * k, 11 * k, false, { 1, 1, 1 }, 1, Overlay::Align::Center);
+			if (!c.icons.empty())
+				overlay.richText(wide(c.icons), X(-0.112f), Y(17.902f), 14 * k, false, { 1, 1, 1 }, 1, Overlay::Align::Center);
 		}
+	}
+
+	std::optional<std::pair<int, int>> MapView::cityBarAt(float x, float y) const
+	{
+		for (auto it = m->cityBars.rbegin(); it != m->cityBars.rend(); ++it)
+			if (x >= it->x0 && x <= it->x1 && y >= it->y0 && y <= it->y1)
+				return std::pair{ it->x, it->y };
+		return std::nullopt;
 	}
 
 	const std::vector<uint32_t>& MapView::terrainColors() const { return m->terrainColors; }

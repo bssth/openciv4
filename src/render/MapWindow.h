@@ -108,6 +108,8 @@ namespace oc4::render
 			bool onFigure = false; // on a unit's figure (the plot is the unit's)
 			bool either = false;   // (the gamepad's plot cursor: `right` is the host's to say, see PadAction::Kind::PlotAct)
 			bool clear = false;    // (the gamepad's B: no plot's click, the selection let go)
+			bool twice = false;    // the second click of a double click
+			bool onCityBar = false; // on a city's name bar (the plot is the city's)
 		};
 		void setPlaying(bool playing);
 		std::vector<PlotClick> takeClicks();
@@ -360,8 +362,9 @@ namespace oc4::render
 		// The click a press at that pixel of the window would make on the map (a scripted game).
 		std::optional<PlotClick> clickAt(int x, int y, bool right) const;
 		// A left click at that pixel as the mouse makes it (scripted tests): on a popup, the
-		// screens, the action bar or the map, whichever takes it there.
-		void mouseClick(int x, int y);
+		// screens, the action bar or the map, whichever takes it there; with twice, a double click
+		// (its first click, then the second, as the mouse's).
+		void mouseClick(int x, int y, bool twice = false);
 		// The mouse's cursor over the window: a cursor file (.cur, .ani: the game's res/Cursors);
 		// none, the system's arrow.
 		void setCursorFile(const std::filesystem::path& file);

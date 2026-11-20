@@ -992,6 +992,31 @@ namespace oc4::render
 			o.imagePart(b.picture->key, b.picture->bgra, b.picture->width, b.picture->height, 1, x0, y0, x1, y1, b.x0, b.y0, b.x1, b.y1, alpha);
 	}
 
+	bool Theme::covers(const Skin& skin, float rx0, float ry0, float rx1, float ry1, float x, float y)
+	{
+		for (const Layer& l : skin)
+		{
+			// (the layer's place and its nine pieces, as draw puts them)
+			const float x0 = rx0 + l.indent[0], y0 = ry0 + l.indent[1], x1 = rx1 - l.indent[2], y1 = ry1 - l.indent[3];
+			if (x1 <= x0 || y1 <= y0 || x < x0 || x >= x1 || y < y0 || y >= y1)
+				continue;
+			if (l.middle == Layer::Middle::Fill && l.fillAlpha > 0)
+				return true;
+			if (!l.image && !l.center)
+				continue;
+			if (l.middle != Layer::Middle::Empty || !l.image)
+				return true;
+			float ml = l.margin[0], mt = l.margin[1], mr = l.margin[2], mb = l.margin[3];
+			if (ml + mr > x1 - x0)
+				ml = mr = (x1 - x0) / 2;
+			if (mt + mb > y1 - y0)
+				mt = mb = (y1 - y0) / 2;
+			if (x < x0 + ml || x >= x1 - mr || y < y0 + mt || y >= y1 - mb)
+				return true;
+		}
+		return false;
+	}
+
 	void Theme::draw(Overlay& o, const Skin& skin, float rx0, float ry0, float rx1, float ry1, float alpha)
 	{
 		for (const Layer& l : skin)

@@ -130,6 +130,9 @@ namespace oc4::render
 
 		// Draws a skin over the rectangle (each layer at its indent).
 		static void draw(Overlay& overlay, const Skin& skin, float x0, float y0, float x1, float y1, float alpha = 1);
+		// Whether the skin drawn over the rectangle draws anything at (x, y): not in a frame's
+		// empty middle (GFC_BITMAPSKIN_CENTER_EMPTY), as the city screen's around the map.
+		static bool covers(const Skin& skin, float x0, float y0, float x1, float y1, float x, float y);
 		// A bitmap stretched over the rectangle.
 		static void draw(Overlay& overlay, const Bitmap& bitmap, float x0, float y0, float x1, float y1, float alpha = 1);
 
