@@ -719,6 +719,7 @@ if _walls:
 			m_utility.gameInterface().techSplash = true;
 			m_active = true;
 			m_laidOut = m_seenSize = { width, height };
+			m_nextMainUpdate = {};
 		}
 		catch (py::error_already_set& e)
 		{
@@ -990,12 +991,22 @@ if _walls:
 				py::module_::import("CvScreensInterface").attr("showMainInterface")();
 				py::module_::import("oc4options").attr("resized")();
 				m_utility.gameInterface().makeInterfaceDirty();
+				m_nextMainUpdate = {};
 			}
 			screens.attr("setResolution")(m_laidOut.first, m_laidOut.second);
 			const auto [mouseX, mouseY] = window.mousePosition();
 			screens.attr("setMouse")(std::max(mouseX, 0), std::max(mouseY, 0));
 			py::module_ entry = py::module_::import("CvScreensInterface");
-			entry.attr("forceScreenUpdate")(py::make_tuple(m_mainId));
+			// The main interface, four times a second as the original engine updates it (its script
+			// counts so: BUG's clock takes 250 ms off its alternate period at each update). What
+			// changes in it is redrawn below, every frame, as the game marks it dirty.
+			constexpr auto kMainUpdate = std::chrono::milliseconds(250);
+			if (now >= m_nextMainUpdate)
+			{
+				// (a frame late now and then keeps the beat; a long stall starts it again)
+				m_nextMainUpdate = now - m_nextMainUpdate < kMainUpdate ? m_nextMainUpdate + kMainUpdate : now + kMainUpdate;
+				entry.attr("forceScreenUpdate")(py::make_tuple(m_mainId));
+			}
 			// The turn log, as the game core asks for it.
 			switch (ui.turnLogRequest.exchange(Interface::TurnLog::None))
 			{

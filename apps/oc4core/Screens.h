@@ -141,6 +141,7 @@ namespace oc4::host
 		std::vector<std::pair<int, std::wstring>> m_talkAnswers; // the player's answers in it, last frame
 		long long m_minimapVersion = 0;        // the screen minimap the window has
 		std::chrono::steady_clock::time_point m_lastUpdate; // when the screens were last updated
+		std::chrono::steady_clock::time_point m_nextMainUpdate; // when the main interface's next update is due
 		bool m_diploActive = false;
 	};
 }
