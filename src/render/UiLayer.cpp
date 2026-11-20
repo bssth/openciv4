@@ -62,6 +62,8 @@ namespace oc4::render
 			for (int i = 0; i < 5; ++i)
 				m_sizes[size_t(i)] = m_theme.font(i).size;
 			m_tooltip = m_theme.skin("GFC_Control_StandardToolTip_Style", "GFC_CtrlTheme_Bitmap_Control_ToolTip_Skin_Inner_Default");
+			if (const Theme::Panel* p = m_theme.panel("PANEL_STYLE_HUD_HELP"))
+				m_hudHelp = p->inner;
 			constexpr std::string_view combo = "GFC_Control_StandardComboBox_Style", button = "SF_CtrlTheme_Civ4_Control_ComboBox_Standard_PopupButton_Style";
 			m_comboBox = { m_theme.skin(combo, "GFC_CtrlTheme_Bitmap_Control_ComboBox_Skin_ViewItem_Default"),
 				m_theme.skin(combo, "GFC_CtrlTheme_Bitmap_Control_ComboBox_Skin_ViewItem_Rollover") };
@@ -263,10 +265,38 @@ namespace oc4::render
 
 	void UiLayer::drawPlotHelp(Overlay& o, const std::wstring& text)
 	{
-		const float w = m_helpWidth, h = o.richHeight(text, w - 10, m_sizes[2], false);
-		const float x = (m_helpRight ? m_helpX : m_helpX - w) + 5;
-		const float y = std::clamp(m_helpDown ? m_helpY : m_helpY - h - 4, 0.0f, std::max(o.screenHeight() - h, 0.0f));
-		o.richBlock(text, x, y, w - 10, m_sizes[2], false, kText);
+		drawHelp(o, text);
+	}
+
+	void UiLayer::drawHelp(Overlay& o, const std::wstring& text)
+	{
+		// The main interface's: the theme's HUD help panel (help_panel.tga in HelpBG, 35 %), the
+		// map seen through it, the text 4 in from its sides (as in the original: BUG + BULL in
+		// Wine); the city screen's, framed: the theme's tooltip.
+		const bool see = !m_helpFramed && !m_hudHelp.empty();
+		const float inX = see ? 4.0f : 10.0f, inY = 5;
+		const float sw = o.screenWidth(), sh = o.screenHeight();
+		// A help taller than the room it grows into gets wider, then is kept on the screen.
+		const float room = std::max(m_helpDown ? sh - m_helpY : m_helpY, 100.0f);
+		const float widest = std::max(m_helpRight ? sw - m_helpX : m_helpX, m_helpWidth);
+		float w = m_helpWidth, h = o.richHeight(text, w - 2 * inX, m_sizes[2], false) + 2 * inY;
+		while (h > room && w < widest)
+		{
+			w = std::min(w * 1.5f, widest);
+			h = o.richHeight(text, w - 2 * inX, m_sizes[2], false) + 2 * inY;
+		}
+		const float x = m_helpRight ? m_helpX : m_helpX - w;
+		const float y = std::clamp(m_helpDown ? m_helpY : m_helpY - h, 0.0f, std::max(sh - h, 0.0f));
+		if (see)
+			Theme::draw(o, m_hudHelp, x, y, x + w, y + h);
+		else if (!m_tooltip.empty())
+			Theme::draw(o, m_tooltip, x, y, x + w, y + h);
+		else
+		{
+			o.rect(x, y, x + w, y + h, kPanel, 0.93f, 5);
+			o.frame(x, y, x + w, y + h, kEdge, 0.6f, 5, 1);
+		}
+		o.richBlock(text, x + inX, y + inY, w - 2 * inX, m_sizes[2], false, kText);
 	}
 
 	const Theme::Panel* UiLayer::themedPanel(const Item& it) const
@@ -322,8 +352,9 @@ namespace oc4::render
 		return MapWindow::UiClick{ pressed, m_pressedRight, shift, ctrl, alt };
 	}
 
-	void UiLayer::setHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown)
+	void UiLayer::setHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown, bool framed)
 	{
+		m_helpFramed = framed;
 		m_help = widen(text);
 		m_helpX = x;
 		m_helpY = y;
@@ -679,27 +710,6 @@ namespace oc4::render
 			o.frame(x0 - 2, it.y0 - 2, x1 + 2, it.y1 + 2, kHot, 1, 3, 2);
 		}
 		if (!m_help.empty())
-		{
-			// A help taller than the room it grows into gets wider, then is kept on the screen.
-			const float room = std::max(m_helpDown ? sh - m_helpY : m_helpY, 100.0f);
-			const float widest = std::max(m_helpRight ? sw - m_helpX : m_helpX, m_helpWidth);
-			float w = m_helpWidth, h = o.richHeight(m_help, w - 20, m_sizes[2], false) + 10;
-			while (h > room && w < widest)
-			{
-				w = std::min(w * 1.5f, widest);
-				h = o.richHeight(m_help, w - 20, m_sizes[2], false) + 10;
-			}
-			const float x = m_helpRight ? m_helpX : m_helpX - w;
-			const float y = std::clamp(m_helpDown ? m_helpY : m_helpY - h, 0.0f, std::max(sh - h, 0.0f));
-			// (in the theme's tooltip)
-			if (!m_tooltip.empty())
-				Theme::draw(o, m_tooltip, x, y, x + w, y + h);
-			else
-			{
-				o.rect(x, y, x + w, y + h, kPanel, 0.93f, 5);
-				o.frame(x, y, x + w, y + h, kEdge, 0.6f, 5, 1);
-			}
-			o.richBlock(m_help, x + 10, y + 5, w - 20, m_sizes[2], false, kText);
-		}
+			drawHelp(o, m_help);
 	}
 }

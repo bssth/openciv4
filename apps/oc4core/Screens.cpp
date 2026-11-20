@@ -1103,8 +1103,8 @@ if _walls:
 		{
 			m_hovered = hovered;
 			const std::string text = hovered >= 0 && size_t(hovered) < m_items.size() ? help(m_items[size_t(hovered)]) : std::string();
-			float x = 7, y = float(height) - 172, w = 350;
-			bool right = true, down = false;
+			float x = 7, y = float(height) - 172, w = 300;
+			bool right = true, down = false, framed = false;
 			try
 			{
 				if (py::object area = py::module_::import("oc4screens").attr("helpArea")(); !area.is_none())
@@ -1112,16 +1112,20 @@ if _walls:
 					auto t = area.cast<py::tuple>();
 					x = t[0].cast<float>();
 					y = t[1].cast<float>();
-					w = t[2].cast<float>();
+					// (the original wraps at the minimum width when there is one: the main
+					// interface's 300 of 350)
+					const float minWidth = t[3].cast<float>();
+					w = minWidth > 0 ? minWidth : t[2].cast<float>();
 					right = t[4].cast<bool>();
 					down = t[5].cast<bool>();
+					framed = t.size() > 6 && t[6].cast<bool>();
 				}
 			}
 			catch (py::error_already_set& e)
 			{
 				printPythonError(e);
 			}
-			window.setUiHelp(text, x, y, w, right, down);
+			window.setUiHelp(text, x, y, w, right, down, framed);
 		}
 	}
 

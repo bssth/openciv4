@@ -147,7 +147,7 @@ class _Screen(object):
 		self.shown = False
 		self.main = False
 		self.dims = None
-		self.helpArea = None   # (x, y, width, minWidth, expandRight, expandDown)
+		self.helpArea = None   # (x, y, width, minWidth, expandRight, expandDown, framed)
 		self.helpText = u''
 		self.minimap = None
 		self.mm = None         # its own minimap's layers (not the main interface's): see _Minimap
@@ -946,7 +946,8 @@ class CyGInterfaceScreen(object):
 			_set(w, 'shown', False)
 
 	def setHelpTextArea(self, fWidth, eFont, fX, fY, fZ, bFloating, szArtFile, bExpandRight, bExpandDown, uiFlags, iMinWidth):
-		self._s.helpArea = (int(fX), int(fY), int(fWidth), int(iMinWidth), bool(bExpandRight), bool(bExpandDown))
+		# (with art, the city screen's, it is framed; without, the main interface's, see-through)
+		self._s.helpArea = (int(fX), int(fY), int(fWidth), int(iMinWidth), bool(bExpandRight), bool(bExpandDown), bool(szArtFile))
 
 	def setHelpTextString(self, szString):
 		self._s.helpText = _text(szString)
@@ -1972,7 +1973,7 @@ def rowClicked(fileId, name, part, shift, ctrl):
 
 
 def helpArea():
-	"""(x, y, width, min width, expand right, expand down) of the main interface's help, or None."""
+	"""(x, y, width, min width, expand right, expand down, framed) of the main interface's help, or None."""
 	for s in _screens.values():
 		if s.main and s.helpArea is not None:
 			return s.helpArea

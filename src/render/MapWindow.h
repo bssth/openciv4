@@ -351,7 +351,7 @@ namespace oc4::render
 		// Where the mouse is, in window pixels ((-1, -1) before it came in).
 		std::pair<int, int> mousePosition() const;
 		// The help for what is under the mouse, in the screens' help area.
-		void setUiHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown);
+		void setUiHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown, bool framed = false);
 
 		// The text shown when the mouse rests on a plot (lines; the game's plot help).
 		void setPlotHelp(std::function<std::string(int x, int y)> help);

@@ -2640,9 +2640,9 @@ namespace oc4::render
 		return std::format("camera at {:.1f},{:.1f} (height {:.0f}), {:.1f} plots away, pitch {:.2f}", m->camera.target.x / p, m->camera.target.y / p,
 			m->camera.target.z, m->camera.distance / p, m->camera.pitch);
 	}
-	void MapWindow::setUiHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown)
+	void MapWindow::setUiHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown, bool framed)
 	{
-		m->ui.setHelp(text, x, y, width, expandRight, expandDown);
+		m->ui.setHelp(text, x, y, width, expandRight, expandDown, framed);
 	}
 	void MapWindow::pressKeys(const std::string& keys)
 	{

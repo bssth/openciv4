@@ -58,10 +58,12 @@ namespace oc4::render
 		void press(int x, int y, bool right);
 		std::optional<MapWindow::UiClick> release(int x, int y, bool shift, bool ctrl, bool alt);
 
-		void setHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown);
+		// framed: the help area has art of its own (the city screen's), in the theme's tooltip;
+		// else the main interface's see-through box (PANEL_STYLE_HUD_HELP).
+		void setHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown, bool framed = false);
 		// The size of a widget's font (FontTypes) as the screens draw it.
 		float textSize(int font) const { return fontSize(font); }
-		// The plot's help where the screens show theirs, over the map without a box (the game's look).
+		// The plot's help where the screens show theirs, in the same box (the game's look).
 		void drawPlotHelp(Overlay& overlay, const std::wstring& text);
 		// minimap(x0, y0, x1, y1, screen) draws the map's minimap there (screen: a screen's own, the
 		// military advisor's); leaderhead(item) a leader's head
@@ -87,7 +89,8 @@ namespace oc4::render
 		Theme& m_theme;
 		std::map<std::string, Theme::Skin, std::less<>> m_namedSkins; // panels styled "@style|property": that skin of the theme
 		bool m_fontsRead = false;
-		Theme::Skin m_tooltip; // the theme's (the help's box)
+		Theme::Skin m_tooltip; // the theme's (the framed help's box)
+		Theme::Skin m_hudHelp; // the main interface's help box (PANEL_STYLE_HUD_HELP: see-through)
 		// The theme's pull down (GFC_Control_StandardComboBox_Style): its box and its button, plain
 		// and under the mouse; its open list's box, frame and chosen item.
 		std::array<Theme::Skin, 2> m_comboBox, m_comboButton;
@@ -107,6 +110,8 @@ namespace oc4::render
 		bool m_pressedRight = false;
 		std::wstring m_help;
 		float m_helpX = 0, m_helpY = 0, m_helpWidth = 350;
-		bool m_helpRight = true, m_helpDown = false;
+		bool m_helpRight = true, m_helpDown = false, m_helpFramed = false;
+		// A help in the help area: its box, then its text.
+		void drawHelp(Overlay& o, const std::wstring& text);
 	};
 }
