@@ -39,6 +39,21 @@ namespace
 				m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]);
 		std::cout << '\n';
 
+		if (const auto* nn = dynamic_cast<const NiNode*>(obj); nn && !nn->effects.empty())
+		{
+			std::cout << indent << "    effects:";
+			for (const Ref e : nn->effects)
+				std::cout << ' ' << e;
+			std::cout << '\n';
+		}
+		if (const auto* l = dynamic_cast<const NiLight*>(obj))
+		{
+			std::cout << std::format("{}    light: on={} dimmer={:.2f} amb=({:.2f},{:.2f},{:.2f}) diff=({:.2f},{:.2f},{:.2f}) spec=({:.2f},{:.2f},{:.2f}) atten={:.3f},{:.5f},{:.7f} affects:", indent, l->switchState, l->dimmer,
+				l->ambient.r, l->ambient.g, l->ambient.b, l->diffuse.r, l->diffuse.g, l->diffuse.b, l->specular.r, l->specular.g, l->specular.b, l->constantAttenuation, l->linearAttenuation, l->quadraticAttenuation);
+			for (const Ref a : l->affectedNodes)
+				std::cout << ' ' << a;
+			std::cout << '\n';
+		}
 		if (const auto* g = dynamic_cast<const NiGeometry*>(obj))
 		{
 			if (const auto* d = f.get<NiTriBasedGeomData>(g->data))
@@ -68,6 +83,21 @@ namespace
 						sd->bones.empty() ? "-" : vec(sd->bones[0].skinTransform.translation),
 						sd->bones.empty() ? 0 : sd->bones[0].weights.size());
 			}
+			for (const Ref p : obj->properties)
+				if (const auto* mp = f.get<NiMaterialProperty>(p))
+					std::cout << std::format("{}    material [{}]: amb=({:.2f},{:.2f},{:.2f}) diff=({:.2f},{:.2f},{:.2f}) emis=({:.2f},{:.2f},{:.2f}) spec=({:.2f},{:.2f},{:.2f}) gloss={:.1f} alpha={:.2f}\n", indent, p,
+						mp->ambient.r, mp->ambient.g, mp->ambient.b, mp->diffuse.r, mp->diffuse.g, mp->diffuse.b, mp->emissive.r, mp->emissive.g, mp->emissive.b,
+						mp->specular.r, mp->specular.g, mp->specular.b, mp->glossiness, mp->alpha);
+				else if (const auto* vp = f.get<NiVertexColorProperty>(p))
+					std::cout << std::format("{}    vertexColor [{}]: mode={} lighting={}\n", indent, p, vp->vertexMode, vp->lightingMode);
+				else if (const auto* tp = f.get<NiTexturingProperty>(p))
+					std::cout << std::format("{}    texturing [{}]: apply={}\n", indent, p, tp->applyMode);
+				else if (const auto* zp = f.get<NiZBufferProperty>(p))
+					std::cout << std::format("{}    zbuffer [{}]: flags={}\n", indent, p, zp->flags);
+			for (const Ref p : obj->properties)
+				if (const auto* ap = f.get<NiAlphaProperty>(p))
+					std::cout << std::format("{}    alpha [{}]: flags=0x{:04X} blend={} src={} dst={} test={} func={} threshold={} noSorter={}\n", indent, p, ap->flags,
+						ap->blendEnabled(), ap->srcBlend(), ap->dstBlend(), ap->testEnabled(), ap->testFunc(), ap->threshold, ap->noSorter());
 			for (const Ref p : obj->properties)
 				if (const auto* tp = f.get<NiTexturingProperty>(p))
 					for (size_t s = 0; s < tp->shaderMaps.size(); ++s)

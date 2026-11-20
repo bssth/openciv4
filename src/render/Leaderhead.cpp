@@ -82,6 +82,36 @@ namespace oc4::render
 					m_light.ambient = colour;
 			}
 
+		// Its parts drawn without its shader (fixed function) are lit by the lights its nodes hold
+		// (their effects lists): point lights as Direct3D has them, the ambient lights summed. Not
+		// by "BloomFactors" and "BloomColorChannelMix": they only carry the bloom's settings to the
+		// shader (GSC:g_f3Bloom...); lit by them, Victoria's lace veil turned cyan and Genghis
+		// Khan's fur blue, in the original they are cream and dark grey.
+		for (const nif::Ref r : [&] {
+				 std::vector<nif::Ref> refs;
+				 for (size_t b = 0; b < m_leader.file->blocks.size(); ++b)
+					 if (const auto* node = m_leader.file->get<nif::NiNode>(nif::Ref(b)))
+						 for (const nif::Ref e : node->effects)
+							 if (std::find(refs.begin(), refs.end(), e) == refs.end())
+								 refs.push_back(e);
+				 return refs;
+			 }())
+		{
+			const auto* light = m_leader.file->get<nif::NiLight>(r);
+			if (!light || !light->switchState)
+				continue;
+			const std::string type = m_leader.file->typeOf(r);
+			if (lower(light->name).starts_with("bloom"))
+				continue;
+			const Vec3 ambient{ light->ambient.r * light->dimmer, light->ambient.g * light->dimmer, light->ambient.b * light->dimmer };
+			m_fixedAmbient = m_fixedAmbient + ambient;
+			if (type != "NiPointLight")
+				continue;
+			for (size_t i = 0; i < m_leader.model.nodes.size(); ++i)
+				if (m_leader.model.nodes[i].block == r)
+					m_fixedLights.push_back({ bind[i].translation, { light->diffuse.r * light->dimmer, light->diffuse.g * light->dimmer, light->diffuse.b * light->dimmer } });
+		}
+
 		// The greeting, then the idle of its attitude.
 		m_leader.player.setFallback(clip(idleEvent()));
 		if (const auto greeting = clip(0))
@@ -194,7 +224,14 @@ namespace oc4::render
 		std::vector<scene::Material> materials;
 		materials.reserve(part.model.items.size());
 		for (const auto& item : part.model.items)
+		{
 			materials.push_back(anim::animatedMaterial(item, pose));
+			// (the leader's parts in Gamebryo's order: a blended one whose alpha property has "no
+			// sorter" where the model has it, the others sorted by distance after them; Sitting
+			// Bull's feather rings before the fluff in front of them)
+			if (&part == &m_leader && materials.back().alphaBlend && materials.back().alphaNoSorter)
+				materials.back().blendUnsorted = true;
+		}
 		m_renderer.draw(*part.gpu, part.model.worldTransforms(pose.locals), part.model.visibility(pose.hidden), materials);
 	}
 
@@ -235,6 +272,7 @@ namespace oc4::render
 			draw(m_background);
 			m_renderer.viewLayer();
 		}
+		m_renderer.setFixedLights(m_fixedLights, m_fixedAmbient);
 		draw(m_leader);
 		m_renderer.endView();
 		return m_renderer.targetImage(m_target);

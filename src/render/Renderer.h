@@ -165,6 +165,14 @@ float3 globeBend(float3 p)
 	};
 
 	// The light of a view: the direction it shines in, its colour, the ambient light.
+	// A light as Gamebryo's fixed-function pipeline has it: a point light (no falloff, as all
+	// the leaders' are), its diffuse colour times its dimmer.
+	struct PointLight
+	{
+		Vec3 position;
+		Vec3 color;
+	};
+
 	struct ViewLight
 	{
 		Vec3 direction{ -0.4f, -0.6f, -0.7f };
@@ -209,6 +217,12 @@ float3 globeBend(float3 p)
 		// In a view: what was drawn so far (its blended items too) becomes the backdrop of what
 		// comes next, which nothing of it hides (a leader in front of the scene behind him).
 		void viewLayer();
+		// What is drawn from now on without a shader of its own (fixed function: no leader
+		// shading) is lit by these lights, as Direct3D's fixed-function pipeline lights it (up to
+		// 8; the vertex normal as it is, back faces too), plus the ambient lights' sum; until
+		// clearFixedLights.
+		void setFixedLights(std::span<const PointLight> lights, Vec3 ambient);
+		void clearFixedLights();
 		const GpuImage* targetImage(OffscreenTarget& target) { return target.color.get(); }
 		void present();
 
@@ -333,6 +347,8 @@ float3 globeBend(float3 p)
 		float m_viewProj[16]{};
 		float m_globe[4]{};
 		bool m_inView = false;        // between beginView and endView
+		bool m_fixedLit = false;      // setFixedLights: m_fixedLights hold the lights
+		float m_fixedLights[8 * 4 * 2 + 4]{};
 		bool m_viewOnNothing = false; // ... a view on nothing: what is not blended covers it (alpha 1)
 		Vec3 m_viewEye;
 
