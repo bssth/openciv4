@@ -88,6 +88,12 @@ namespace oc4::render
 		std::map<std::string, Theme::Skin, std::less<>> m_namedSkins; // panels styled "@style|property": that skin of the theme
 		bool m_fontsRead = false;
 		Theme::Skin m_tooltip; // the theme's (the help's box)
+		// A multi list's button (the unit's actions, the city's builds): the theme's MultiList_Item
+		// skins over its picture: its ring (HUDBorder), the glow under the mouse (added), its fill
+		// when pressed, darker when disabled, and the glow round a pulsing one.
+		Theme::Skin m_listBorder, m_listBorderGlow, m_listFill, m_listFillGlow, m_listDisable;
+		Theme::Skin m_listPress, m_pulseInside, m_pulseDeep, m_pulseLight, m_pulseHalo;
+		void drawListButton(Overlay& o, const Item& it, bool hot, bool pressed, double clock);
 		// The theme's pull down (GFC_Control_StandardComboBox_Style): its box and its button, plain
 		// and under the mouse; its open list's box, frame and chosen item.
 		std::array<Theme::Skin, 2> m_comboBox, m_comboButton;

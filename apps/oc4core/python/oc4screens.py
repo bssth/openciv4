@@ -1025,7 +1025,7 @@ class CyGInterfaceScreen(object):
 			return
 		while len(w.lists) <= int(listId):
 			w.lists.append([])
-		w.lists[int(listId)].append([_str(szTexture), _int(eWidgetType), _int(iData1), _int(iData2), bool(bOption), None])
+		w.lists[int(listId)].append([_str(szTexture), _int(eWidgetType), _int(iData1), _int(iData2), bool(bOption), None, False])
 		_changed()
 
 	def clearMultiList(self, szName):
@@ -1043,7 +1043,18 @@ class CyGInterfaceScreen(object):
 			pass
 
 	def selectMultiList(self, szName, iListID): pass
-	def enableMultiListPulse(self, szName, bEnable, listId, iIndexId): pass
+
+	def enableMultiListPulse(self, szName, bEnable, listId, iIndexId):
+		"""The button glows on and off (the main interface's: the action recommended for the unit
+		where it is, or where the held right button points)."""
+		w = self._s.get(szName)
+		try:
+			b = w.lists[int(listId)][int(iIndexId)]
+			if b[6] != bool(bEnable):
+				b[6] = bool(bEnable)
+				_changed()
+		except (AttributeError, IndexError, TypeError):
+			pass
 
 	# ---------------------------------------------------------------- tables
 
@@ -1429,6 +1440,7 @@ def version():
 
 
 _LIST_ROW = 20   # a list box's row, and a step of the wheel in what scrolls by pixels
+_LIST_GAP = 2    # between a multi list's buttons, across and down (the original's)
 _DROP_ROW = 22   # a row of a pull down's open list
 _heights = {}    # (text, width, font) -> how high it is
 
@@ -1562,30 +1574,32 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 	kind = w.kind
 	if kind == 'multilist':
 		bw, bh = max(1, w.defw), max(1, w.defh)
+		# (the original's buttons are 2 apart, across and down: 48 wide, one every 50, measured in Wine)
+		pw, ph = bw + _LIST_GAP, bh + _LIST_GAP
 		row = 0
 		placed = []
 		for listId, buttons in enumerate(w.lists or []):
 			col = 0
 			for index, b in enumerate(buttons):
-				if width and col and (col + 1) * bw > width:
+				if width and col and col * pw + bw > width:
 					col, row = 0, row + 1
-				placed.append((listId, index, b, col * bw, row * bh))
+				placed.append((listId, index, b, col * pw, row * ph))
 				col += 1
 			if buttons:
 				row += 1
 		box, top = clip, y
 		if height:
 			box = _clipTo(clip, (x, y, x + width, y + height))
-			w.extent = row * bh
+			w.extent = row * ph
 			# (a row a notch of the wheel)
-			_scrolls(w, x, y, x + width, y + height, s.id, max(1, bh / 3), out)
+			_scrolls(w, x, y, x + width, y + height, s.id, max(1, ph / 3), out)
 			top = y - w.offset
 		for listId, index, b, dx, dy in placed:
 			bx, by = x + dx, top + dy
 			if height and (by + bh <= y or by >= y + height):
 				continue
 			out.append((base + ((listId << 16) | index,), 'imagebutton', bx, by, bx + bw, by + bh, box, w.style, u'', b[5] if b[5] and b[5] != '-' else b[0],
-				'', 1, 0, False, b[5] is None and w.enabled, 0, None, b[1], b[2], b[3], b[4], w.z, w.seq))
+				'', 1, 0, False, b[5] is None and w.enabled, 0, None, b[1], b[2], b[3], b[4], w.z, w.seq, b[6], True))
 		return
 	if kind == 'table':
 		# (the theme's cell height, GFC_Control_Size_ListItem; taller for a table whose cells have pictures)
@@ -1703,8 +1717,9 @@ def dump(path):
 	"""Writes every widget of the shown screens (name, kind, place, style, art) to a file."""
 	f = open(path, 'w')
 	for item in display():
-		f.write('%s\t%s\t%s\t(%d,%d)-(%d,%d)\tstyle=%s\ttex=%s\ttext=%s\twidget=%d,%d,%d\n' % (item[0][0], item[0][1], item[1], item[2], item[3], item[4],
-			item[5], item[7], item[9], _text(item[8]).encode('utf-8')[:60], item[17], item[18], item[19]))
+		f.write('%s\t%s\t%s\t(%d,%d)-(%d,%d)\tstyle=%s\ttex=%s\ttext=%s\twidget=%d,%d,%d%s\n' % (item[0][0], item[0][1], item[1], item[2], item[3], item[4],
+			item[5], item[7], item[9], _text(item[8]).encode('utf-8')[:60], item[17], item[18], item[19],
+			'\tpulse' if item[1] == 'imagebutton' and len(item) > 23 and item[23] else ''))
 	f.close()
 
 
@@ -1713,7 +1728,7 @@ def display():
 
 	Each item: ((file id, widget name, part), kind, x0, y0, x1, y1, clip, style, text, texture,
 	texture2, font, flags, state, enabled, hit test, colour, widget type, data1, data2, option,
-	z, order[, bar start, bar percent]).
+	z, order[, bar start, bar percent][, a multi list's button: pulse]).
 	"""
 	for f in beforeDisplay:
 		try:

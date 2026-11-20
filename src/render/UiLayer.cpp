@@ -62,6 +62,28 @@ namespace oc4::render
 			for (int i = 0; i < 5; ++i)
 				m_sizes[size_t(i)] = m_theme.font(i).size;
 			m_tooltip = m_theme.skin("GFC_Control_StandardToolTip_Style", "GFC_CtrlTheme_Bitmap_Control_ToolTip_Skin_Inner_Default");
+			m_listBorder = m_theme.skin("", "SF_CtrlTheme_Civ4_Control_MultiList_ItemBorder_Skin");
+			m_listBorderGlow = m_theme.skin("", "SF_CtrlTheme_Civ4_Control_MultiList_ItemBorderGlow_Skin");
+			m_listFill = m_theme.skin("", "SF_CtrlTheme_Civ4_Control_MultiList_ItemFill_Skin");
+			m_listFillGlow = m_theme.skin("", "SF_CtrlTheme_Civ4_Control_MultiList_ItemFillGlow_Skin");
+			const auto tinted = [&](const Theme::Skin& skin, Color c) {
+				Theme::Skin out = skin;
+				for (Theme::Layer& l : out)
+					l.image = m_theme.modulate(l.image, c);
+				return out;
+			};
+			// (pressed: the fill in a blue half over it; pulsing: a little blue inside, the ring from a
+			// deep to a light blue, a blue halo round it; Wine's colours)
+			m_listPress = tinted(m_listFill, { 0.27f, 0.26f, 0.77f });
+			// (disabled: everything inside the ring and the ring itself half way to black, as Wine draws
+			// a worker's farm and railroad it cannot build; not the theme's ItemDisable, a white wash)
+			m_listDisable = tinted(m_listFill, { 0, 0, 0 });
+			m_pulseInside = tinted(m_listFill, { 0, 0.35f, 1 });
+			m_pulseDeep = tinted(m_listBorder, { 0.13f, 0.45f, 1 });
+			m_pulseLight = tinted(m_listBorder, { 0.01f, 0.59f, 1 });
+			m_pulseHalo = m_listBorderGlow;
+			for (Theme::Layer& l : m_pulseHalo)
+				l.image = m_theme.glow(l.image, { 0, 0.31f, 1 });
 			constexpr std::string_view combo = "GFC_Control_StandardComboBox_Style", button = "SF_CtrlTheme_Civ4_Control_ComboBox_Standard_PopupButton_Style";
 			m_comboBox = { m_theme.skin(combo, "GFC_CtrlTheme_Bitmap_Control_ComboBox_Skin_ViewItem_Default"),
 				m_theme.skin(combo, "GFC_CtrlTheme_Bitmap_Control_ComboBox_Skin_ViewItem_Rollover") };
@@ -332,6 +354,41 @@ namespace oc4::render
 		m_helpDown = expandDown;
 	}
 
+	void UiLayer::drawListButton(Overlay& o, const Item& it, bool hot, bool pressed, double clock)
+	{
+		// As the original draws a multi list's button (measured in Wine, BUG + BULL, 2026-11-20): its
+		// picture whole, the ring over its edge in the HUDBorder colour; under the mouse the fill
+		// glow added (+57 of 255: its inside, the ring, and a soft edge just outside); pressed, a
+		// blue fill half over that; disabled, half way to black (its own picture, the one
+		// disableMultiListButton gives).
+		const float x0 = it.x0, y0 = it.y0, x1 = it.x1, y1 = it.y1, a = it.alpha;
+		if (it.pulse)
+		{
+			// The action recommended: a blue glow that beats every 0.6 s, the ring going from a deep to
+			// a light blue, a blue halo just outside it and a little blue inside (Wine, 120 fps film).
+			const float beat = 0.5f - 0.5f * std::cos(float(clock) * 2 * std::numbers::pi_v<float> / 0.6f);
+			Theme::draw(o, m_pulseInside, x0, y0, x1, y1, 0.25f * beat * a);
+			if (const Theme::Skin& h = m_pulseHalo; !h.empty())
+			{
+				// (strong: at its peak the halo covers what is under it where the glow is two thirds white)
+				const float k = 0.75f + 0.75f * beat;
+				Theme::draw(o, h, x0, y0, x1, y1, std::min(k, 1.0f) * a);
+				if (k > 1)
+					Theme::draw(o, h, x0, y0, x1, y1, (k - 1) * a);
+			}
+			Theme::draw(o, m_pulseDeep, x0, y0, x1, y1, a);
+			Theme::draw(o, m_pulseLight, x0, y0, x1, y1, beat * a);
+		}
+		else
+			Theme::draw(o, m_listBorder, x0, y0, x1, y1, a);
+		if (!it.enabled)
+			Theme::draw(o, m_listDisable, x0, y0, x1, y1, 0.5f * a);
+		if (hot)
+			Theme::draw(o, m_listFillGlow, x0, y0, x1, y1, 0.224f * a);
+		if (pressed)
+			Theme::draw(o, m_listPress, x0, y0, x1, y1, 0.5f * a);
+	}
+
 	void UiLayer::draw(Overlay& o, const std::function<void(float, float, float, float, bool)>& minimap, double clock,
 		const std::function<bool(const Item&)>& leaderhead)
 	{
@@ -418,8 +475,20 @@ namespace oc4::render
 				icon(it.texture, x0, y0, x1, y1, alpha);
 				break;
 			case Kind::ImageButton:
-				if (icon(it.texture, x0, y0, x1, y1, alpha))
+				if (it.listItem && !m_listBorder.empty() && icon(it.texture, x0, y0, x1, y1, it.alpha))
+					drawListButton(o, it, hot, hot && int(i) == m_pressed, clock);
+				else if (icon(it.texture, x0, y0, x1, y1, alpha))
 				{
+					// (a pulsing button: what the unit is recommended to do; the original's has a blue rim
+					// that glows round it, a little brighter and dimmer a second a beat, the picture tinted blue)
+					if (it.pulse)
+					{
+						const float beat = 0.5f - 0.5f * std::cos(float(clock) * 2 * std::numbers::pi_v<float>);
+						constexpr Color kGlow{ 0.2f, 0.55f, 1.0f };
+						o.rect(x0, y0, x1, y1, kGlow, 0.18f * alpha, 3);
+						o.frame(x0 - 2, y0 - 2, x1 + 2, y1 + 2, kGlow, (0.25f + 0.15f * beat) * alpha, 5, 3);
+						o.frame(x0, y0, x1, y1, { 0.45f, 0.75f, 1.0f }, (0.75f + 0.25f * beat) * alpha, 3, 2);
+					}
 					if (hot)
 						o.frame(x0, y0, x1, y1, kHot, 1, 3, 2);
 				}

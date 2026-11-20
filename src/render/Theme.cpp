@@ -965,6 +965,34 @@ namespace oc4::render
 		return out;
 	}
 
+	Theme::Bitmap Theme::glow(const Bitmap& b, Color c)
+	{
+		if (!b)
+			return b;
+		const int r = std::clamp(int(c.r * 255), 0, 255), g = std::clamp(int(c.g * 255), 0, 255), bl = std::clamp(int(c.b * 255), 0, 255);
+		const std::string key = lower(b.picture->path) + "|glow" + std::to_string(r) + "," + std::to_string(g) + "," + std::to_string(bl);
+		auto& slot = m->pictures[key];
+		if (!slot)
+			if (const Picture* plain = m->picture(b.picture->path, nullptr, 1))
+			{
+				slot = std::make_unique<Picture>(*plain);
+				const int colour[3] = { bl, g, r }; // (BGRA)
+				for (size_t i = 0; i + 3 < slot->bgra.size(); i += 4)
+				{
+					// (its brightness the alpha: white is the colour, black nothing; premultiplied)
+					const int lum = std::max({ slot->bgra[i], slot->bgra[i + 1], slot->bgra[i + 2] }) * slot->bgra[i + 3] / 255;
+					for (int k = 0; k < 3; ++k)
+						slot->bgra[i + size_t(k)] = uint8_t(colour[k] * lum / 255);
+					slot->bgra[i + 3] = uint8_t(lum);
+				}
+				slot->key = (uint64_t(0x7E) << 56) | ++m->nextKey;
+			}
+		Bitmap out = b;
+		if (slot)
+			out.picture = slot.get();
+		return out;
+	}
+
 	Theme::Font Theme::font(int size, bool bold, bool italic) const
 	{
 		static const float kSizes[] = { 10, 12, 14, 16, 22 }; // (the theme's, when it says nothing)

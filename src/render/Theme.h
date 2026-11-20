@@ -125,6 +125,9 @@ namespace oc4::render
 		Bitmap addSigned(const Bitmap& bitmap, Color colour);
 		// The bitmap multiplied by the colour (the Modulate combine): a bar's fill in its colour.
 		Bitmap modulate(const Bitmap& bitmap, Color colour, float alpha = 1);
+		// The bitmap's brightness as the alpha of the colour (a glow drawn in black and white,
+		// laid over what is under it in a colour: the multi list's pulse).
+		Bitmap glow(const Bitmap& bitmap, Color colour);
 		// Font size 1..4 (the markup's <font=n>); the theme's, else the nearest it has.
 		Font font(int size, bool bold = false, bool italic = false) const;
 
