@@ -1240,6 +1240,9 @@ float4 PSTerrain(PSIn i) : SV_Target
 
 			const int ox = int(std::floor(px)), oy = int(std::floor(py));
 			const float hill = map.hillScale * S(), peak = map.peakScale * S();
+			if (heightTiles.ok)
+				h += reliefBytes(px, py) * kHeightByte * S();
+			else
 			for (int dy = -1; dy <= 1; ++dy)
 				for (int dx = -1; dx <= 1; ++dx)
 				{
@@ -1295,6 +1298,129 @@ float4 PSTerrain(PSIn i) : SV_Target
 
 		static constexpr float kRelief = 0.12f; // of a plot, either way
 
+		// Hills and peaks as the original builds them (its GenerateTerrainHeights): a 16×16 tile
+		// of 8-bit heights for each square between four plot centres, its corners on the plots'
+		// centres, image top north. A tile's number is the mask of its corner plots that are hills
+		// (`hill1_N.tga`) or peaks (`Peak_N.tga`): NW 1, NE 2, SE 4, SW 8, so 15 is all four (one
+		// tile each, no variants; `Peak_16` and the `hill_NN_MM` sets are never loaded). Each adds
+		// its texels × fHillScale / fPeakScale, faded towards water corners by `CoastScaleMaskNN`
+		// (NN the mask of the corners that are water or off the map, 0 read as 15), each texel
+		// truncated to a whole byte. The flat ground under them (`flat1_N`, ~64, and the coast
+		// tiles) is left to baseLevel and relief.
+		struct HeightTiles
+		{
+			bool ok = false;
+			std::array<std::array<uint8_t, 256>, 15> hill{}, peak{};
+			std::array<std::array<uint8_t, 256>, 16> scale{};
+		};
+		// Of a plot: one height-map byte. Measured in the original (CyPlot.getPoint, every plot of
+		// the test map): a plot's centre is at z = its byte, flat 64, hill 93, peak 175, water 49.5,
+		// with plots 180 units apart (fZScale 1).
+		static constexpr float kHeightByte = 1.0f / 180;
+		HeightTiles heightTiles;
+		bool heightTilesTried = false;
+		std::vector<uint8_t> reliefTiles; // (W + 1) × (H + 1) tiles of 256 bytes added (hills and peaks)
+		int reliefCols = 0, reliefRows = 0;
+
+		void loadHeightTiles()
+		{
+			if (heightTilesTried)
+				return;
+			heightTilesTried = true;
+			const auto load = [&](const std::string& path, std::array<uint8_t, 256>& out) {
+				const auto loc = assets.locate(makeAssetKey(path));
+				if (!loc)
+					return false;
+				try
+				{
+					const gfx::Image image = gfx::loadTga(assets.read(*loc));
+					if (image.width != 16 || image.height != 16)
+						return false;
+					const std::vector<uint8_t> bgra = gfx::decodeBgra(image);
+					for (size_t i = 0; i < 256; ++i)
+						out[i] = bgra[i * 4];
+					return true;
+				}
+				catch (const std::exception& e)
+				{
+					problem(std::format("{}: {}", path, e.what()));
+					return false;
+				}
+			};
+			bool ok = true;
+			for (int n = 1; n <= 15 && ok; ++n)
+				ok = load(std::format("art/Terrain/heightmap/hills/hill1_{}.tga", n), heightTiles.hill[size_t(n - 1)]) &&
+					load(std::format("art/Terrain/heightmap/peaks/Peak_{}.tga", n), heightTiles.peak[size_t(n - 1)]);
+			for (int n = 0; n < 16 && ok; ++n)
+				ok = load(std::format("art/Terrain/heightmap/CoastBlendMasks/CoastScaleMask{:02}.tga", n), heightTiles.scale[size_t(n)]);
+			heightTiles.ok = ok;
+			if (!ok)
+				problem("hill and peak height tiles not found: hills drawn as lumps");
+		}
+
+		// The hills' and peaks' bytes of every tile, as the original adds them.
+		void composeReliefTiles()
+		{
+			const int W = map.width, H = map.height;
+			reliefCols = W + 1, reliefRows = H + 1;
+			reliefTiles.assign(size_t(reliefCols) * size_t(reliefRows) * 256, 0);
+			if (!heightTiles.ok)
+				return;
+			const float hillScale = map.hillScale, peakScale = map.peakScale;
+			for (int ty = 0; ty < reliefRows; ++ty)
+				for (int tx = 0; tx < reliefCols; ++tx)
+				{
+					// (tile row 0 is the map's north edge: its corners are rows H and H - 1)
+					const PlotView* corner[4] = { map.plot(tx - 1, H - ty), map.plot(tx, H - ty), map.plot(tx, H - ty - 1), map.plot(tx - 1, H - ty - 1) };
+					int water = 0, hills = 0, peaks = 0;
+					for (int k = 0; k < 4; ++k)
+					{
+						const PlotView* p = corner[k];
+						if (!p || p->water)
+							water |= 1 << k;
+						if (p && p->hills)
+							hills |= 1 << k;
+						if (p && p->peak)
+							peaks |= 1 << k;
+					}
+					if (!hills && !peaks)
+						continue;
+					const auto& mask = heightTiles.scale[size_t(water ? water : 15)];
+					uint8_t* out = &reliefTiles[(size_t(ty) * size_t(reliefCols) + size_t(tx)) * 256];
+					for (size_t i = 0; i < 256; ++i)
+					{
+						const float fade = float(mask[i]) * (1.0f / 255);
+						int v = 0;
+						if (hills)
+							v += int(float(heightTiles.hill[size_t(hills - 1)][i]) * fade * hillScale);
+						if (peaks)
+							v += int(float(heightTiles.peak[size_t(peaks - 1)][i]) * fade * peakScale);
+						out[i] = uint8_t(std::min(v, 255 - 64));
+					}
+				}
+		}
+
+		// The hills' and peaks' height at a point (in plots), in the original's height-map bytes:
+		// the tile texels bilinear, a tile's 16 spanning the 15 gaps between two plot centres.
+		float reliefBytes(float px, float py) const
+		{
+			if (reliefTiles.empty())
+				return 0;
+			const int tx = int(std::floor(px + 0.5f));
+			const float s = py - 0.5f;
+			const int r0 = int(std::floor(s));
+			const int ty = map.height - r0 - 1;
+			const float col = std::clamp((px + 0.5f - float(tx)) * 15, 0.0f, 15.0f), row = std::clamp((1 - (s - float(r0))) * 15, 0.0f, 15.0f);
+			const int cx = std::clamp(tx, 0, reliefCols - 1), cy = std::clamp(ty, 0, reliefRows - 1);
+			const uint8_t* t = &reliefTiles[(size_t(cy) * size_t(reliefCols) + size_t(cx)) * 256];
+			const int c0 = std::min(int(col), 14), rr = std::min(int(row), 14);
+			const float fc = col - float(c0), fr = row - float(rr);
+			const auto at = [&](int r, int c) { return float(t[r * 16 + c]); };
+			const float a = at(rr, c0) + (at(rr, c0 + 1) - at(rr, c0)) * fc;
+			const float b = at(rr + 1, c0) + (at(rr + 1, c0 + 1) - at(rr + 1, c0)) * fc;
+			return a + (b - a) * fr;
+		}
+
 		// Smooth noise in [-1, 1] over the map in plots, a few octaves of value noise whose
 		// lattices have whole cells a plot, so that a wrapping map has no seam.
 		float relief(float px, float py) const
@@ -1324,6 +1450,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 			gridW = W * kSub + 1;
 			gridH = H * kSub + 1;
 			const float step = S() / kSub;
+			loadHeightTiles();
+			composeReliefTiles();
 			heights.assign(size_t(gridW) * gridH, 0);
 			for (int j = 0; j < gridH; ++j)
 				for (int i = 0; i < gridW; ++i)
