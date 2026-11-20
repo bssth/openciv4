@@ -77,7 +77,12 @@ namespace oc4::host
 		// to, air strike, ...: the host takes the click).
 		bool canHandleAction(int iAction, CvPlot* pPlot, bool bTestVisible) override;
 		bool canDoInterfaceMode(InterfaceModeTypes eInterfaceMode, CvSelectionGroup* pSelectionGroup) override;
-		void setInterfaceMode(InterfaceModeTypes eNewValue) override { m_interfaceMode = eNewValue; }
+		// (the action buttons again: the main interface shows none in a mode that picks a plot, Route To, Go To, ...)
+		void setInterfaceMode(InterfaceModeTypes eNewValue) override
+		{
+			if (std::exchange(m_interfaceMode, eNewValue) != eNewValue)
+				m_dirty[SelectionButtons_DIRTY_BIT] = true;
+		}
 		InterfaceModeTypes getInterfaceMode() override { return m_interfaceMode; }
 
 		// Popups as the original's interface runs them: the DLL queues them (addPopup, or the
