@@ -716,7 +716,7 @@ namespace
 		uint64_t globeShown = 0;      // ... and the globe's state it shows (engine.globeVersion)
 		int globeTurn = -1;
 		std::vector<render::MapWindow::PlotMarks::Mark> globeMarks;
-		uint64_t greatWallShown = 0; // the Great Wall the capture has (its cities)
+		uint64_t greatWallShown = 0; // the Great Wall the capture has (engine.greatWallVersion)
 		int shownCursor = -2; // the game's cursor the window has
 		window.setActionHelp([&](int i) { return i >= 0 && size_t(i) < actionIds.size() ? capture.widgetHelp(WIDGET_ACTION, actionIds[size_t(i)], -1) : std::string(); });
 		const auto held = render::keyHeld;
@@ -1527,13 +1527,26 @@ namespace
 			const auto now = Clock::now();
 				if (changed || now - captured > std::chrono::milliseconds(200))
 				{
+				// (the Great Wall asked for since, along the borders as they are now; a save without
+				// it: laid for the city with the wonder)
+				engine.layGreatWalls([] { return host::greatWallCities(); });
 				if (const uint64_t v = engine.greatWallVersion; v != greatWallShown)
 				{
 					greatWallShown = v;
-					std::vector<std::pair<int, int>> walls;
-					for (const auto& c : host::greatWallCities())
-						walls.push_back(host::windowPlot(c));
-					capture.setGreatWallCities(std::move(walls));
+					std::vector<render::MapSnapshot::WallChain> chains;
+					for (const host::GreatWall& w : engine.greatWalls())
+					{
+						// (in the window's plots: a viewport moves them all alike)
+						const auto [wx, wy] = host::windowPlot({ w.cityX, w.cityY });
+						for (const host::GreatWallChain& c : w.chains)
+						{
+							auto& out = chains.emplace_back();
+							out.closed = c.closed;
+							for (const auto& p : c.corners)
+								out.corners.push_back({ p[0] + wx - w.cityX, p[1] + wy - w.cityY });
+						}
+					}
+					capture.setGreatWall(std::move(chains));
 				}
 				// (in the WorldBuilder no unit shows as selected, as the original's)
 				window.setMap(capture.capture(ui.worldBuilder() ? nullptr : &ui));

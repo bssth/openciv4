@@ -271,6 +271,7 @@ add_executable(oc4core
 	apps/oc4core/GameCoreImports.cpp
 	apps/oc4core/GameFont.cpp
 	apps/oc4core/GameSession.cpp
+	apps/oc4core/GreatWall.cpp
 	apps/oc4core/Interface.cpp
 	apps/oc4core/MapCapture.cpp
 	apps/oc4core/Profiler.cpp

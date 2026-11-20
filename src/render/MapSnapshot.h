@@ -244,15 +244,16 @@ namespace oc4::render
 			float scale = 1;
 		};
 		std::vector<Attachable> attachables;
-		// The Great Wall (a building that is an area border obstacle): along the edges of the
-		// plots of its owner on its city's landmass that face land of others, its segments
-		// (ART_GREAT_WALL_SEGMENT) and posts at the corners (ART_GREAT_WALL_POST).
-		struct WallEdge
+		// The Great Wall (a building that is an area border obstacle) as the engine laid it when it
+		// was built: lines along plot edges, by their corners (a plot's corner x, y is its
+		// south-west one), a closed loop or pieces that end at the coast. Drawn with segments
+		// (ART_GREAT_WALL_SEGMENT) and towers (ART_GREAT_WALL_POST) along them.
+		struct WallChain
 		{
-			int x = 0, y = 0;
-			uint8_t side = 0; // 0 north, 1 east, 2 south, 3 west
+			bool closed = false;
+			std::vector<std::array<int, 2>> corners;
 		};
-		std::vector<WallEdge> greatWall;
+		std::vector<WallChain> greatWall;
 		Attachable greatWallSegment, greatWallPost;
 		// The effects (CIV4EffectInfos) the figures' animations set off by type ("Effect:<node>:<type>").
 		std::vector<Attachable> effects;

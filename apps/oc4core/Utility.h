@@ -5,6 +5,7 @@
 #include "Audio.h"
 #include "Diplomacy.h"
 #include "FAStar.h"
+#include "GreatWall.h"
 #include "Interface.h"
 #include "PythonHost.h"
 #include "Text.h"
@@ -151,10 +152,36 @@ namespace oc4::host
 			return std::exchange(effects, {});
 		}
 		std::vector<Effect> effects;
-		// The Great Wall built or lost somewhere: whoever draws the map looks again.
-		void AddGreatWall(CvCity*) override { ++greatWallVersion; }
-		void RemoveGreatWall(CvCity*) override { ++greatWallVersion; }
+		// The Great Wall (GreatWall.h): asked for by the game core, laid at the engine's next
+		// update (layGreatWalls: before the map is next captured, or a save), along the borders
+		// as they are then, and kept as laid. (A scenario sets its cities' buildings before
+		// their borders are drawn: the original's wall follows the borders it starts with.)
+		void AddGreatWall(CvCity* city) override;
+		void RemoveGreatWall(CvCity* city) override;
+		// The walls of a new game (none) or of a loaded one (its save's; fromWonders: a save
+		// without them, the wall is laid for a city with the wonder).
+		void resetGreatWalls(std::vector<GreatWall> walls, bool fromWonders);
+		// On the game's thread, while the game core stands still. wonderCities: the cities
+		// with the wonder, game core plots (asked only for a save without walls).
+		void layGreatWalls(const std::function<std::vector<std::pair<int, int>>()>& wonderCities = {});
+		std::vector<GreatWall> greatWalls() const
+		{
+			std::lock_guard lock(greatWallMutex);
+			return m_greatWalls;
+		}
+		// (false while a loaded save's wall waits to be laid from its wonder)
+		bool greatWallsKnown() const
+		{
+			std::lock_guard lock(greatWallMutex);
+			return !m_greatWallFromWonders;
+		}
 		std::atomic<uint64_t> greatWallVersion = 1;
+	private:
+		mutable std::mutex greatWallMutex;
+		std::vector<GreatWall> m_greatWalls;
+		std::vector<std::pair<std::array<int, 2>, bool>> m_greatWallAsked; // city plot, built (or lost)
+		bool m_greatWallFromWonders = false;
+	public:
 		std::mutex marksMutex;
 		std::vector<PlotMark> marks;
 		std::vector<Sign> signs;

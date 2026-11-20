@@ -420,6 +420,7 @@ namespace oc4::host
 
 	void GameSession::startScenario(const NewGameSettings& settings)
 	{
+		m_utility.engine().resetGreatWalls({}, false);
 		m_utility.setGameInitializing(true);
 		m_utility.setProfileOptionsFromPlayer(NO_PLAYER);
 		m_python.run(std::format("import random\nrandom.seed({})\n", settings.seed));
@@ -454,6 +455,7 @@ namespace oc4::host
 
 		m_utility.setGameInitializing(false);
 		m_utility.setGameActive(true);
+		m_utility.engine().layGreatWalls(); // (the engine's first update: a scenario's wall along its borders)
 		activateFirstTurn();
 	}
 
@@ -464,6 +466,7 @@ namespace oc4::host
 			startScenario(settings);
 			return;
 		}
+		m_utility.engine().resetGreatWalls({}, false);
 		m_utility.setGameInitializing(true);
 		m_utility.setProfileOptionsFromPlayer(NO_PLAYER);
 		setupInitCore(settings);
@@ -493,6 +496,7 @@ namespace oc4::host
 
 		m_utility.setGameInitializing(false);
 		m_utility.setGameActive(true);
+		m_utility.engine().layGreatWalls(); // (the engine's first update: a scenario's wall along its borders)
 		activateFirstTurn();
 	}
 
@@ -734,6 +738,10 @@ namespace oc4::host
 		std::vector<byte> pickled;
 		if (m_python.callFunction("CvAppInterface", "onSave", nullptr, &pickled))
 			save.pythonData.assign(reinterpret_cast<const char*>(pickled.data()), pickled.size());
+		// The Great Wall as it was laid (it does not follow later borders, nor a load).
+		m_utility.engine().layGreatWalls();
+		save.greatWall = writeGreatWalls(m_utility.engine().greatWalls());
+		save.hasGreatWall = m_utility.engine().greatWallsKnown();
 
 		save.write(path);
 	}
@@ -791,6 +799,9 @@ namespace oc4::host
 		CvEventReporter::getInstance().readStatistics(&data);
 		if (data.overrun() || data.GetSizeLeft() != 0)
 			throw std::runtime_error(path.filename().string() + ": game data does not match this game core (wrong mod or DLL?)");
+		// The Great Wall as the save keeps it; a save without it (the original's) gets it laid
+		// along the borders as they are now.
+		m_utility.engine().resetGreatWalls(save.hasGreatWall ? readGreatWalls(save.greatWall) : std::vector<GreatWall>{}, !save.hasGreatWall);
 
 		// CvGame::read picks the active player of single player games; for hotseat and
 		// other multiplayer types the engine does: the human whose turn it is. The saved

@@ -14,6 +14,8 @@
 //   33 x 0
 //   string  32 hex digits of an MD5 (salted: it is not a plain hash of the file or of
 //           any part of it, so it is written over the save data and ignored on load)
+//   OpenCiv4 adds, after it (the original engine keeps these in its own data, which is not
+//   written here): int 'GWAL', int size, bytes: the Great Wall as laid (GreatWall.h).
 //
 // The zlib stream holds the DLL's game data (CvGame, CvMap, teams, players, ...).
 
@@ -34,6 +36,8 @@ namespace oc4::host
 		std::vector<std::byte> gameData; // decompressed DLL data
 		std::string pythonData;          // pickle string
 		std::string md5;
+		std::vector<std::byte> greatWall; // (empty: none kept, e.g. the original's saves)
+		bool hasGreatWall = false;
 
 		// Throws std::runtime_error on malformed files.
 		static SaveFile read(const std::filesystem::path& path);

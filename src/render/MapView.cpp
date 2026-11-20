@@ -2341,10 +2341,44 @@ float4 PSTerrain(PSIn i) : SV_Target
 			return kDefaultTeamColor;
 		}
 
-		// A city as the original lays it out, in short: a square of 16 x 16 lots, turned by the
-		// city twist so that it fits the plot, takes the visible buildings (highest priority
-		// first, nearest the middle) and then the generic houses on the lots left.
-		// The Great Wall's pieces along its edges: segments end to end, posts at the corners.
+		// The Great Wall as the original engine draws it (its points are kept in its saves): each
+		// plot edge of a line cut into 15 points, the points smoothed (a moving average of 15,
+		// then of 5; a piece's ends repeat its end points), one segment from each point to the
+		// next (ART_GREAT_WALL_SEGMENT, scaled so that it is a step long: 12 units of a 180-unit
+		// plot), a tower (ART_GREAT_WALL_POST, at the same scale) on every 11th point from the
+		// line's start and at a piece's end, all on the ground.
+		static std::vector<Vec3> greatWallPoints(const MapSnapshot::WallChain& chain, float plot)
+		{
+			constexpr int kPerEdge = 15;
+			std::vector<Vec3> raw;
+			const size_t edges = chain.closed ? chain.corners.size() : chain.corners.size() - 1;
+			for (size_t k = 0; k < edges; ++k)
+			{
+				const auto& a = chain.corners[k];
+				const auto& b = chain.corners[(k + 1) % chain.corners.size()];
+				for (int j = 0; j < kPerEdge; ++j)
+				{
+					const float t = float(j) / kPerEdge;
+					raw.push_back({ (float(a[0]) + float(b[0] - a[0]) * t) * plot, (float(a[1]) + float(b[1] - a[1]) * t) * plot, 0 });
+				}
+			}
+			if (!chain.closed)
+				raw.push_back({ float(chain.corners.back()[0]) * plot, float(chain.corners.back()[1]) * plot, 0 });
+			const auto average = [&](const std::vector<Vec3>& in, int half) {
+				const int n = int(in.size());
+				std::vector<Vec3> out(in.size());
+				for (int i = 0; i < n; ++i)
+				{
+					Vec3 sum{ 0, 0, 0 };
+					for (int j = i - half; j <= i + half; ++j)
+						sum = sum + in[size_t(chain.closed ? ((j % n) + n) % n : std::clamp(j, 0, n - 1))];
+					out[size_t(i)] = sum * (1.0f / float(2 * half + 1));
+				}
+				return out;
+			};
+			return average(average(raw, 7), 2);
+		}
+
 		void addGreatWall()
 		{
 			if (map.greatWall.empty())
@@ -2353,47 +2387,74 @@ float4 PSTerrain(PSIn i) : SV_Target
 			LoadedModel* post = model(map.greatWallPost.nif, "");
 			if (!segment)
 				return;
-			const float segScale = map.greatWallSegment.scale > 0 ? map.greatWallSegment.scale : 1;
-			const float postScale = map.greatWallPost.scale > 0 ? map.greatWallPost.scale : 1;
-			const float length = std::max(segment->bounds.empty() ? 37.0f : std::max(segment->bounds.max.x - segment->bounds.min.x, segment->bounds.max.y - segment->bounds.min.y) * segScale, 1.0f);
-			const int count = std::max(1, int(std::lround(S() / length)));
-			std::unordered_set<uint64_t> corners;
-			for (const auto& e : map.greatWall)
+			const float length = segment->bounds.empty() ? 37.0f : std::max(segment->bounds.max.x - segment->bounds.min.x, 1.0f);
+			const float scale = S() / 15 / length;
+			const float segScale = scale * (map.greatWallSegment.scale > 0 ? map.greatWallSegment.scale : 1);
+			const float postScale = scale * (map.greatWallPost.scale > 0 ? map.greatWallPost.scale : 1);
+			const auto plotOf = [&](const Vec3& p) {
+				const int x = std::clamp(int(std::floor(p.x / S())), 0, std::max(map.width - 1, 0));
+				const int y = std::clamp(int(std::floor(p.y / S())), 0, std::max(map.height - 1, 0));
+				return x + y * map.width;
+			};
+			for (const auto& chain : map.greatWall)
 			{
-				// (its ends, west to east or south to north)
-				Vec3 a, b;
-				const float x0 = float(e.x) * S(), y0 = float(e.y) * S(), x1 = x0 + S(), y1 = y0 + S();
-				switch (e.side)
+				if (chain.corners.size() < 2)
+					continue;
+				std::vector<Vec3> points = greatWallPoints(chain, S());
+				const size_t n = points.size();
+				// (on the ground, its small bumps smoothed along the line as the points are)
 				{
-				case 0: a = { x0, y1, 0 }, b = { x1, y1, 0 }; break;
-				case 1: a = { x1, y0, 0 }, b = { x1, y1, 0 }; break;
-				case 2: a = { x0, y0, 0 }, b = { x1, y0, 0 }; break;
-				default: a = { x0, y0, 0 }, b = { x0, y1, 0 }; break;
+					std::vector<float> z(n);
+					for (size_t i = 0; i < n; ++i)
+						z[i] = ground(points[i].x, points[i].y);
+					for (const int half : { 7, 2 })
+					{
+						std::vector<float> out(n);
+						for (int i = 0; i < int(n); ++i)
+						{
+							float sum = 0;
+							for (int j = i - half; j <= i + half; ++j)
+								sum += z[size_t(chain.closed ? ((j % int(n)) + int(n)) % int(n) : std::clamp(j, 0, int(n) - 1))];
+							out[size_t(i)] = sum / float(2 * half + 1);
+						}
+						z = std::move(out);
+					}
+					for (size_t i = 0; i < n; ++i)
+						points[i].z = z[i];
 				}
-				const float yaw = std::atan2(b.y - a.y, b.x - a.x);
-				for (int i = 0; i < count; ++i)
+				const size_t steps = chain.closed ? n : n - 1;
+				for (size_t i = 0; i < steps; ++i)
 				{
-					Vec3 at = a + (b - a) * ((float(i) + 0.5f) / float(count));
-					at.z = ground(at.x, at.y);
-					Instance inst = placeStatic(segment, placement(at, yaw, segScale));
-					inst.plot = e.x + e.y * map.width;
+					// (from a point to the next, along the slope there)
+					const Vec3& a = points[i];
+					const Vec3& b = points[(i + 1) % n];
+					const float run = std::hypot(b.x - a.x, b.y - a.y);
+					const Mat33 turn = toMat33(axisAngle({ 0, 0, 1 }, std::atan2(b.y - a.y, b.x - a.x))) *
+						toMat33(axisAngle({ 0, 1, 0 }, -std::atan2(b.z - a.z, std::max(run, 0.001f))));
+					const Vec3 at = (a + b) * 0.5f;
+					Instance inst = placeStatic(segment, Affine{ turn, at, segScale });
+					inst.plot = plotOf(at);
 					cities.push_back(std::move(inst));
 				}
 				if (post)
-					for (const Vec3& c : { a, b })
+					for (size_t i = 0; i < n; ++i)
 					{
-						const uint64_t key = uint64_t(uint32_t(std::lround(c.x))) << 32 | uint32_t(std::lround(c.y));
-						if (!corners.insert(key).second)
+						if (i % 11 != 0 && (chain.closed || i != n - 1))
 							continue;
-						Vec3 at = c;
-						at.z = ground(at.x, at.y);
-						Instance inst = placeStatic(post, placement(at, 0, postScale));
-						inst.plot = e.x + e.y * map.width;
+						// (turned along the line there)
+						const Vec3& a = points[i == 0 ? (chain.closed ? n - 1 : 0) : i - 1];
+						const Vec3& b = points[i + 1 < n ? i + 1 : (chain.closed ? 0 : i)];
+						const Vec3 at = points[i];
+						Instance inst = placeStatic(post, placement(at, std::atan2(b.y - a.y, b.x - a.x), postScale));
+						inst.plot = plotOf(at);
 						cities.push_back(std::move(inst));
 					}
 			}
 		}
 
+		// A city as the original lays it out, in short: a square of 16 x 16 lots, turned by the
+		// city twist so that it fits the plot, takes the visible buildings (highest priority
+		// first, nearest the middle) and then the generic houses on the lots left.
 		void buildCities()
 		{
 			cities.clear();

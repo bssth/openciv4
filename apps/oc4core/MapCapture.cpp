@@ -802,26 +802,6 @@ namespace oc4::host
 
 		const TeamTypes active = game.getActiveTeam();
 		const auto actions = Entities::actions();
-		// The Great Wall's edges: its owner's plots on the landmass, against land not its own.
-		s.greatWall.clear();
-		for (const auto& [cx, cy] : m_greatWallCities)
-		{
-			const CvPlot* cityPlot = map.plot(cx, cy);
-			if (!cityPlot || cityPlot->getOwner() == NO_PLAYER)
-				continue;
-			const PlayerTypes owner = cityPlot->getOwner();
-			const int area = cityPlot->getAreaIdForGreatWall();
-			for (int i = 0; i < map.numPlots(); ++i)
-			{
-				const CvPlot* p = map.plotByIndex(i);
-				if (!p || p->getOwner() != owner || p->isWater() || p->getAreaIdForGreatWall() != area)
-					continue;
-				static constexpr int dx[4] = { 0, 1, 0, -1 }, dy[4] = { 1, 0, -1, 0 };
-				for (uint8_t side = 0; side < 4; ++side)
-					if (const CvPlot* n = map.plot(p->getX() + dx[side], p->getY() + dy[side]); n && !n->isWater() && n->getOwner() != owner)
-						s.greatWall.push_back({ p->getX(), p->getY(), side });
-			}
-		}
 		s.plots.assign(size_t(s.width) * size_t(s.height), {});
 		s.units.clear();
 		s.cities.clear();

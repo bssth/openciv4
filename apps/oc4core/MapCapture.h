@@ -50,11 +50,9 @@ namespace oc4::host
 		int plotLayout(const class CvPlot& plot, int bonus);
 		void loadAttachables(render::MapSnapshot& s);
 	public:
-		// The cities with the Great Wall (their plots, the map's): the wall along their owners'
-		// borders on their landmasses.
-		void setGreatWallCities(std::vector<std::pair<int, int>> cities) { m_greatWallCities = std::move(cities); }
+		// The Great Wall as the engine laid it (GreatWall.h), in the map's plots.
+		void setGreatWall(std::vector<render::MapSnapshot::WallChain> chains) { m_snapshot.greatWall = std::move(chains); }
 	private:
-		std::vector<std::pair<int, int>> m_greatWallCities;
 		void loadArtList(std::vector<render::MapSnapshot::Attachable>& out, const char* file, const char* element);
 		int houseSet(int era, int artStyle);
 

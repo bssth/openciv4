@@ -23,6 +23,7 @@ namespace oc4::host
 	{
 		constexpr size_t kChunk = 65536; // the original engine's compressed buffer size
 		constexpr size_t kTrailerZeros = 33;
+		constexpr int kGreatWallTag = 0x4C415747; // "GWAL"
 
 		struct Reader
 		{
@@ -177,6 +178,14 @@ namespace oc4::host
 		s.pythonData = r.str();
 		r.bytes(kTrailerZeros);
 		s.md5 = r.str();
+		if (r.p + 8 <= file.size() && r.i32() == kGreatWallTag)
+		{
+			const int n = r.i32();
+			if (n < 0)
+				throw std::runtime_error("bad Great Wall size in save");
+			s.greatWall = r.bytes(size_t(n));
+			s.hasGreatWall = true;
+		}
 		return s;
 	}
 
@@ -195,6 +204,12 @@ namespace oc4::host
 		const std::byte zeros[kTrailerZeros] = {};
 		w.raw(zeros, sizeof zeros);
 		w.str(md5Hex(gameData));
+		if (hasGreatWall)
+		{
+			w.i32(kGreatWallTag);
+			w.i32(int(greatWall.size()));
+			w.raw(greatWall.data(), greatWall.size());
+		}
 
 		const auto tmp = std::filesystem::path(path).concat(".tmp");
 		{
