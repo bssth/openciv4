@@ -2821,6 +2821,7 @@ _diploOpen = set()  # the item lists the player opened in this talk ('their', 'o
 _FRAME_LEFT, _FRAME_TOP, _FRAME_RIGHT, _FRAME_BOTTOM, _FRAME_W, _FRAME_H = 12, 15, 500, 1010, 512, 1024
 _FRAME_WINDOW = (76, 70, 436, 680)
 _FRAME_SPEECH, _FRAME_ANSWERS = (695, 825), (830, 1005)
+_FRAME_SHOWN_H = 734   # its height on screen, in pixels (Wine, 1600 x 900)
 
 
 def _diploList(screen, name, header, items, theirs, offered, x, y, w, h, root=None, opened=True):
@@ -2903,13 +2904,15 @@ def diploShow():
 	# (the talk takes every click; the map and the interface show through)
 	screen.addPanel('DiploCover', u'', u'', True, False, 0, 0, W, H, PanelStyles.PANEL_STYLE_EMPTY)
 
-	# The middle column, the original's frame stretched over it.
-	CW = 480
-	cx = W / 2 - CW / 2
+	# The middle column, the original's frame stretched over it: 480 x 734 in the middle of the
+	# screen, as the original draws it (measured in Wine at 1600 x 900: 478 x 734 from y 84), the
+	# map and the interface round it.
+	CW, CH = 480, min(_FRAME_SHOWN_H, H)
+	cx, cy = W / 2 - CW / 2, (H - CH) / 2
 	sx = float(CW) / (_FRAME_RIGHT - _FRAME_LEFT)
-	sy = float(H) / (_FRAME_BOTTOM - _FRAME_TOP)
+	sy = float(CH) / (_FRAME_BOTTOM - _FRAME_TOP)
 	fx = lambda u: int(cx + (u - _FRAME_LEFT) * sx)
-	fy = lambda v: int((v - _FRAME_TOP) * sy)
+	fy = lambda v: int(cy + (v - _FRAME_TOP) * sy)
 
 	# the leader, under the frame's posts
 	wx0, wy0, wx1, wy1 = fx(_FRAME_WINDOW[0]), fy(_FRAME_WINDOW[1]), fx(_FRAME_WINDOW[2]), fy(_FRAME_WINDOW[3])
@@ -2929,7 +2932,7 @@ def diploShow():
 	title = u'%s - %s' % (them.getName(), them.getCivilizationDescription(0))
 	if attitude:
 		title += u' (%s)' % attitude
-	screen.setText('DiploTitle', 'Background', u'<font=3b>' + title + u'</font>', _FONT_LEFT, cx + 8, fy(_FRAME_TOP) + (fy(_FRAME_WINDOW[1]) - 22) / 2,
+	screen.setText('DiploTitle', 'Background', u'<font=3b>' + title + u'</font>', _FONT_LEFT, cx + 8, fy(_FRAME_TOP) + (fy(_FRAME_WINDOW[1]) - fy(_FRAME_TOP) - 22) / 2,
 		-0.1, FontTypes.TITLE_FONT, WidgetTypes.WIDGET_LEADERHEAD, who, me)
 
 	# what the leader says
@@ -2950,20 +2953,24 @@ def diploShow():
 		answers.append((comment, data1, data2))
 	_diplo['answers'] = answers
 
-	# The sides: what each one has (its tradeable items), what each offers.
-	SW = 254
-	lx, rx = cx - 9 - SW, cx + CW + 8
-	split = fy(_FRAME_SPEECH[0])
-	theirName, root = them.getName().upper(), translator.getText('TXT_KEY_TRADEABLE_ITEMS', ())
-	listsOpen = trading and showAll and not current
-	_diploList(screen, 'DiploTheirItems', translator.getText('TXT_KEY_TRADE_PLAYER_HAS', (theirName,)).upper(), oc4host.diplo_items(True, False),
-		True, False, lx, 0, SW, split, root, listsOpen or 'their' in _diploOpen)
-	_diploList(screen, 'DiploOurItems', translator.getText('TXT_KEY_TRADE_YOU_HAVE', ()).upper(), oc4host.diplo_items(False, False),
-		False, False, rx, 0, SW, split, root, listsOpen or 'our' in _diploOpen)
-	_diploList(screen, 'DiploTheirOffer', translator.getText('TXT_KEY_TRADE_PLAYER_OFFERS', (theirName,)).upper(), oc4host.diplo_items(True, True),
-		True, True, lx, split + 8, SW, H - split - 8)
-	_diploList(screen, 'DiploOurOffer', translator.getText('TXT_KEY_TRADE_YOU_OFFER', ()).upper(), oc4host.diplo_items(False, True),
-		False, True, rx, split + 8, SW, H - split - 8)
+	# The sides: what each one has (its tradeable items), what each offers; as tall as the frame.
+	# Only while they trade (an AI's proposal, the script's startTrade / showAllTrade, until its
+	# endTrade): a greeting, a first contact, the talk's menu show the leader alone, as in the
+	# original.
+	if trading:
+		SW = 254
+		lx, rx = cx - 9 - SW, cx + CW + 8
+		top, bottom, split = fy(_FRAME_TOP), fy(_FRAME_BOTTOM), fy(_FRAME_SPEECH[0])
+		theirName, root = them.getName().upper(), translator.getText('TXT_KEY_TRADEABLE_ITEMS', ())
+		listsOpen = showAll and not current
+		_diploList(screen, 'DiploTheirItems', translator.getText('TXT_KEY_TRADE_PLAYER_HAS', (theirName,)).upper(), oc4host.diplo_items(True, False),
+			True, False, lx, top, SW, split - top, root, listsOpen or 'their' in _diploOpen)
+		_diploList(screen, 'DiploOurItems', translator.getText('TXT_KEY_TRADE_YOU_HAVE', ()).upper(), oc4host.diplo_items(False, False),
+			False, False, rx, top, SW, split - top, root, listsOpen or 'our' in _diploOpen)
+		_diploList(screen, 'DiploTheirOffer', translator.getText('TXT_KEY_TRADE_PLAYER_OFFERS', (theirName,)).upper(), oc4host.diplo_items(True, True),
+			True, True, lx, split + 8, SW, bottom - split - 8)
+		_diploList(screen, 'DiploOurOffer', translator.getText('TXT_KEY_TRADE_YOU_OFFER', ()).upper(), oc4host.diplo_items(False, True),
+			False, True, rx, split + 8, SW, bottom - split - 8)
 
 	for n, (offset, hoffset) in kept.items():
 		w = s.widgets.get(n)

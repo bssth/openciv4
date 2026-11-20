@@ -119,7 +119,8 @@ namespace oc4::host
 		// The player's contact: the leader's greeting, or its refusal to talk.
 		if (m_comment == NO_DIPLOCOMMENT)
 			m_comment = playerOf(m_who).AI_isWillingToTalk(p) ? playerOf(m_who).AI_getGreeting(p) : GC.getInfoTypeForString("AI_DIPLOCOMMENT_REFUSE_TO_TALK");
-		m_trading = m_comment == GC.getInfoTypeForString("AI_DIPLOCOMMENT_TRADING");
+		// (trading: the player's Ctrl+click, and an AI's proposal, its items on the table)
+		m_trading = m_comment == GC.getInfoTypeForString("AI_DIPLOCOMMENT_TRADING") || m_aiOffer;
 		m_showAll = true;
 		m_current = false;
 		m_aiText.clear();
@@ -213,12 +214,14 @@ namespace oc4::host
 
 	void Diplomacy::endTrade()
 	{
+		// The talk leaves the table, and the original clears it: an offer left on it ("Never
+		// mind", an AI's proposal renegotiated and then dropped) is gone at the next proposal.
 		m_trading = false;
-		if (m_current)
+		if (m_current || !ourOfferEmpty() || !theirOfferEmpty())
 		{
 			m_ourOffer.clear();
 			m_theirOffer.clear();
-			m_current = false;
+			m_current = m_aiOffer = false;
 			rebuild();
 		}
 		++m_version;
