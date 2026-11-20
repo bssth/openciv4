@@ -1098,6 +1098,12 @@ namespace
 				}
 				changed = true;
 			}
+			// (the plot the camera looks at, for the game's getLookAtPlot: next/previous city with
+			// no city selected picks the city nearest it)
+			{
+				const auto look = window.look();
+				ui.cameraX = int(std::floor(look.x)), ui.cameraY = int(std::floor(look.y));
+			}
 			auto clicks = window.takeClicks();
 			// (a scripted game answers what it does not expect with the popup's first button)
 			if (!script.empty() && script.front() != '#' && script.front() != '\'' && script.front() != '%' && ui.shownPopup() && Clock::now() - typed > std::chrono::milliseconds(1500))

@@ -164,8 +164,33 @@ namespace oc4::host
 
 	CvPlot* Interface::getSelectionPlot()
 	{
+		// (cities selected, as next/previous city leaves them: the first city's plot)
+		if (CvCity* city = getHeadSelectedCity())
+			return city->plot();
 		CvUnit* head = getHeadSelectedUnit();
 		return head ? head->plot() : nullptr;
+	}
+
+	CvPlot* Interface::getLookAtPlot()
+	{
+		return cameraX >= 0 ? GC.getMap().plot(cameraX, cameraY) : nullptr;
+	}
+
+	void Interface::selectLookAtCity(bool bAdd)
+	{
+		CvPlot* at = getLookAtPlot();
+		if (!at)
+			return;
+		CvCity* city = GC.getMap().findCity(at->getX(), at->getY(), GC.getGame().getActivePlayer(), NO_TEAM, false);
+		if (!city)
+			return;
+		if (bAdd)
+		{
+			clearSelectedCities();
+			addSelectedCity(city, false);
+		}
+		else
+			selectCity(city, false);
 	}
 
 	bool Interface::soundPlace(const NiPoint3& point, std::optional<Sounds::Place>& place)
