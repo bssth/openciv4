@@ -1345,7 +1345,10 @@ namespace
 						host::Entities::planMovement(units, plots);
 					}
 					utility.setModifierKeys(click.shift, click.ctrl, click.alt);
-					ui.unitSound(ui.getHeadSelectedUnit(), true); // (the order's: moves have none of the DLL's)
+					// (the order's: moves have none of the DLL's; none for the units' own plot, where
+					// they go nowhere, as the original's: a right button let go back on it is silent)
+					if (const CvUnit* head = ui.getHeadSelectedUnit(); head->plot() != plot)
+						ui.unitSound(head, true);
 					game.selectionListMove(plot, click.alt, click.shift, click.ctrl);
 					utility.setModifierKeys(false, false, false);
 				}
