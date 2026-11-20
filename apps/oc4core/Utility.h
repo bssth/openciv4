@@ -258,9 +258,19 @@ namespace oc4::host
 				o = 0;
 		}
 		bool ChangeINIKeyValue(const char*, const char*, const char*) override { return false; } // the engine writes no INI
-		// The user profile's player options (wait at end of turn, ...): XML defaults for a
-		// new game, the active player's own after loading a save.
-		void setProfileOptionsFromPlayer(PlayerTypes ePlayer);
+		// The user profile's player options (wait at end of turn, quick combat, ...): the profile's
+		// (oc4options, profile.ini), the XML's default for one it does not have. As in the original,
+		// the game core sends them to the active player at the start of every game, new or loaded
+		// (CvGame::sendPlayerOptions; a save's own are overwritten), and a choice on the options
+		// screen (sendPlayerOption) goes into the profile too.
+		void setProfilePlayerOption(int option, bool on)
+		{
+			if (option >= 0 && size_t(option) < m_playerOptions.size())
+				m_playerOptions[size_t(option)] = on ? 2 : 1;
+		}
+		// 0 the XML's default (none chosen), 1 off, 2 on.
+		int profilePlayerOptionState(int option) const { return option >= 0 && size_t(option) < m_playerOptions.size() ? m_playerOptions[size_t(option)] : 0; }
+		void resetProfilePlayerOptions() { m_playerOptions.fill(0); }
 		void pumpMessages();
 		// Multiplayer (Net): a frame's command run, and a player who left made an AI player.
 		void runCommand(const std::vector<std::byte>& command);
@@ -420,7 +430,7 @@ namespace oc4::host
 		Xml& m_xml;
 		TextManager m_text;
 		std::vector<CvMessageData*> m_messages;
-		std::vector<char> m_profileOptions; // empty: XML defaults
+		std::array<int8_t, 64> m_playerOptions{}; // the profile's: 0 the XML's default, 1 off, 2 on
 		int m_uiScale = 0, m_forcedUiScale = -1;
 		bool m_wasdPan = false, m_forcedWasdPan = false;
 		bool m_autoEndTurn = false, m_forcedAutoEndTurn = false;

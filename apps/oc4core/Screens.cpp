@@ -280,6 +280,11 @@ namespace oc4::host
 		host.def("set_edge_scroll", [&utility](bool on) { utility.setEdgeScroll(on); });
 		host.def("choose_edge_scroll", [&utility](bool on) { utility.chooseEdgeScroll(on); });
 		host.def("edge_scroll", [&utility] { return utility.edgeScroll(); });
+		// The profile's player options (the game core sends them to the active player): 0 the XML's
+		// default, 1 off, 2 on.
+		host.def("set_player_option", [&utility](int option, bool on) { utility.setProfilePlayerOption(option, on); });
+		host.def("reset_player_options", [&utility] { utility.resetProfilePlayerOptions(); });
+		host.def("player_option_state", [&utility](int option) { return utility.profilePlayerOptionState(option); });
 		host.def("ui_size_at", [](int percent) {
 			const float scale = render::uiScaleFor(percent, g_display.density, g_display.width, g_display.height);
 			return std::pair{ render::uiUnits(g_display.width, scale), render::uiUnits(g_display.height, scale) };
