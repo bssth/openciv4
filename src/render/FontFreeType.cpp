@@ -294,6 +294,12 @@ namespace oc4::render
 					float(face.face->height - face.face->ascender + face.face->descender) / u };
 			face.metrics.underlinePosition = float(-face.face->underline_position) / u;
 			face.metrics.underlineThickness = float(face.face->underline_thickness) / u;
+			if (FT_ULong length = 0; FT_Load_Sfnt_Table(face.face, FT_MAKE_TAG('V', 'D', 'M', 'X'), 0, nullptr, &length) == 0 && length > 0)
+			{
+				std::vector<uint8_t> vdmx(length);
+				if (FT_Load_Sfnt_Table(face.face, FT_MAKE_TAG('V', 'D', 'M', 'X'), 0, vdmx.data(), &length) == 0)
+					face.metrics.pixelLines = readVdmx(vdmx.data(), vdmx.size());
+			}
 			faces.push_back(std::move(face));
 			return byName[key] = int(faces.size() - 1);
 		}

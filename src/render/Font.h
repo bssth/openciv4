@@ -27,6 +27,9 @@ namespace oc4::render
 		struct Metrics
 		{
 			float ascent = 0.8f, descent = 0.2f, lineGap = 0, underlinePosition = 0.1f, underlineThickness = 0.05f;
+			// The face's own line heights in whole pixels by size (its VDMX table: yMax and -yMin at that
+			// many pixels an em, for a 1:1 screen), as Windows' text metrics give them; {0, 0} where it has none.
+			std::vector<std::pair<int16_t, int16_t>> pixelLines;
 		};
 		const Metrics& metrics(int face) const;
 
@@ -48,6 +51,9 @@ namespace oc4::render
 			std::vector<uint8_t> alpha;
 		};
 		Bitmap rasterize(int face, uint16_t glyph, float size, float subpixelX);
+
+		// A face's VDMX table (the OpenType "VDMX" bytes) as Metrics::pixelLines.
+		static std::vector<std::pair<int16_t, int16_t>> readVdmx(const uint8_t* data, size_t size);
 
 	private:
 		struct Impl;

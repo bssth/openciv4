@@ -71,6 +71,17 @@ namespace oc4::render
 			const float u = face.unitsPerEm;
 			face.metrics = { float(fm.ascent) / u, float(fm.descent) / u, float(fm.lineGap) / u, float(-fm.underlinePosition) / u,
 				float(fm.underlineThickness) / u };
+			{
+				const void* table = nullptr;
+				UINT32 length = 0;
+				void* context = nullptr;
+				BOOL has = FALSE;
+				if (SUCCEEDED(face.face->TryGetFontTable(DWRITE_MAKE_OPENTYPE_TAG('V', 'D', 'M', 'X'), &table, &length, &context, &has)) && has)
+				{
+					face.metrics.pixelLines = readVdmx(static_cast<const uint8_t*>(table), length);
+					face.face->ReleaseFontTable(context);
+				}
+			}
 			face.bold = bold, face.italic = italic;
 			if (SUCCEEDED(face.face.As(&face.kerned)) && !face.kerned->HasKerningPairs())
 				face.kerned.Reset();
