@@ -826,30 +826,48 @@ namespace
 		// it was and stays live (the camera moves, the figures move), and nothing here touches
 		// the game.
 		host::TurnWorker worker;
-		// A game played by hand is saved at each turn's start (Documents\My Games\openciv4\Saves\
-		// auto, ten in turn), as the original does; a scripted one is not.
+		// A game played by hand is saved as the original saves it, or openciv4's own way
+		// (AutoSaves.h, the options' OpenCiv4 tab); a scripted game is not.
 		if (opt.viewSeconds <= 0)
-			utility.engine().onAutoSave = [&session, &game](bool) {
-				PWSTR documents = nullptr;
-				if (FAILED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &documents)))
+			utility.engine().onAutoSave = [&session, &game, &engine = utility.engine()](bool initial) {
+				const host::AutoSaveSettings how = engine.autoSave;
+				const int turn = game.getGameTurn();
+				if (!host::autoSaveDue(how, turn, initial))
 					return;
-				const fs::path folder = fs::path(documents) / L"My Games" / L"openciv4" / L"Saves" / L"auto";
-				CoTaskMemFree(documents);
-				// (each game its own: the active civilization and the game's map seed in the name;
-				// every 25th turn kept for good)
-				std::wstring civ;
-				if (const PlayerTypes active = game.getActivePlayer(); active != NO_PLAYER)
-					for (const wchar_t c : std::wstring(GC.getInitCore().getCivShortDesc(active).GetCString()))
-						civ += std::iswalnum(c) ? c : L'_';
-				const std::wstring stem = std::format(L"AutoSave_{}_{:08X}", civ, GC.getInitCore().getMapRandSeed());
-				const fs::path path = folder / std::format(L"{}_{}.CivBeyondSwordSave", stem, game.getGameTurn() % 10);
-				try
-				{
+				const auto save = [&](const fs::path& folder, const fs::path& path) {
 					fs::create_directories(folder);
 					session.saveGame(path);
-					if (game.getGameTurn() % 25 == 0)
-						fs::copy_file(path, folder / std::format(L"{}_turn{}.CivBeyondSwordSave", stem, game.getGameTurn()), fs::copy_options::overwrite_existing);
-					std::printf("  autosaved turn %d: %s\n", game.getGameTurn(), path.string().c_str());
+					std::printf("  autosaved turn %d: %s\n", turn, path.string().c_str());
+				};
+				try
+				{
+					if (how.openciv4)
+					{
+						// (Documents\My Games\openciv4\Saves\auto; the active civilization and the
+						// game's map seed in the name, every 25th turn kept for good)
+						const fs::path folder = documentsFolder() / L"My Games" / L"openciv4" / L"Saves" / L"auto";
+						std::wstring civ;
+						if (const PlayerTypes active = game.getActivePlayer(); active != NO_PLAYER)
+							for (const wchar_t c : std::wstring(GC.getInitCore().getCivShortDesc(active).GetCString()))
+								civ += std::iswalnum(c) ? c : L'_';
+						const std::wstring stem = std::format(L"AutoSave_{}_{:08X}", civ, GC.getInitCore().getMapRandSeed());
+						const fs::path path = folder / host::openciv4AutoSaveName(stem, how, turn);
+						save(folder, path);
+						if (turn % 25 == 0)
+							fs::copy_file(path, folder / std::format(L"{}_turn{}.CivBeyondSwordSave", stem, turn), fs::copy_options::overwrite_existing);
+						return;
+					}
+					const fs::path folder = documentsFolder() / L"My Games" / L"Beyond the Sword" / L"Saves" / L"single" / L"auto";
+					// (the year through the scripts' CyGame: the game core does not export getGameTurnYear)
+					int year;
+					{
+						namespace py = pybind11;
+						py::gil_scoped_acquire gil;
+						year = py::module_::import("CvPythonExtensions").attr("CyGame")().attr("getGameTurnYear")().cast<int>();
+					}
+					save(folder, folder / host::autoSaveName(initial, year));
+					for (const fs::path& old : host::autoSavesBeyond(folder, how.kept))
+						fs::remove(old);
 				}
 				catch (const std::exception& e)
 				{

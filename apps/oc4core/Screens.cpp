@@ -280,6 +280,11 @@ namespace oc4::host
 		host.def("set_edge_scroll", [&utility](bool on) { utility.setEdgeScroll(on); });
 		host.def("choose_edge_scroll", [&utility](bool on) { utility.chooseEdgeScroll(on); });
 		host.def("edge_scroll", [&utility] { return utility.edgeScroll(); });
+		// The profile's player options (the game core sends them to the active player): 0 the XML's
+		// default, 1 off, 2 on.
+		host.def("set_player_option", [&utility](int option, bool on) { utility.setProfilePlayerOption(option, on); });
+		host.def("reset_player_options", [&utility] { utility.resetProfilePlayerOptions(); });
+		host.def("player_option_state", [&utility](int option) { return utility.profilePlayerOptionState(option); });
 		host.def("ui_size_at", [](int percent) {
 			const float scale = render::uiScaleFor(percent, g_display.density, g_display.width, g_display.height);
 			return std::pair{ render::uiUnits(g_display.width, scale), render::uiUnits(g_display.height, scale) };
@@ -443,6 +448,16 @@ namespace oc4::host
 		Sounds& sounds = utility.sounds();
 		host.def("audio_play", [&sounds](const std::string& tag) { sounds.play(tag); });
 		host.def("ui_no_tech_splash", [&ui] { return ui.noTechSplash(); });
+		// CivilizationIV.ini's settings the original's options screen has not (the options'
+		// OpenCiv4 tab, oc4options): no tech splash, no event messages on the screen, the autosaves,
+		// a frame cap.
+		host.def("set_ini_options", [&ui, &utility](bool noTechSplash, bool noEventMessages, int autoSaveInterval, int autoSavesKept,
+										 bool openciv4AutoSaves, int maxFrameRate) {
+			ui.noTechSplashOption = noTechSplash;
+			ui.noEventMessages = noEventMessages;
+			utility.engine().autoSave = { std::max(0, autoSaveInterval), std::max(1, autoSavesKept), openciv4AutoSaves };
+			utility.engine().maxFrameRate = std::max(0, maxFrameRate);
+		});
 		host.def("movie_playable", [&utility](const std::string& file) {
 			const auto at = utility.assets().locate(file);
 			return media::available() && at && !at->file.empty();
@@ -717,6 +732,8 @@ if _walls:
 			py::module_::import("CvScreensInterface").attr("showMainInterface")();
 			m_utility.gameInterface().makeInterfaceDirty();
 			m_utility.gameInterface().techSplash = true;
+			// (the profile's field of view, CivilizationIV.ini's FIELD_OF_VIEW, over GlobalDefines.xml's)
+			py::module_::import("oc4options").attr("gameStarted")(); // (its own errors its own)
 			m_active = true;
 			m_laidOut = m_seenSize = { width, height };
 		}
@@ -918,6 +935,7 @@ if _walls:
 			}
 		}
 		window.setAutoEndTurn(m_utility.autoEndTurn());
+		window.setMaxFrameRate(m_utility.engine().maxFrameRate);
 		if (!m_menu) // (the main menu has no map to scroll)
 			window.setEdgeScroll(m_utility.edgeScroll());
 		g_display = window.uiDisplay();

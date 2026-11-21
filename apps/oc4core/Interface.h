@@ -219,7 +219,10 @@ namespace oc4::host
 		// The tech splash (the scripts' CvTechSplashScreen, with the tech's quote): only with the
 		// game's screens up (Screens::start); without them the game core plays the short sound instead.
 		bool techSplash = false;
-		bool noTechSplash() override { return !techSplash; }
+		bool noTechSplash() override { return !techSplash || noTechSplashOption; }
+		// CivilizationIV.ini's NoTechSplash and NoEventMessages (the options' OpenCiv4 tab): no tech
+		// splash; the messages not shown on the screen (still in the turn log, their sound played).
+		bool noTechSplashOption = false, noEventMessages = false;
 		bool isInAdvancedStart() const override { return false; }
 		CvPlot* getLookAtPlot() override { return nullptr; }
 		CvPlot* getGotoPlot() override { return m_gotoPlot; }

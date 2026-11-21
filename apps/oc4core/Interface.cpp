@@ -214,7 +214,8 @@ namespace oc4::host
 				pszIcon, eFlashColor, iFlashX, iFlashY, bShowOffScreenArrows, bShowOnScreenArrows));
 		if (ePlayer != GC.getGame().getActivePlayer())
 			return;
-		show(szString.c_str(), iLength);
+		if (!noEventMessages)
+			show(szString.c_str(), iLength);
 		if (sounds && pszSound && *pszSound)
 			sounds->play(pszSound);
 	}
@@ -234,7 +235,11 @@ namespace oc4::host
 	}
 
 	// (the messages of the last turn again, when a game is loaded: CvPlayer::showMissedMessages)
-	void Interface::showMessage(CvTalkingHeadMessage& msg) { show(msg.getDescription(), msg.getLength()); }
+	void Interface::showMessage(CvTalkingHeadMessage& msg)
+	{
+		if (!noEventMessages)
+			show(msg.getDescription(), msg.getLength());
+	}
 
 	void Interface::clearEventMessages()
 	{

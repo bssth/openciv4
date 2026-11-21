@@ -180,6 +180,8 @@ namespace oc4::render
 		void askHelp();
 		// The mouse at the window's edge scrolls the map (off for scripted runs).
 		void setEdgeScroll(bool on);
+		// At most this many frames a second (CivilizationIV.ini's SetMaxFrameRate; 0: no cap).
+		void setMaxFrameRate(int fps);
 		// Each terrain's colour on the minimap (BGRA8), by terrain type; empty before the first map.
 		std::vector<uint32_t> terrainColors() const;
 		// The sounds the units' animations call for (an audio script's tag, where: plot units).

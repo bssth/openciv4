@@ -32,6 +32,7 @@
 #include <DirectXMath.h>
 
 #include <algorithm>
+#include <thread>
 #include <set>
 #include <tuple>
 #include <array>
@@ -210,6 +211,8 @@ namespace oc4::render
 		std::function<std::string(int)> popupHelp;
 		bool busy = false; // the game runs on another thread: nothing asked of it
 		bool edgeScroll = false;
+		int maxFrameRate = 0; // (0: no cap)
+		std::chrono::steady_clock::time_point nextFrame{};
 		std::function<bool(int, int, int)> uiWheel; // the screens' (a table or list scrolled)
 		bool downOnPopup = false;
 		UiLayer ui;
@@ -2229,6 +2232,15 @@ namespace oc4::render
 				m.view->update(dt);
 			render();
 			renderer->present();
+			// (a frame cap: the next frame no sooner than its share of the second after this one)
+			if (maxFrameRate > 0)
+			{
+				const auto period = std::chrono::nanoseconds(1'000'000'000LL / maxFrameRate);
+				const auto done = std::chrono::steady_clock::now();
+				if (done < nextFrame)
+					std::this_thread::sleep_until(nextFrame);
+				nextFrame = std::max(nextFrame, done - period) + period;
+			}
 		}
 
 		float windowDensity() const { return window ? SDL_GetWindowPixelDensity(window) : 1; }
@@ -2562,6 +2574,7 @@ namespace oc4::render
 		m->askPlotHelp();
 	}
 	void MapWindow::setEdgeScroll(bool on) { m->edgeScroll = on; }
+	void MapWindow::setMaxFrameRate(int fps) { m->maxFrameRate = std::clamp(fps, 0, 1000); }
 	void MapWindow::setSoundHandler(std::function<void(const std::string& tag, float x, float y)> handler)
 	{
 		if (m->view)

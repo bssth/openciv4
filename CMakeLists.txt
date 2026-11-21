@@ -379,6 +379,23 @@ target_link_libraries(auto_end_turn_test PRIVATE oc4_options)
 add_test(NAME auto_end_turn COMMAND auto_end_turn_test)
 set_target_properties(auto_end_turn_test PROPERTIES FOLDER "tests")
 
+add_executable(auto_saves_test tests/auto_saves_test.cpp)
+target_include_directories(auto_saves_test PRIVATE apps/oc4core)
+target_link_libraries(auto_saves_test PRIVATE oc4_options)
+add_test(NAME auto_saves COMMAND auto_saves_test)
+set_target_properties(auto_saves_test PROPERTIES FOLDER "tests")
+
+# The player options kept in the player's profile, and the options screen's OpenCiv4 tab
+# (oc4options.py, with a stand-in host).
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+	add_test(NAME player_options COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/player_options_test.py
+		${CMAKE_CURRENT_SOURCE_DIR}/apps/oc4core/python)
+	# CivilizationIV.ini's settings on the OpenCiv4 tab, kept in the profile.
+	add_test(NAME ini_options COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/ini_options_test.py
+		${CMAKE_CURRENT_SOURCE_DIR}/apps/oc4core/python)
+endif()
+
 add_executable(xml_decode_test tests/xml_decode_test.cpp)
 target_include_directories(xml_decode_test PRIVATE apps/oc4core)
 target_link_libraries(xml_decode_test PRIVATE oc4_options)

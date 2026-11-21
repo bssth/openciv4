@@ -39,6 +39,7 @@ def _changed():
 	_version[0] += 1
 
 
+editTyped = [] # (called with an edit box after keys were typed into it: oc4options keeps its numbers)
 beforeDisplay = [] # (called before the display list is made: oc4options lays its window out)
 
 
@@ -1891,6 +1892,12 @@ def typeIntoEdit(text):
 			value += c
 	_set(w, 'text', value)
 	_changed()
+	for f in editTyped:
+		try:
+			f(w)
+		except Exception:
+			import traceback
+			traceback.print_exc()
 
 
 def closeDropdown():
