@@ -683,8 +683,11 @@ namespace oc4::host
 					c->updateSelectedCity(true);
 			m_citiesShown.clear();
 		}
+		// (the coloured plots too: the city's worked plots are circled only while its screen is up,
+		// and the city may have been selected already, by the first click of a double click on its
+		// bar, so the selection alone does not say they changed)
 		if (isCityScreenUp() != wasUp)
-			for (const InterfaceDirtyBits bit : { PercentButtons_DIRTY_BIT, ResearchButtons_DIRTY_BIT, GameData_DIRTY_BIT, Score_DIRTY_BIT })
+			for (const InterfaceDirtyBits bit : { PercentButtons_DIRTY_BIT, ResearchButtons_DIRTY_BIT, GameData_DIRTY_BIT, Score_DIRTY_BIT, ColoredPlots_DIRTY_BIT })
 				m_dirty[bit] = true;
 	}
 
