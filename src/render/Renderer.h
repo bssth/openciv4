@@ -11,6 +11,8 @@
 
 #include <SDL3/SDL_gpu.h>
 
+#include <DirectXMath.h>
+
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -30,8 +32,12 @@ namespace oc4::render
 		float pitch = 0.35f; // radians above the XY plane
 		float distance = 100;
 		float fovY = 0.75f;
+		float centreUp = 0.5f; // where on the screen what it looks at is drawn: 0 bottom, 1 top
 
 		Vec3 eye() const;
+		// The perspective (right-handed, DirectXMath's row-vector order), shifted up or down so
+		// that the target is drawn at centreUp.
+		DirectX::XMMATRIX projection(float aspect, float nearZ, float farZ) const;
 		// The screen's up in the world: towards where the camera looks along the ground, so that
 		// it still holds looking straight down.
 		Vec3 up() const;
