@@ -244,6 +244,7 @@ namespace oc4::render
 		std::function<uint64_t(std::shared_ptr<const audio::Pcm>)> playMovieSound;
 		std::function<void(uint64_t)> stopMovieSound;
 		std::vector<std::string> moviesDone;
+		bool lowMovieQuality = false; // (Movie Quality low: the map is not drawn while a movie plays)
 		static std::string modelKey(const UiItem& it)
 		{
 			return std::format("{}|{}|{}|{}|{}|{}|{}", it.texture, it.texture2, it.modelTilt, it.modelTurn, it.modelScale, it.modelAnimated, it.modelLayers);
@@ -1484,17 +1485,25 @@ namespace oc4::render
 			renderer->setGlobe(g.x, g.y, g.radius, g.wrapWidth);
 			fitFov();
 			// (beyond the map: black as the ground not seen, until the team's map is centred)
-			renderer->beginFrame(camera, view->seenBounds() ? Vec3{ 0, 0, 0 } : Vec3{ 0.05f, 0.07f, 0.10f });
-			view->draw();
+			// (a movie playing with the Movie Quality low: no map behind it, black, as the original)
+			const bool mapShown = !(lowMovieQuality && !movies.empty());
+			renderer->beginFrame(camera, view->seenBounds() || !mapShown ? Vec3{ 0, 0, 0 } : Vec3{ 0.05f, 0.07f, 0.10f });
+			if (mapShown)
+				view->draw();
+			else
+				renderer->pass(); // (cleared, black, though nothing is drawn)
 			renderer->endFrame();
 			syncHeads();
 			renderHeads();
 			if (!overlay->begin())
 				return;
-			view->drawOverlay(*overlay);
-			drawMarks();
-			drawLayers();
-			drawPath();
+			if (mapShown)
+			{
+				view->drawOverlay(*overlay);
+				drawMarks();
+				drawLayers();
+				drawPath();
+			}
 			if (ui.active())
 			{
 				// The game's own interface: it has the status, the scores, the unit's buttons.
@@ -2480,6 +2489,13 @@ namespace oc4::render
 		o.healthBars = g.healthBars;
 		o.frozen = g.frozen;
 		o.effects = g.effects;
+		o.globeBuildings = g.globeBuildings;
+		m->lowMovieQuality = g.lowMovieQuality;
+		if (m->renderer)
+		{
+			m->renderer->setLowResTextures(g.lowResTextures);
+			m->renderer->setSamples(uint32_t(std::max(1, g.samples)));
+		}
 		setFullscreen(g.fullscreen);
 	}
 

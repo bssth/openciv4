@@ -160,6 +160,7 @@ namespace oc4::render
 		float health = 1;
 		std::string button; // the shown unit's button art (the unit layer's icons)
 		bool selected = false;   // the player has selected units there
+		bool enemy = false;      // an enemy in the active team's land (the red ring under it: the enemy glow)
 		bool promotionReady = false; // enough experience and at least one promotion it can take
 		// ... and how the head of them can move (the selection ring's dots): 2 it has not moved
 		// yet, 1 it has but can go on, 0 it cannot; -1 another player's.

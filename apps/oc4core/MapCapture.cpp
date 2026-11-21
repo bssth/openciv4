@@ -17,6 +17,7 @@
 #include "CvPlayerAI.h"
 #include "CvPlot.h"
 #include "CvSelectionGroup.h"
+#include "CvTeamAI.h"
 #include "CvUnit.h"
 
 #include <windows.h>
@@ -926,6 +927,11 @@ namespace oc4::host
 					u.y = plot->getY();
 					u.owner = shown->getOwner();
 					u.shownOwner = shown->getVisualOwner(GC.getGame().getActiveTeam());
+					// (an enemy of the active team in its land, seen there: the red ring under it, unless
+					// the No Enemy Glow option is on)
+					if (active != NO_TEAM && v.visible && plot->getOwner() != NO_PLAYER && player(plot->getOwner()).getTeam() == active &&
+						CvTeamAI::getTeamNonInl(active).isAtWar(shown->getTeam()) && !gDLL->getGraphicOption(GRAPHICOPTION_NO_ENEMY_GLOW))
+						u.enemy = true;
 					u.air = shown->getDomainType() == DOMAIN_AIR;
 					u.direction = int(shown->getFacingDirection(false));
 					u.resting = Entities::resting(*shown);

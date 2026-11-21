@@ -268,6 +268,7 @@ namespace oc4::host
 		host.def("set_graphic_option", [&utility](int option, bool on) { utility.setGraphicOption(option, on); });
 		host.def("reset_graphic_options", [&utility] { utility.resetGraphicOptions(); });
 		host.def("set_ui_scale", [&utility](int percent) { utility.setUiScale(percent); });
+		host.def("set_graphic_levels", [&utility](int movieQuality, int samples) { utility.setGraphicLevels(movieQuality, samples); });
 		// W A S D panning: the profile's, as loaded; the player's, from the options' check box.
 		host.def("set_wasd_pan", [&utility](bool on) { utility.setWasdPan(on); });
 		host.def("choose_wasd_pan", [&utility](bool on) { utility.chooseWasdPan(on); });
@@ -280,6 +281,11 @@ namespace oc4::host
 		host.def("set_edge_scroll", [&utility](bool on) { utility.setEdgeScroll(on); });
 		host.def("choose_edge_scroll", [&utility](bool on) { utility.chooseEdgeScroll(on); });
 		host.def("edge_scroll", [&utility] { return utility.edgeScroll(); });
+		// The profile's player options (the game core sends them to the active player): 0 the XML's
+		// default, 1 off, 2 on.
+		host.def("set_player_option", [&utility](int option, bool on) { utility.setProfilePlayerOption(option, on); });
+		host.def("reset_player_options", [&utility] { utility.resetProfilePlayerOptions(); });
+		host.def("player_option_state", [&utility](int option) { return utility.profilePlayerOptionState(option); });
 		host.def("ui_size_at", [](int percent) {
 			const float scale = render::uiScaleFor(percent, g_display.density, g_display.width, g_display.height);
 			return std::pair{ render::uiUnits(g_display.width, scale), render::uiUnits(g_display.height, scale) };
@@ -726,6 +732,19 @@ if _walls:
 			m_active = false;
 		}
 		return m_active;
+	}
+
+	std::string Screens::menuSoundtrack()
+	{
+		try
+		{
+			return py::module_::import("oc4menu").attr("soundtrack")().cast<std::string>();
+		}
+		catch (py::error_already_set& e)
+		{
+			printPythonError(e);
+			return "AS2D_OPENING_MENU";
+		}
 	}
 
 	bool Screens::startMenu(int width, int height, const std::string& title, const std::vector<std::string>& mapScripts,

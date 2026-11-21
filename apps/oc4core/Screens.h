@@ -81,6 +81,8 @@ namespace oc4::host
 		// The temporary main menu instead (the original's is the engine's own, no script's):
 		// a title, the map scripts to choose from and the folders with saved games (each with a
 		// label). Its choice, once made, from takeMenuChoice; closeMenu takes it down.
+		// The opening menu's music the options chose (its 2D sound script: AS2D_OPENING_MENU...).
+		std::string menuSoundtrack();
 		bool startMenu(int width, int height, const std::string& title, const std::vector<std::string>& mapScripts,
 			const std::vector<std::pair<std::filesystem::path, std::string>>& saveFolders, const std::vector<std::string>& mods,
 			const std::string& message = {}, const std::string& page = {});

@@ -31,6 +31,7 @@ namespace oc4::render
 			bool fog = false;  // as the active team sees the map
 			bool flags = true; // the units' flags
 			bool healthBars = true, frozen = false, effects = true; // (the game's graphic options: health under the flags, idle figures still, no particles)
+			bool globeBuildings = true; // the cities' models in the globe view (Globe View Buildings Disabled: none)
 		};
 
 		MapView(Renderer& renderer, const AssetResolver& assets);

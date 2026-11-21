@@ -273,6 +273,10 @@ namespace oc4::render
 		struct Graphics
 		{
 			bool healthBars = false, frozen = false, effects = true, fullscreen = false;
+			bool globeBuildings = false; // the cities' models in the globe view
+			bool lowResTextures = false; // textures from their half size level
+			bool lowMovieQuality = false; // no map drawn behind a playing movie
+			int samples = 0; // anti-aliasing: the map's samples a pixel (0, 2, 4, 8)
 		};
 		void setGraphics(Graphics graphics);
 		// Full screen or windowed (the profile's option; the menu's too, not only a game's).

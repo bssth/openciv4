@@ -464,7 +464,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 		Impl(Renderer& r, const AssetResolver& a) : renderer(r), assets(a) { createPipeline(); }
 		~Impl()
 		{
-			SDL_ReleaseGPUGraphicsPipeline(renderer.device(), terrainPipeline);
+			for (const auto& [samples, p] : terrainPipelines)
+				SDL_ReleaseGPUGraphicsPipeline(renderer.device(), p);
 			SDL_ReleaseGPUShader(renderer.device(), terrainVS);
 			SDL_ReleaseGPUShader(renderer.device(), terrainPS);
 			SDL_ReleaseGPUSampler(renderer.device(), sampler);
@@ -604,6 +605,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 		// The ring the game puts under the selected units (Art/Units/Selection Effect): its
 		// circle turning (the default clip) and its dots over it as the head unit can move
 		// (no dots, red, yellow, green: UnitView::moves + 1).
+		static constexpr Vec3 kEnemyGlow{ 0.74f, 0.28f, 0.16f }; // (the ring's colour under an enemy: the original's red)
 		struct SelectionRing
 		{
 			bool tried = false, ok = false;
@@ -669,10 +671,12 @@ float4 PSTerrain(PSIn i) : SV_Target
 				return false;
 			for (const UnitView& u : map.units)
 			{
-				if (!u.selected)
+				// (and under an enemy in the active team's land, red and without dots: the enemy glow)
+				if (!u.selected && !u.enemy)
 					continue;
+				const bool glow = !u.selected;
 				// (its dots: how the head unit can move)
-				if (const int d = std::clamp(u.moves + 1, 0, 3); d != ring.shown && ring.dots[d])
+				if (const int d = glow ? 0 : std::clamp(u.moves + 1, 0, 3); d != ring.shown && ring.dots[d])
 				{
 					ring.shown = d;
 					ring.player.setLayers({ *ring.dots[d] });
@@ -691,7 +695,12 @@ float4 PSTerrain(PSIn i) : SV_Target
 					world[k] = place * local[k];
 				std::vector<scene::Material> materials;
 				for (const auto& item : ring.model.items)
+				{
 					materials.push_back(anim::animatedMaterial(item, pose));
+					if (glow)
+						for (nif::Color3* c : { &materials.back().diffuse, &materials.back().emissive, &materials.back().ambient })
+							c->r *= kEnemyGlow.x, c->g *= kEnemyGlow.y, c->b *= kEnemyGlow.z;
+				}
 				renderer.draw(*ring.gpu, world, ring.model.visibility(pose.hidden), materials, kDefaultTeamColor, true);
 			}
 			return true;
@@ -716,10 +725,21 @@ float4 PSTerrain(PSIn i) : SV_Target
 
 		void createPipeline()
 		{
-			SDL_GPUDevice* dev = renderer.device();
 			const std::string source = std::string(kFrameConstantsHlsl) + kTerrainHlsl;
 			terrainVS = renderer.compile(source, "terrain.hlsl", "VSTerrain", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
 			terrainPS = renderer.compile(source, "terrain.hlsl", "PSTerrain", SDL_GPU_SHADERSTAGE_FRAGMENT, 6, 0, 2);
+			terrainPipeline = terrainPipelineFor(1);
+			makeTerrainSamplers();
+		}
+
+		// The terrain's pipeline for a pass of so many samples (anti-aliasing), made when first needed.
+		std::map<uint32_t, SDL_GPUGraphicsPipeline*> terrainPipelines;
+		SDL_GPUGraphicsPipeline* terrainPipelineFor(uint32_t samples)
+		{
+			if (const auto it = terrainPipelines.find(samples); it != terrainPipelines.end())
+				return it->second;
+			SDL_GPUDevice* dev = renderer.device();
+			SDL_GPUGraphicsPipeline* made = nullptr;
 			SDL_GPUGraphicsPipelineCreateInfo ci{};
 			ci.vertex_shader = terrainVS;
 			ci.fragment_shader = terrainPS;
@@ -740,21 +760,35 @@ float4 PSTerrain(PSIn i) : SV_Target
 			ci.target_info.num_color_targets = 1;
 			ci.target_info.depth_stencil_format = renderer.depthFormat();
 			ci.target_info.has_depth_stencil_target = true;
-			if (!(terrainPipeline = SDL_CreateGPUGraphicsPipeline(dev, &ci)))
+			ci.multisample_state.sample_count = Renderer::sampleCount(samples);
+			if (!(made = SDL_CreateGPUGraphicsPipeline(dev, &ci)))
 				throw std::runtime_error(std::string("terrain pipeline: ") + SDL_GetError());
+			return terrainPipelines[samples] = made;
+		}
 
+		// The terrain's samplers, again when the renderer's lowest level changes (low resolution textures).
+		uint32_t terrainSamplerGeneration = ~0u;
+		void makeTerrainSamplers()
+		{
+			SDL_GPUDevice* dev = renderer.device();
+			if (sampler)
+				SDL_ReleaseGPUSampler(dev, sampler);
+			if (detailWrap)
+				SDL_ReleaseGPUSampler(dev, detailWrap);
 			SDL_GPUSamplerCreateInfo sd{};
 			sd.min_filter = sd.mag_filter = SDL_GPU_FILTER_LINEAR;
 			sd.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
 			sd.address_mode_u = sd.address_mode_v = sd.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
 			sd.enable_anisotropy = true;
 			sd.max_anisotropy = 8;
+			sd.min_lod = renderer.minLod(); // (low resolution textures: from the half size level)
 			sd.max_lod = 1000;
 			sampler = SDL_CreateGPUSampler(dev, &sd);
 			sd.address_mode_u = sd.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
 			detailWrap = SDL_CreateGPUSampler(dev, &sd);
 			if (!sampler || !detailWrap)
 				throw std::runtime_error(std::string("terrain samplers: ") + SDL_GetError());
+			terrainSamplerGeneration = renderer.samplerGeneration();
 		}
 
 		// ------------------------------------------------------------ art
@@ -2859,9 +2893,11 @@ float4 PSTerrain(PSIn i) : SV_Target
 				const Vec3 c{ worldW() / 2 + dx, worldH() / 2, 0 };
 				return frustum.sphere(c, length(Vec3{ worldW(), worldH(), 0 }) / 2 + map.peakScale * S());
 			};
+			if (terrainSamplerGeneration != renderer.samplerGeneration())
+				makeTerrainSamplers();
 			renderer.reserveSamplers(6);
 			SDL_GPURenderPass* pass = renderer.pass();
-			renderer.bindPipeline(terrainPipeline);
+			renderer.bindPipeline(terrainPipelineFor(renderer.passSamples()));
 			const SDL_GPUTextureSamplerBinding textures[6] = { { plotTex->texture, sampler }, { atlasTex->texture, sampler },
 				{ decalTex->texture, detailWrap }, { detailTex->texture, detailWrap }, { cellTex->texture, sampler }, { borderTex->texture, sampler } };
 			SDL_BindGPUFragmentSamplers(pass, 0, textures, 6);
@@ -3743,7 +3779,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			m->drawInstances(m->features, frustum);
 		if (options.improvements)
 			m->drawInstances(m->decor, frustum);
-		if (options.cities)
+		if (options.cities && (options.globeBuildings || !m->renderer.globe()))
 			m->drawInstances(m->cities, frustum);
 		m->figureHits.clear();
 		if (options.units)
