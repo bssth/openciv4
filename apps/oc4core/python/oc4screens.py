@@ -88,7 +88,7 @@ class _Widget(object):
 	__slots__ = ('name', 'kind', 'parent', 'mode', 'x', 'y', 'z', 'w', 'h', 'style', 'pstyle', 'text', 'help', 'tex', 'tex2',
 		'wt', 'd1', 'd2', 'opt', 'flags', 'font', 'shown', 'enabled', 'state', 'hittest', 'seq', 'vertical', 'scroll', 'children',
 		'bars', 'lists', 'columns', 'rows', 'headers', 'iconw', 'iconh', 'items', 'selected', 'color', 'size', 'defw', 'defh', 'points',
-		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed')
+		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed', 'grid')
 
 	def __init__(self, name, kind):
 		self.name = name
@@ -118,6 +118,7 @@ class _Widget(object):
 		self.bars = None       # stacked bars: [[percent, (r, g, b, a)], ...]
 		self.lists = None      # multi lists: [[(texture, wt, d1, d2, option, disabledTexture), ...], ...]
 		self.columns = None    # tables: [[header, width, right], ...]
+		self.grid = False      # ... drawn with the theme's grid (bDrawGrid)
 		self.rows = None       # tables: [{column: (text, icon, wt, d1, d2, justify)}, ...]
 		self.headers = True
 		self.iconw = self.iconh = 0
@@ -1053,6 +1054,7 @@ class CyGInterfaceScreen(object):
 		w.columns = [[u'', 0, False] for _ in range(max(1, int(numColumns)))]
 		w.rows = []
 		w.headers, w.iconw, w.iconh, w.pstyle = bool(bIncludeHeaders), int(iconWidth), int(iconHeight), _style(_cpe.TableStyles, style)
+		w.grid = bool(bDrawGrid)
 
 	def addTableControlGFCWithHelp(self, szName, numColumns, iX, iY, iWidth, iHeight, bIncludeHeaders, bDrawGrid, iconWidth, iconHeight, style,
 			szHelpText):
@@ -1523,6 +1525,23 @@ def _size(s, w):
 	return w.w, w.h
 
 
+# The theme's grid of a table drawn with one (bDrawGrid): SF_CtrlTheme_Civ4_Control_Color's Grid,
+# GColor(105, 97, 86, 128), one pixel at each column's right and each row's bottom, as the
+# original's (BUG's Religion Advisor: Wine's rows (57, 80, 134) show (82, 89, 110) lines).
+_GRID_COLOR = (105 / 255.0, 97 / 255.0, 86 / 255.0, 128 / 255.0)
+
+def _gridLines(base, ri, x, cy, columns, rowHeight, clip, w, out):
+	cx = x
+	for ci, c in enumerate(columns):
+		cx += c[1]
+		if c[1] > 0:
+			out.append((base + (-(0x1000000 | (ri << 8) | ci),), 'line', cx - 0.5, cy, cx - 0.5, cy + rowHeight, clip, '__grid', u'', '', '', 0, 0, False, True, 4,
+				_GRID_COLOR, -1, -1, -1, False, w.z, w.seq))
+	if cx > x:
+		out.append((base + (-(0x2000000 | ri),), 'line', x, cy + rowHeight - 0.5, cx, cy + rowHeight - 0.5, clip, '__grid', u'', '', '', 0, 0, False, True, 4,
+			_GRID_COLOR, -1, -1, -1, False, w.z, w.seq))
+
+
 def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 	"""Adds a widget (and what is attached to it) to the display list; one attached to a
 	table's cell only there (cell: that cell's corner)."""
@@ -1627,6 +1646,8 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 				if control is not None:
 					_display_widget(s, control, cx, cy, body, [cx, cy, True, c[1], cx], out, (cx, cy))
 				cx += c[1]
+			if w.grid:
+				_gridLines(base, ri, x, cy, w.columns, rowHeight, body, w, out)
 			cy += rowHeight
 		return
 	if kind == 'listbox':

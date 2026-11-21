@@ -574,7 +574,8 @@ namespace oc4::render
 				break;
 			}
 			case Kind::Line:
-				o.line(x0, y0, x1, y1, it.hasColor ? it.color : kEdge, it.alpha, 2);
+				// (a table's grid, "__grid": one pixel, as the theme's)
+				o.line(x0, y0, x1, y1, it.hasColor ? it.color : kEdge, it.alpha, it.style == "__grid" ? 1.0f : 2.0f);
 				break;
 			case Kind::Separator:
 				o.line(x0, y0 + h / 2, x1, y0 + h / 2, kEdge, 0.5f);
