@@ -46,6 +46,10 @@ namespace oc4::host
 {
 	namespace
 	{
+		// A folder the options screen asked the player for (its Browse...: the system's folder
+		// dialog, from there), until the window opens it.
+		std::optional<std::string> g_folderRequest;
+
 		std::wstring toWide(py::handle o)
 		{
 			PyObject* p = o.ptr();
@@ -280,6 +284,11 @@ namespace oc4::host
 		host.def("set_edge_scroll", [&utility](bool on) { utility.setEdgeScroll(on); });
 		host.def("choose_edge_scroll", [&utility](bool on) { utility.chooseEdgeScroll(on); });
 		host.def("edge_scroll", [&utility] { return utility.edgeScroll(); });
+		// The profile's player options (the game core sends them to the active player): 0 the XML's
+		// default, 1 off, 2 on.
+		host.def("set_player_option", [&utility](int option, bool on) { utility.setProfilePlayerOption(option, on); });
+		host.def("reset_player_options", [&utility] { utility.resetProfilePlayerOptions(); });
+		host.def("player_option_state", [&utility](int option) { return utility.profilePlayerOptionState(option); });
 		host.def("ui_size_at", [](int percent) {
 			const float scale = render::uiScaleFor(percent, g_display.density, g_display.width, g_display.height);
 			return std::pair{ render::uiUnits(g_display.width, scale), render::uiUnits(g_display.height, scale) };
@@ -319,6 +328,12 @@ namespace oc4::host
 			if (const PlayerTypes active = GC.getGame().getActivePlayer(); active != NO_PLAYER && victory >= 0)
 				CvMessageControl::getInstance().sendLaunch(active, static_cast<VictoryTypes>(victory));
 		});
+		// (the options' Audio tab: the speakers, the player's own music, the system's sound devices,
+		// a folder chosen in the system's dialog: oc4options.folderChosen hears it)
+		host.def("set_mono", [](bool mono) { Sounds::setMono(mono); });
+		host.def("set_music_folder", [](const std::string& folder) { Sounds::setMusicFolder(folder); });
+		host.def("audio_devices", [](bool recording) { return audio::deviceNames(recording); });
+		host.def("choose_folder", [](const std::string& start) { g_folderRequest = start; });
 		host.def("set_volumes", [](std::vector<float> volumes) {
 			float v[6] = { 1, 1, 1, 1, 1, 1 };
 			for (size_t i = 0; i < 6 && i < volumes.size(); ++i)
@@ -1211,7 +1226,7 @@ if _walls:
 			info.checkbox = item.kind == Kind::CheckBox;
 			if (item.kind == Kind::Movie)
 				info.movie = item.texture;
-			if ((item.kind == Kind::Bar || item.kind == Kind::Scrollbar) && t.size() >= 25)
+			if ((item.kind == Kind::Bar || item.kind == Kind::Scrollbar || item.kind == Kind::Slider) && t.size() >= 25)
 			{
 				item.barStart = t[23].cast<float>();
 				item.barPercent = t[24].cast<float>();
@@ -1255,7 +1270,7 @@ if _walls:
 			}
 			const bool buttonLike = item.kind == Kind::ImageButton || item.kind == Kind::Button || item.kind == Kind::CheckBox ||
 				item.kind == Kind::Dropdown || item.kind == Kind::EndTurnButton || item.kind == Kind::Cell || item.kind == Kind::Scrollbar ||
-				item.kind == Kind::Edit;
+				item.kind == Kind::Edit || item.kind == Kind::Slider;
 			// (a text, setText, is clicked as a button is: the scripts' "EXIT"s are texts)
 			item.mainInterface = !m_menu && info.screen == m_mainId;
 			item.interactive = hitTest != HITTEST_NOHIT && (buttonLike || item.kind == Kind::Text || item.kind == Kind::Movie || (info.widget >= 0 && info.widget != WIDGET_GENERAL) ||
@@ -1289,6 +1304,17 @@ if _walls:
 		{
 			printPythonError(e);
 		}
+		if (g_folderRequest)
+			window.chooseFolder(*std::exchange(g_folderRequest, std::nullopt));
+		if (const auto folder = window.takeChosenFolder())
+			try
+			{
+				py::module_::import("oc4options").attr("folderChosen")(*folder);
+			}
+			catch (py::error_already_set& e)
+			{
+				printPythonError(e);
+			}
 		for (const std::string& file : window.takeMoviesDone())
 			if (const auto it = std::ranges::find(m_items, file, &Item::movie); it != m_items.end())
 				scriptInput(*it, kMovieDone, 0, 0, false, false, false, false);
@@ -1308,6 +1334,8 @@ if _walls:
 			}
 			else if (size_t(click.item) < m_items.size())
 			{
+				if (click.x >= 0)
+					m_mouse = { click.x, click.y }; // (a slider's: where the mouse was then)
 				if (std::getenv("OC4_PLAY_LOG"))
 					std::printf("  mouse on %d/%s/%d\n", m_items[size_t(click.item)].screen, m_items[size_t(click.item)].name.c_str(), m_items[size_t(click.item)].part);
 				this->click(m_items[size_t(click.item)], click.right, click.shift, click.ctrl, click.alt);
@@ -1358,6 +1386,19 @@ if _walls:
 				screens.attr("closeDropdown")();
 				if (!right)
 					screens.attr("sortBy")(it.screen, it.name, it.part);
+				return;
+			}
+			if (it.kind == "slider")
+			{
+				// A slider: set to the stop nearest the mouse (pressed or dragged there); its script hears
+				// NOTIFY_SLIDER_NEWSTOP with the stop when it changes. No sound: the original's sliders
+				// make none.
+				constexpr int kSliderNewStop = 18;
+				screens.attr("closeDropdown")();
+				if (right)
+					return;
+				if (const py::object stop = screens.attr("sliderTo")(it.screen, it.name, m_mouse.first, m_mouse.second); !stop.is_none())
+					scriptInput(it, kSliderNewStop, stop.cast<int>(), 0, false, shift, ctrl, alt);
 				return;
 			}
 			if (it.kind == "scrollbar")

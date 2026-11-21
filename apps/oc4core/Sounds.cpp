@@ -10,6 +10,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <map>
 #include <mutex>
@@ -32,6 +34,28 @@ namespace oc4::host
 		// The player's volumes (the options' sliders, 0..1): master, music, effects, speech,
 		// ambience, interface.
 		std::atomic<float> g_volumes[6] = { 1, 1, 1, 1, 1, 1 };
+		std::atomic<bool> g_mono = false;
+		std::mutex g_folderMutex;
+		std::string g_musicFolder; // (the player's own music; empty: the era's)
+		std::atomic<int> g_folderChanges = 0;
+
+		// The music files of a folder (MP3, WAV), by name.
+		std::vector<std::string> musicFiles(const std::string& folder)
+		{
+			std::vector<std::string> out;
+			std::error_code ec;
+			if (folder.empty() || !std::filesystem::is_directory(folder, ec))
+				return out;
+			for (const auto& e : std::filesystem::directory_iterator(folder, ec))
+			{
+				std::string ext = e.path().extension().string();
+				std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+				if ((ext == ".mp3" || ext == ".wav") && e.is_regular_file(ec))
+					out.push_back(e.path().string());
+			}
+			std::ranges::sort(out);
+			return out;
+		}
 		float userGain(Kind k)
 		{
 			switch (k)
@@ -110,6 +134,9 @@ namespace oc4::host
 			bool loop = false, era = false, intro = false;
 		};
 		std::optional<Pending> pending;
+		// The player's own music (the options' Custom Music Folder): its files, as last read.
+		std::vector<std::string> ownTracks;
+		int folderChanges = 0;
 		std::optional<std::pair<int, int>> talk; // (intro, loop) while talking
 		bool introDone = false;
 		Clock::time_point nextTrack{}, lastUpdate{};
@@ -283,10 +310,26 @@ namespace oc4::host
 			auto it = loading.find(file);
 			if (it == loading.end())
 			{
-				const auto loc = assets.locate(file);
-				if (!loc)
-					return cache[file] = nullptr;
-				auto bytes = std::make_shared<std::vector<std::byte>>(assets.read(*loc));
+				std::shared_ptr<std::vector<std::byte>> bytes;
+				if (std::filesystem::path(file).is_absolute())
+				{
+					// (the player's own music, from their folder)
+					std::ifstream in(std::filesystem::path(file), std::ios::binary);
+					if (!in)
+						return cache[file] = nullptr;
+					bytes = std::make_shared<std::vector<std::byte>>();
+					in.seekg(0, std::ios::end);
+					bytes->resize(size_t(in.tellg()));
+					in.seekg(0);
+					in.read(reinterpret_cast<char*>(bytes->data()), std::streamsize(bytes->size()));
+				}
+				else
+				{
+					const auto loc = assets.locate(file);
+					if (!loc)
+						return cache[file] = nullptr;
+					bytes = std::make_shared<std::vector<std::byte>>(assets.read(*loc));
+				}
 				it = loading.emplace(file, std::async(std::launch::async, [bytes, file]() -> PcmPtr {
 					std::string error;
 					auto pcm = audio::decode(*bytes, &error);
@@ -449,6 +492,16 @@ namespace oc4::host
 			}
 			if (now < nextTrack)
 				return;
+			if (!ownTracks.empty())
+			{
+				// (the player's own music instead of the era's, one after another in no order)
+				std::vector<std::string> choices = ownTracks;
+				if (choices.size() > 1)
+					std::erase(choices, lastTrack);
+				lastTrack = choices[std::uniform_int_distribution<size_t>(0, choices.size() - 1)(rng)];
+				pending = Pending{ lastTrack, lastTrack, kindGain(Kind::Music), false, true, false };
+				return;
+			}
 			const AudioScripts::Soundtracks* tracks = scripts.soundtracks(eraType);
 			if (!tracks || tracks->scripts.empty())
 				return;
@@ -600,10 +653,42 @@ namespace oc4::host
 			g_volumes[i] = std::clamp(volumes[i], 0.0f, 1.0f);
 	}
 
+	void Sounds::setMono(bool mono) { g_mono = mono; }
+
+	void Sounds::setMusicFolder(const std::string& folder)
+	{
+		{
+			const std::lock_guard lock(g_folderMutex);
+			if (folder == g_musicFolder)
+				return;
+			g_musicFolder = folder;
+		}
+		++g_folderChanges;
+	}
+
 	void Sounds::update(const Listener& listener, const std::string& eraType)
 	{
 		if (!m->started || !m->device->ok())
 			return;
+		m->device->setMono(g_mono);
+		if (const int changes = g_folderChanges; changes != m->folderChanges)
+		{
+			// Another folder of the player's own music (or none): the era's track playing makes way
+			// at once, faded out, for the next from the new choice.
+			m->folderChanges = changes;
+			std::string folder;
+			{
+				const std::lock_guard lock(g_folderMutex);
+				folder = g_musicFolder;
+			}
+			m->ownTracks = musicFiles(folder);
+			m->lastTrack.clear();
+			if (m->pending && m->pending->era)
+				m->pending.reset();
+			if (m->music && m->musicIsEra)
+				m->fadingOut = true;
+			m->nextTrack = Clock::now();
+		}
 		if (const float master = m->muted ? 0.0f : float(g_volumes[0]); master != m->master)
 		{
 			m->master = master;

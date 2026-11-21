@@ -31,7 +31,7 @@
 // opens it, Esc closes it), or with --own-interface the window's simple one.
 // --keys are typed in on your turns then (letters and Space as keys, '^', '@' and '+' before
 // one hold Ctrl, Alt and Shift, '>' ends the turn, '~' is Esc, "(x,y)" right clicks that plot,
-// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e", "%t" and "%b" type an arrow, Return, Tab or Backspace into the window, "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
+// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e", "%t" and "%b" type an arrow, Return, Tab or Backspace into the window, "<x,y>" clicks that pixel of the window (a figure there: its unit), "<x,y:x2,y2>" drags from one to the other with the left button, "#n" picks the n-th button of the popup up (OK if it has none), a
 // popup nothing answers gets its first, 'text' goes into its next edit box, "{Name}" or
 // "{Name/part}" clicks the interface's widget so named, "^{Name}" with Ctrl held, "?{Name}" rests
 // the mouse on it); with
@@ -1168,6 +1168,15 @@ namespace
 					click.right = script.front() == '(';
 					clicks.push_back(click);
 					script.erase(0, close + 1);
+				}
+				else if (int px = 0, py = 0, qx = 0, qy = 0; script.front() == '<' && script.find('>') != std::string::npos &&
+						 std::sscanf(script.c_str() + 1, "%d,%d:%d,%d", &px, &py, &qx, &qy) == 4)
+				{
+					// "<x,y:x2,y2>": the left button pressed at x,y, the mouse moved to x2,y2 and let go (a drag).
+					if (log)
+						std::printf("  drag %d,%d to %d,%d\n", px, py, qx, qy);
+					window.mouseDrag(px, py, qx, qy);
+					script.erase(0, script.find('>') + 1);
 				}
 				else if (int px = 0, py = 0; script.front() == '<' && script.find('>') != std::string::npos && std::sscanf(script.c_str() + 1, "%d,%d", &px, &py) == 2)
 				{

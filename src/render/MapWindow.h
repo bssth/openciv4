@@ -224,6 +224,9 @@ namespace oc4::render
 			float alpha = 1;
 			float barStart = 0, barPercent = 0; // (a scroll bar's: where its grip starts, how long it is, as parts of it)
 			bool barLast = false; // a stacked bar's last part (its rim goes over them all)
+			// A slider (style "v" or "h", then "down"/"up" for the side the theme's fill is on):
+			// barStart is where its grip is along it (0 top / left .. 1); it follows the mouse
+			// while held.
 			// A leader's head: its art (texture the NIF, texture2 the KFM, and the background
 			// KFM), its button where the art cannot be drawn, its attitude (AttitudeTypes), the
 			// gesture last asked of it (LeaderheadAction) and how many have been asked.
@@ -333,8 +336,13 @@ namespace oc4::render
 		{
 			int item = -1; // -1: on the screens but on none of their widgets
 			bool right = false, shift = false, ctrl = false, alt = false;
+			int x = -1, y = -1; // where the mouse was (a slider's: where it is set to)
 		};
 		std::vector<UiClick> takeUiClicks();
+		// A folder chosen by the player in the system's folder dialog (from `start`), once
+		// chosen: takeChosenFolder has it then (an empty string: cancelled).
+		void chooseFolder(const std::string& start);
+		std::optional<std::string> takeChosenFolder();
 		// How wide a text with the screens' markup is, in the theme's font (size 2 outside its
 		// <font> tags), as the scripts measure theirs.
 		// In a widget's font (FontTypes; -1 the theme's size 2, as the scripts measure).
@@ -362,6 +370,8 @@ namespace oc4::render
 		// A left click at that pixel as the mouse makes it (scripted tests): on a popup, the
 		// screens, the action bar or the map, whichever takes it there.
 		void mouseClick(int x, int y);
+		// The left button pressed at x0,y0, the mouse moved to x1,y1 in steps, let go there (a drag).
+		void mouseDrag(int x0, int y0, int x1, int y1, int steps = 8);
 		// The mouse's cursor over the window: a cursor file (.cur, .ani: the game's res/Cursors);
 		// none, the system's arrow.
 		void setCursorFile(const std::filesystem::path& file);

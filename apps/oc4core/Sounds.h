@@ -60,6 +60,11 @@ namespace oc4::host
 		// Any thread: the player's volumes, 0..1 (the options screen's: master, music, effects,
 		// speech, ambience, interface; a kind "no sound": 0).
 		static void setVolumes(const float volumes[6]);
+		// Any thread: the player's speakers (Mono: both sides the same), and their own music
+		// (the options' Custom Music Folder: its MP3 and WAV files instead of the era's
+		// soundtrack; empty: the soundtrack). A new folder ends the track playing.
+		static void setMono(bool mono);
+		static void setMusicFolder(const std::string& folder);
 
 		// The window's thread, each frame: where the camera looks (plot units) and from how far
 		// (plots), the active player's era (its type, "ERA_ANCIENT") for the soundtrack.

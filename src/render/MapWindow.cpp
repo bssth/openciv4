@@ -19,6 +19,7 @@
 #include "render/Input.h"
 #include "media/Movie.h"
 
+#include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_hints.h>
@@ -32,6 +33,7 @@
 #include <DirectXMath.h>
 
 #include <algorithm>
+#include <mutex>
 #include <set>
 #include <tuple>
 #include <array>
@@ -250,6 +252,9 @@ namespace oc4::render
 		}
 		std::vector<MapWindow::UiClick> uiClicks;
 		bool downOnUi = false;
+		bool sliderDrag = false; // (the left button held on a slider: it follows the mouse)
+		std::mutex folderMutex; // (the folder dialog answers on a thread of its own)
+		std::optional<std::string> chosenFolder;
 		std::pair<int, int> helpPlot{ -1, -1 };
 		bool helpCombat = false; // (plotHelpText was asked with the right button held: the odds of an attack there)
 		std::wstring plotHelpText;
@@ -1128,7 +1133,12 @@ namespace oc4::render
 			mouseY = y;
 			popup.hover(x, y);
 			ui.hover(x, y);
-			if (minimapDrag)
+			if (sliderDrag)
+			{
+				if (const int item = ui.pressed(); item >= 0)
+					uiClicks.push_back({ item, false, false, false, false, x, y });
+			}
+			else if (minimapDrag)
 				jumpFromMinimap(std::clamp(x, int(minimapRect[0]), int(minimapRect[2])), std::clamp(y, int(minimapRect[1]), int(minimapRect[3])));
 			else if (panning)
 			{
@@ -1181,6 +1191,21 @@ namespace oc4::render
 			{
 				downOnUi = true;
 				ui.press(x, y, !left);
+				// (a slider is set where it is pressed, and follows the mouse while held)
+				if (const int item = ui.pressed(); left && item >= 0 && ui.items()[size_t(item)].kind == UiItem::Kind::Slider &&
+					ui.items()[size_t(item)].enabled)
+				{
+					sliderDrag = true;
+					SDL_CaptureMouse(true);
+					uiClicks.push_back({ item, false, mods.shift, mods.ctrl, mods.alt, x, y });
+				}
+				return;
+			}
+			if (!down && std::exchange(sliderDrag, false))
+			{
+				SDL_CaptureMouse(false);
+				downOnUi = false;
+				ui.release(x, y, mods.shift, mods.ctrl, mods.alt);
 				return;
 			}
 			if (!down && std::exchange(downOnUi, false))
@@ -2536,6 +2561,15 @@ namespace oc4::render
 		m->onButton(false, false, x, y);
 	}
 
+	void MapWindow::mouseDrag(int x0, int y0, int x1, int y1, int steps)
+	{
+		m->onMouseMove(x0, y0);
+		m->onButton(true, true, x0, y0);
+		for (int i = 1; i <= steps; ++i)
+			m->onMouseMove(x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps);
+		m->onButton(true, false, x1, y1);
+	}
+
 	std::optional<MapWindow::PlotClick> MapWindow::clickAt(int x, int y, bool right) const
 	{
 		const auto figure = m->figureUnder(x, y);
@@ -2612,6 +2646,21 @@ namespace oc4::render
 	MapWindow::UiDisplay MapWindow::uiDisplay() const { return { m->renderer->width(), m->renderer->height(), m->windowDensity() }; }
 	bool MapWindow::uiActive() const { return m->ui.active(); }
 	std::vector<MapWindow::UiClick> MapWindow::takeUiClicks() { return std::exchange(m->uiClicks, {}); }
+	void MapWindow::chooseFolder(const std::string& start)
+	{
+		SDL_ShowOpenFolderDialog(
+			[](void* self, const char* const* files, int) {
+				auto& impl = *static_cast<Impl*>(self);
+				const std::lock_guard lock(impl.folderMutex);
+				impl.chosenFolder = files && files[0] ? std::string(files[0]) : std::string();
+			},
+			m.get(), m->window, start.empty() ? nullptr : start.c_str(), false);
+	}
+	std::optional<std::string> MapWindow::takeChosenFolder()
+	{
+		const std::lock_guard lock(m->folderMutex);
+		return std::exchange(m->chosenFolder, std::nullopt);
+	}
 	void MapWindow::setUiTextFocus(bool focus) { m->uiTextFocus = focus; }
 	std::wstring MapWindow::takeUiTyped() { return std::exchange(m->uiTyped, {}); }
 	void MapWindow::typeText(const std::string& utf8)

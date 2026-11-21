@@ -80,6 +80,17 @@ namespace oc4::render
 				m_grip[d] = { m_theme.skin(grip, "GFC_CtrlTheme_Bitmap_Control_Button_Skin_Default"),
 					m_theme.skin(grip, "GFC_CtrlTheme_Bitmap_Control_Button_Skin_Rollover") };
 			}
+			constexpr std::string_view slider = "GFC_Control_StandardSlider_Style";
+			for (size_t d = 0; d < 2; ++d)
+			{
+				const std::string track = std::string("GFC_CtrlTheme_Bitmap_Control_Slider_Skin_") + (d == 0 ? "VTrack" : "HTrack");
+				m_sliderTrack[d] = { m_theme.skin(slider, track + "_Inner_Default"), m_theme.skin(slider, track + "_Inner_Disable") };
+				m_sliderFill[d] = { m_theme.skin(slider, track + "_Fill_Default"), m_theme.skin(slider, track + "_Fill_Disable") };
+				const std::string_view grip = d == 0 ? "SF_CtrlTheme_Civ4_Control_Slider_VGripButton_Normal_Style" : "SF_CtrlTheme_Civ4_Control_Slider_HGripButton_Normal_Style";
+				m_sliderGrip[d] = { m_theme.skin(grip, "GFC_CtrlTheme_Bitmap_Control_Button_Skin_Default"),
+					m_theme.skin(grip, "GFC_CtrlTheme_Bitmap_Control_Button_Skin_Rollover"), m_theme.skin(grip, "GFC_CtrlTheme_Bitmap_Control_Button_Skin_Press"),
+					m_theme.skin(grip, "GFC_CtrlTheme_Bitmap_Control_Button_Skin_Disable") };
+			}
 		}
 		// (the screens are made again whenever something on them changes, often between a press
 		// and its release: the item pressed is the same one in the new list, and what is under the
@@ -468,6 +479,17 @@ namespace oc4::render
 				}
 				if (it.kind == Kind::Button && it.texture.empty())
 					o.richText(text, (x0 + x1) / 2, ty, size, false, colour, a, Overlay::Align::Center);
+				else if (it.kind == Kind::Edit)
+				{
+					// (an edit box's text kept inside it: a long path is cut at its right edge)
+					o.clip(it.clipped ? std::max(x0, it.clip[0]) : x0, it.clipped ? std::max(y0, it.clip[1]) : y0,
+						it.clipped ? std::min(x1 - 3, it.clip[2]) : x1 - 3, it.clipped ? std::min(y1, it.clip[3]) : y1);
+					o.richText(text, tx, ty, size, false, colour, a);
+					if (it.clipped)
+						o.clip(it.clip[0], it.clip[1], it.clip[2], it.clip[3]);
+					else
+						o.unclip();
+				}
 				else
 					o.richText(text, tx, ty, size, false, colour, a);
 				o.resetShadow();
@@ -580,8 +602,40 @@ namespace oc4::render
 				o.line(x0, y0 + h / 2, x1, y0 + h / 2, kEdge, 0.5f);
 				break;
 			case Kind::Slider:
-				o.rect(x0, y0 + h / 2 - 2, x1, y0 + h / 2 + 2, kEdge, 0.6f, 2);
+			{
+				// The theme's slider (GFC_Control_StandardSlider_Style): a track 12 thick in the middle
+				// of its box, its fill from the grip to the side the style names ("down": the bottom
+				// or the right, "up": the top or the left), and the grip, 28 by 14, where it is set.
+				const bool down = it.style.starts_with('v'), fillEnd = it.style.find("down") != std::string::npos,
+					fillStart = it.style.find("up") != std::string::npos;
+				const size_t d = down ? 0 : 1, off = it.enabled ? 0 : 1;
+				constexpr float thick = 12, gripLong = 28, gripShort = 14;
+				const float length = down ? h : w, at = std::clamp(it.barStart, 0.0f, 1.0f);
+				const float centre = (down ? y0 : x0) + gripShort / 2 + at * std::max(0.0f, length - gripShort);
+				const float tx0 = down ? (x0 + x1 - thick) / 2 : x0, ty0 = down ? y0 : (y0 + y1 - thick) / 2;
+				const float tx1 = down ? tx0 + thick : x1, ty1 = down ? y1 : ty0 + thick;
+				if (!m_sliderTrack[d][off].empty())
+				{
+					Theme::draw(o, m_sliderTrack[d][off], tx0, ty0, tx1, ty1, it.alpha);
+					if (fillEnd || fillStart)
+					{
+						const float f0 = fillEnd ? centre : (down ? ty0 : tx0), f1 = fillEnd ? (down ? ty1 : tx1) : centre;
+						if (f1 > f0)
+							Theme::draw(o, m_sliderFill[d][off], down ? tx0 : f0, down ? f0 : ty0, down ? tx1 : f1, down ? f1 : ty1, it.alpha);
+					}
+				}
+				else
+					o.rect(tx0, ty0, tx1, ty1, kEdge, 0.6f * alpha, 2);
+				// (the theme's disabled grip is an empty cell: a disabled one is the plain grip, dimmed)
+				const size_t state = !it.enabled ? 0 : int(i) == m_pressed ? 2 : hot ? 1 : 0;
+				const float gx0 = down ? (x0 + x1 - gripLong) / 2 : centre - gripShort / 2, gy0 = down ? centre - gripShort / 2 : (y0 + y1 - gripLong) / 2;
+				const float gx1 = gx0 + (down ? gripLong : gripShort), gy1 = gy0 + (down ? gripShort : gripLong);
+				if (const Theme::Skin& g = !m_sliderGrip[d][state].empty() ? m_sliderGrip[d][state] : m_sliderGrip[d][0]; !g.empty())
+					Theme::draw(o, g, gx0, gy0, gx1, gy1, alpha);
+				else
+					o.rect(gx0, gy0, gx1, gy1, hot ? kHot : kText, alpha, 2);
 				break;
+			}
 			case Kind::Minimap:
 				if (minimap)
 					minimap(x0, y0, x1, y1, it.style == "__screenmap");
