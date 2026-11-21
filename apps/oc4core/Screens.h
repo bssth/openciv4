@@ -123,6 +123,7 @@ namespace oc4::host
 		};
 		void rebuild(render::MapWindow& window);
 		void click(const Item& item, bool right, bool shift, bool ctrl, bool alt);
+		void moveOnOff(render::MapWindow& window); // NOTIFY_CURSOR_MOVE_ON/_OFF as the mouse goes onto a widget and off it
 		// The script's handleInput for the item (a NotifyCode, its data).
 		void scriptInput(const Item& item, int notify, int data, int column, bool right, bool shift, bool ctrl, bool alt);
 		std::string help(const Item& item) const;
@@ -136,6 +137,7 @@ namespace oc4::host
 		std::chrono::steady_clock::time_point m_sizeChanged;
 		std::vector<Item> m_items;
 		int m_hovered = -1;
+		std::optional<Item> m_movedOn; // the widget the scripts were told the mouse is on
 		std::pair<int, int> m_mouse{ -1, -1 }; // where the mouse was at the clicks taken
 		unsigned m_diploVersion = 0;           // the talk the diplomacy screen shows
 		std::vector<std::pair<int, std::wstring>> m_talkAnswers; // the player's answers in it, last frame

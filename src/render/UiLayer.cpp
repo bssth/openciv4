@@ -420,7 +420,9 @@ namespace oc4::render
 			case Kind::ImageButton:
 				if (icon(it.texture, x0, y0, x1, y1, alpha))
 				{
-					if (hot)
+					// (a screen's picture button has no look of its own under the mouse in the
+					// original: the civics screen's big civic buttons; the main interface's keep theirs)
+					if (hot && it.mainInterface)
 						o.frame(x0, y0, x1, y1, kHot, 1, 3, 2);
 				}
 				else if (!themedButton(o, it, int(i), hot, it.state) && w > 0)
@@ -480,8 +482,14 @@ namespace oc4::render
 			case Kind::CheckBox:
 				if (icon(it.texture, x0, y0, x1, y1, alpha))
 				{
-					if (it.state && !it.texture2.empty())
-						icon(it.texture2, x0, y0, x1, y1, alpha);
+					// (a picture with its own highlight, as the civics screen's: that highlight says
+					// it is on, and nothing more is drawn, under the mouse either, as the original)
+					if (!it.texture2.empty())
+					{
+						if (it.state)
+							icon(it.texture2, x0, y0, x1, y1, alpha);
+						break;
+					}
 				}
 				else if (themedButton(o, it, int(i), hot, it.state))
 					break; // (its toggled look says it is on)

@@ -1275,6 +1275,7 @@ if _walls:
 		if (!m_active)
 			return;
 		m_mouse = window.mousePosition();
+		moveOnOff(window);
 		// A movie at its end: its screen hears NOTIFY_MOVIE_DONE.
 		constexpr int kMovieDone = 17;
 		// Keys typed into an edit box, and whether one takes them.
@@ -1312,6 +1313,38 @@ if _walls:
 					std::printf("  mouse on %d/%s/%d\n", m_items[size_t(click.item)].screen, m_items[size_t(click.item)].name.c_str(), m_items[size_t(click.item)].part);
 				this->click(m_items[size_t(click.item)], click.right, click.shift, click.ctrl, click.alt);
 			}
+	}
+
+	void Screens::moveOnOff(render::MapWindow& window)
+	{
+		// The mouse onto a widget and off it: its script hears NOTIFY_CURSOR_MOVE_ON and _OFF, as
+		// the original's widgets tell it (the civics screen shows the civic under the mouse in its
+		// column's help, the religion screen and BUG's unit list theirs). The widget is known by
+		// its screen, name and part: a script that redraws on it (new widgets, the same name) hears
+		// it once. Only the game's screens (not the host's menu, options, turn log or talks).
+		constexpr int kMoveOn = 4, kMoveOff = 5;
+		const int hovered = m_menu ? -1 : window.uiHovered();
+		std::optional<Item> now;
+		if (hovered >= 0 && size_t(hovered) < m_items.size())
+		{
+			const Item& it = m_items[size_t(hovered)];
+			if (it.screen != kDiplomacyScreen && it.screen != kOptionsScreen && it.screen != kTurnLogScreen && !it.name.empty() &&
+				!it.name.starts_with("OC4") && it.kind != "option" && it.kind != "header" && it.kind != "scrollbar")
+				now = it;
+		}
+		const auto same = [](const Item& a, const Item& b) { return a.screen == b.screen && a.name == b.name && a.part == b.part; };
+		if (now ? m_movedOn && same(*m_movedOn, *now) : !m_movedOn)
+			return;
+		const std::optional<Item> before = std::exchange(m_movedOn, now);
+		// (getMouseX is the mouse's x in pixels then, as in the original, not a table's column: BUG's
+		// religion and domestic advisors zoom to a row's city when it is 0, whatever the notify)
+		const int mouseX = window.mousePosition().first;
+		if (before)
+			// (to the widget as it is now, if it is still there)
+			if (const auto it = std::ranges::find_if(m_items, [&](const Item& i) { return same(i, *before); }); it != m_items.end())
+				scriptInput(Item(*it), kMoveOff, it->part < 0 ? 0 : (it->part & 0xFFFF), mouseX, false, false, false, false);
+		if (now)
+			scriptInput(*now, kMoveOn, now->part < 0 ? 0 : (now->part & 0xFFFF), mouseX, false, false, false, false);
 	}
 
 	bool Screens::click(const std::string& name, int part, bool shift, bool ctrl, bool alt)
