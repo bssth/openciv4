@@ -373,15 +373,19 @@ namespace oc4::host
 		void createUnitEntity(CvUnit* pUnit) override;
 		void destroyEntity(CvEntity*& pEntity, bool) override;
 		bool IsSelected(const CvEntity* pEntity) const override;
-		// The plots in a move order's displayed path. Keep them until snapshots show each
-		// unit reaching one, so the renderer follows the legal route instead of drawing a
-		// straight line between snapshots.
+		// The plots a unit walked through, as the original engine is told them: the DLL moves a
+		// unit plot by plot (CvUnit::setXY, which tells its entity each new plot: updateEnemyGlow
+		// here, QueueMove with graphics up) and ends the order's moves with ExecuteMove. A whole
+		// Go To this turn happens in one game update, so the snapshots alone see only its end.
 		struct Movement
 		{
 			IDInfo unit;
-			std::vector<std::pair<int, int>> plots;
+			std::vector<std::pair<int, int>> plots; // those since it was last shown, in order
+			float seconds = 0; // how long the original takes to walk them (0: not told)
 		};
-		static void planMovement(const std::vector<IDInfo>& units, const std::vector<std::pair<int, int>>& plots);
+		void updateEnemyGlow(CvUnitEntity* pEntity) override;
+		void ExecuteMove(CvUnitEntity* pEntity, float fTimeToExecute, bool bCombat) override;
+		// (taken: the plots of the unit's walk the snapshot has not shown yet; x, y where it is)
 		static std::optional<Movement> movement(const IDInfo& unit, int x, int y);
 		// The mission a unit's entity is told it does (fortify, sleep, ..., idle): how the
 		// original engine knows which animation the unit plays.

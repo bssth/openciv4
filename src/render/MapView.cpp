@@ -588,6 +588,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 		{
 			Vec3 from, to;
 			float start = 0, duration = 0;
+			float spread = 0; // the last figure arrives that much later (the original's run one by one)
+			float orderStart = 0, orderSeconds = 0; // the whole order's walk this leg is part of
 		};
 		std::unordered_map<uint64_t, std::deque<Motion>> motions;
 		std::unordered_map<uint64_t, Vec3> unitPositions; // the plot where each unit was last shown
@@ -678,9 +680,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 					ring.player.setLayers({ *ring.dots[d] });
 				}
 				Vec3 at{ (float(u.x) + 0.5f) * S(), (float(u.y) + 0.5f) * S(), 0 };
+				// (none while its units walk there: the original's comes once they are in)
 				const uint64_t key = uint64_t(uint32_t(u.owner)) << 32 | uint32_t(u.id);
-				if (const Motion* motion = activeMotion(key))
-					at = motionPoint(*motion);
+				if (activeMotion(key))
+					continue;
 				at.x += wrapOffset(at.x);
 				const anim::Pose pose = ring.player.evaluate(ring.model);
 				const auto local = ring.model.worldTransforms(pose.locals);
@@ -2635,22 +2638,27 @@ float4 PSTerrain(PSIn i) : SV_Target
 			}
 		}
 
-		Vec3 motionPoint(const Motion& m) const
+		Vec3 motionPoint(const Motion& m, float delay = 0) const
 		{
-			const float t = m.duration > 0 ? std::clamp((time - m.start) / m.duration, 0.0f, 1.0f) : 1.0f;
+			const float t = m.duration > 0 ? std::clamp((time - delay - m.start) / m.duration, 0.0f, 1.0f) : 1.0f;
 			return lerp(m.from, m.to, t);
 		}
 
-		const Motion* activeMotion(uint64_t unit) const
+		// The leg of a unit's walk on now (a figure delay seconds behind the first), if any.
+		const Motion* activeMotion(uint64_t unit, float delay = 0) const
 		{
 			const auto it = motions.find(unit);
-			return it != motions.end() && !it->second.empty() && time < it->second.front().start + it->second.front().duration ? &it->second.front() : nullptr;
+			if (it != motions.end())
+				for (const Motion& m : it->second)
+					if (time - delay < m.start + m.duration)
+						return &m;
+			return nullptr;
 		}
 
 		void finishMotions()
 		{
 			for (auto& [unit, route] : motions)
-				while (!route.empty() && time >= route.front().start + route.front().duration)
+				while (!route.empty() && time >= route.front().start + route.front().duration + route.front().spread)
 					route.pop_front();
 			std::erase_if(motions, [](const auto& entry) { return entry.second.empty(); });
 		}
@@ -2694,26 +2702,26 @@ float4 PSTerrain(PSIn i) : SV_Target
 				Vec3 center{ (float(u.x) + 0.5f) * S(), (float(u.y) + 0.5f) * S(), 0 };
 				if (cityPlots.contains(u.x + u.y * map.width))
 					center.y -= 0.3f * S();
-				// A unit seen on another plot before walks there. Its move order supplies every
-				// legal intermediate plot; snapshots alone only reveal the final one.
+				// A unit seen on another plot before walks there, plot by plot through those the game
+				// moved it through (a whole Go To this turn is one game update: the snapshots alone
+				// see only its end). As the original's: the plots one order walked, in a second
+				// (moveSeconds) at an even pace; a step the game did not tell, a short one.
 				const uint64_t key = uint64_t(uint32_t(u.owner)) << 32 | uint32_t(u.id);
 				if (const auto it = unitPositions.find(key); it != unitPositions.end() && u.id >= 0)
 				{
 					auto& route = motions[key];
 					Vec3 from = route.empty() ? it->second : route.back().to;
 					float start = route.empty() ? time : route.back().start + route.back().duration;
-					auto append = [&](Vec3 to) {
+					std::vector<Vec3> legs;
+					auto add = [&](Vec3 to) {
 						Vec3 d = to - from;
 						if (map.wrapX && std::abs(d.x) > worldW() / 2)
 							d.x -= std::copysign(worldW(), d.x);
-						to = from + d;
 						const float plots = length(d) / S();
 						if (plots > 0.05f && plots < 3.5f)
 						{
-							const float duration = 0.25f + 0.3f * plots;
-							route.push_back({ from, to, start, duration });
-							from = to;
-							start += duration;
+							legs.push_back(d);
+							from = from + d;
 						}
 					};
 					for (const UnitView::MoveStep& step : u.moveSteps)
@@ -2721,11 +2729,23 @@ float4 PSTerrain(PSIn i) : SV_Target
 						Vec3 to{ (float(step.x) + 0.5f) * S(), (float(step.y) + 0.5f) * S(), 0 };
 						if (cityPlots.contains(step.x + step.y * map.width))
 							to.y -= 0.3f * S();
-						append(to);
+						add(to);
 					}
-					// A mod or an unseen move may not have queued waypoints. Preserve the old
-					// short straight interpolation for that case and for any missing final step.
-					append(center);
+					add(center);
+					float total = 0;
+					for (const Vec3& d : legs)
+						total += length(d);
+					Vec3 at = route.empty() ? it->second : route.back().to;
+					const float orderStart = start;
+					for (const Vec3& d : legs)
+					{
+						const float duration = u.moveSeconds > 0 ? u.moveSeconds * length(d) / total : 0.25f + 0.3f * length(d) / S();
+						// (the last figure up to 0.7 s behind, the more of them the more: a stack's)
+						const float figures = float(std::max<size_t>(u.models.size(), 1));
+						route.push_back({ at, at + d, start, duration, u.moveSeconds > 0 ? 0.7f * (1 - 1 / figures) : 0, orderStart, u.moveSeconds });
+						at = at + d;
+						start += duration;
+					}
 					if (route.empty())
 						motions.erase(key);
 				}
@@ -3431,9 +3451,20 @@ float4 PSTerrain(PSIn i) : SV_Target
 			{
 				if (fogged(inst, needsSight))
 					continue;
+				// (each figure of a walking stack a little behind the first: the original's figures
+				// run one by one; a Wine stack of 3 axemen took 1.7 s where a scout takes 1 s)
 				const Motion* motion = nullptr;
+				float delay = 0;
 				if (inst.unit)
-					motion = activeMotion(inst.unit);
+				{
+					// (it runs the whole order slower, to arrive up to spread later)
+					if (const Motion* first = activeMotion(inst.unit, 1000); first && inst.figureIndex > 0 && first->orderSeconds > 0)
+					{
+						const float late = first->spread * unitFloat(hash(int(inst.unit), int(inst.unit >> 32), inst.figureIndex));
+						delay = std::clamp((time - first->orderStart) * late / (first->orderSeconds + late), 0.0f, late);
+					}
+					motion = activeMotion(inst.unit, delay);
+				}
 				Vec3 anchor = inst.anchor;
 				float yaw = inst.yaw;
 				// Fighting: the attacker steps up to the defender; the dead are gone.
@@ -3451,7 +3482,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 				{
 					// Walking: from where it was, facing the way, on its way to the plot.
 					const Vec3 d = motion->to - motion->from;
-					anchor = motionPoint(*motion) + (inst.anchor - inst.center);
+					anchor = motionPoint(*motion, delay) + (inst.anchor - inst.center);
 					if (std::abs(d.x) + std::abs(d.y) > 0.01f)
 						yaw = std::atan2(d.y, d.x) + std::numbers::pi_v<float> / 2;
 				}
@@ -3504,10 +3535,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 						lm.run->apply(time, pose); // (stepping up, or back)
 					else if (motion && lm.run)
 					{
-						lm.run->apply(time - motion->start, pose);
+						lm.run->apply(time - delay - motion->start, pose);
 						// (its effects, the footprints: each time round)
 						if (const float d = lm.run->duration(); d > 0)
-							clipSounds(inst, *lm.run, std::fmod(time - motion->start, d), false);
+							clipSounds(inst, *lm.run, std::fmod(std::max(time - delay - motion->start, 0.0f), d), false);
 					}
 					else if (const auto [clip, at] = actionPose(inst); clip)
 					{
@@ -3830,12 +3861,13 @@ float4 PSTerrain(PSIn i) : SV_Target
 				const int plot = u.x + u.y * m->map.width;
 				if (options.fog && !m->map.plots[size_t(plot)].visible)
 					continue;
+				// (where the unit is: the original's flag stands there at once, while its figures
+				// still walk there)
 				Vec3 p{ (float(u.x) + 0.5f) * m->S(), (float(u.y) + 0.5f) * m->S(), 0 };
 				const uint64_t key = uint64_t(uint32_t(u.owner)) << 32 | uint32_t(u.id);
-				if (const Impl::Motion* motion = m->activeMotion(key))
-					p = m->motionPoint(*motion);
+				const bool walking = m->activeMotion(key) != nullptr;
 				p.x += m->wrapOffset(p.x);
-				if (u.selected && !m->ringsDrawn)
+				if (u.selected && !m->ringsDrawn && !walking)
 				{
 					// The selection, without the game's art: a ring on the ground round the stack.
 					Vec3 g = p;

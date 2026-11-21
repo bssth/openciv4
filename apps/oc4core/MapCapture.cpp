@@ -911,8 +911,11 @@ namespace oc4::host
 					render::UnitView& u = s.units.emplace_back();
 					u.id = shown->getID();
 					if (const auto movement = Entities::movement(shown->getIDInfo(), plot->getX(), plot->getY()))
+					{
 						for (const auto [x, y] : movement->plots)
 							u.moveSteps.push_back({ x, y });
+						u.moveSeconds = movement->seconds;
+					}
 					if (fight != fighting.end() && shown->getOwner() == fight->second.first.eOwner && shown->getID() == fight->second.first.iID)
 						u.battle = fight->second.second.first, u.attacking = fight->second.second.second;
 					for (int k = 0; selection && k < count && !u.selected; ++k)

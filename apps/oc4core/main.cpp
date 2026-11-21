@@ -1333,17 +1333,6 @@ namespace
 				}
 				else if (ui.getHeadSelectedUnit())
 				{
-					const render::MapWindow::PathView way = findPath(ui, { plot->getX(), plot->getY() });
-					if (way.reachable && way.points.size() > 1)
-					{
-						std::vector<IDInfo> units;
-						for (CLLNode<IDInfo>* node = ui.headSelectionListNode(); node; node = ui.nextSelectionListNode(node))
-							units.push_back(node->m_data);
-						std::vector<std::pair<int, int>> plots;
-						for (size_t i = 1; i < way.points.size(); ++i)
-							plots.emplace_back(way.points[i].x, way.points[i].y);
-						host::Entities::planMovement(units, plots);
-					}
 					utility.setModifierKeys(click.shift, click.ctrl, click.alt);
 					ui.unitSound(ui.getHeadSelectedUnit(), true); // (the order's: moves have none of the DLL's)
 					game.selectionListMove(plot, click.alt, click.shift, click.ctrl);

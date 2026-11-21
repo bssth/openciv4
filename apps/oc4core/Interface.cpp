@@ -410,14 +410,39 @@ namespace oc4::host
 		pEntity = nullptr;
 	}
 
-	void Entities::planMovement(const std::vector<IDInfo>& units, const std::vector<std::pair<int, int>>& plots)
+	void Entities::updateEnemyGlow(CvUnitEntity* pEntity)
 	{
-		if (plots.empty())
+		// (CvUnit::setXY's, once the unit is on its new plot; the game's and the player's own,
+		// for every unit when a war starts or ends: no new plot then)
+		const auto* unit = reinterpret_cast<const CvUnit*>(pEntity);
+		if (!unit || unit->getOwner() < 0 || unit->getID() < 0 || unit->getX() < 0)
 			return;
+		const std::pair at{ unit->getX(), unit->getY() };
 		std::lock_guard lock(g_movementMutex);
-		for (const IDInfo& unit : units)
-			if (unit.eOwner >= 0 && unit.iID >= 0)
-				g_movements[movementKey(unit)] = { unit, plots };
+		Movement& m = g_movements[movementKey(unit->getIDInfo())];
+		if (m.unit.eOwner < 0)
+			m.unit = unit->getIDInfo();
+		if (m.plots.empty() || m.plots.back() != at)
+			m.plots.push_back(at);
+		// (only the last few: a unit no snapshot shows, in a stack or out of sight, keeps no more)
+		if (m.plots.size() > 32)
+			m.plots.erase(m.plots.begin(), m.plots.end() - 32);
+	}
+
+	void Entities::ExecuteMove(CvUnitEntity* pEntity, float, bool bCombat)
+	{
+		// CvSelectionGroup::groupMove's, once the group's moves this update are done: the original
+		// engine walks the plots queued since in a second (the DLL asks for MISSION_MOVE_TO's 4
+		// turn slices), half that for a human player's units with Quick Moves (Wine film,
+		// testgames/shots/walk).
+		const auto* unit = reinterpret_cast<const CvUnit*>(pEntity);
+		if (!unit || bCombat || unit->getOwner() < 0)
+			return;
+		const CvPlayer& owner = CvPlayerAI::getPlayerNonInl(unit->getOwner()); // (exported: GET_PLAYER inlines a static the Windows DLL does not export)
+		const float seconds = owner.isHuman() && owner.isOption(PLAYEROPTION_QUICK_MOVES) ? 0.5f : 1.0f;
+		std::lock_guard lock(g_movementMutex);
+		if (const auto it = g_movements.find(movementKey(unit->getIDInfo())); it != g_movements.end())
+			it->second.seconds = seconds;
 	}
 
 	std::optional<Entities::Movement> Entities::movement(const IDInfo& unit, int x, int y)
@@ -426,15 +451,18 @@ namespace oc4::host
 		const auto it = g_movements.find(movementKey(unit));
 		if (it == g_movements.end())
 			return std::nullopt;
-		const auto reached = std::ranges::find(it->second.plots, std::pair{ x, y });
-		if (reached == it->second.plots.end())
+		// The walk up to the plot it is shown on (all of it, but for a plot it came back to).
+		const auto reached = std::ranges::find(it->second.plots.rbegin(), it->second.plots.rend(), std::pair{ x, y });
+		if (reached == it->second.plots.rend())
+		{
+			it->second.plots.clear();
 			return std::nullopt;
-		const size_t count = size_t(std::distance(it->second.plots.begin(), reached)) + 1;
+		}
 		Movement out = it->second;
-		out.plots.resize(count);
-		it->second.plots.erase(it->second.plots.begin(), it->second.plots.begin() + count);
-		if (it->second.plots.empty())
-			g_movements.erase(it);
+		out.plots.resize(size_t(std::distance(reached, it->second.plots.rend())));
+		it->second.plots.erase(it->second.plots.begin(), it->second.plots.begin() + std::ptrdiff_t(out.plots.size()) - 1);
+		it->second.seconds = 0;
+		// (the plot it is on stays: where the next walk starts)
 		return out;
 	}
 

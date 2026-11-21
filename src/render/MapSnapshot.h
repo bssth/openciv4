@@ -154,7 +154,8 @@ namespace oc4::render
 		int owner = -1;
 		int shownOwner = -1; // whose it looks to the active team (getVisualOwner: a hidden nationality's, the barbarians')
 		int direction = 4; // DirectionTypes the unit faces (south)
-		std::vector<MoveStep> moveSteps; // the accepted move order's plots, in order
+		std::vector<MoveStep> moveSteps; // the plots it walked through since the last snapshot, in order
+		float moveSeconds = 0; // how long the walk through them takes (0: as long as their plots make it)
 		std::vector<int> models; // one per figure of the formation, into MapSnapshot::models
 		int count = 1;           // units on the plot
 		float health = 1;
