@@ -1104,10 +1104,10 @@ class CyGInterfaceScreen(object):
 
 	def setTableText(self, szName, iColumn, iRow, text, szIcon='', eWidgetType=-1, iData1=-1, iData2=-1, iJustify=_FONT_LEFT):
 		w = self._s.get(szName)
-		if w is None or w.rows is None:
+		# (a row the screen never added is left alone, as in the original: BUG's Info screen writes
+		# "Religions Founded" into a fourth row of a three-row table, and the original doesn't show it)
+		if w is None or w.rows is None or not 0 <= int(iRow) < len(w.rows):
 			return
-		while len(w.rows) <= int(iRow):
-			w.rows.append({})
 		w.rows[int(iRow)][int(iColumn)] = (_text(text), _str(szIcon), _int(eWidgetType), _int(iData1), _int(iData2), _int(iJustify, _FONT_LEFT))
 		_changed()
 
