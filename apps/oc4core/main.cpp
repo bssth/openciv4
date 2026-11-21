@@ -433,6 +433,23 @@ namespace
 		}
 	}
 
+	// The other civilizations' moves shown (Show Enemy Moves / Show Friendly Moves): a group whose
+	// move ends where the player sees it gets a mission timer (CvSelectionGroup::updateMissionTimer,
+	// 4 game updates and one more a plot moved), the camera is told to look at it, and its owner
+	// moves nothing else while it is busy (CvPlayerAI::AI_unitUpdate waits for !hasBusyUnit): one
+	// group at a time, a stack as one. The timer counts game updates, so these run a slice of time
+	// apart while one is on, as the original's engine does; with nothing shown they run flat out.
+	// (Measured in the original under Wine: a game update every 0.26 s, a shown move every 4 updates.)
+	constexpr std::chrono::milliseconds kShownMoveSlice{ 250 };
+	bool shownMoveOn()
+	{
+		for (int p = 0; p < MAX_PLAYERS; ++p)
+			if (const CvPlayerAI& player = CvPlayerAI::getPlayerNonInl(static_cast<PlayerTypes>(p));
+				player.isAlive() && player.isTurnActive() && !player.isHuman() && player.hasBusyUnit())
+				return true;
+		return false;
+	}
+
 	// Of the game's controls, those the host can do: all but the multiplayer game's (chat,
 	// pings, its administration) and the map's signs.
 	bool playableControl(int control)
@@ -826,6 +843,8 @@ namespace
 		// it was and stays live (the camera moves, the figures move), and nothing here touches
 		// the game.
 		host::TurnWorker worker;
+		// (the others' next game update while a move of theirs is shown: shownMoveOn)
+		Clock::time_point nextShownMoveUpdate{};
 		// A game played by hand is saved at each turn's start (Documents\My Games\openciv4\Saves\
 		// auto, ten in turn), as the original does; a scripted one is not.
 		if (opt.viewSeconds <= 0)
@@ -1522,6 +1541,9 @@ namespace
 				// (a scripted game told where to look keeps looking there)
 				if (opt.lookX < 0 || opt.viewSeconds <= 0)
 					window.centerOn(ui.lookAtX, ui.lookAtY);
+				if (playLog && !player.isTurnActive())
+					std::printf("  others' move shown: the camera to %d,%d at %.2fs\n", ui.lookAtX, ui.lookAtY,
+						std::chrono::duration<double>(Clock::now() - start).count());
 				ui.lookAtX = ui.lookAtY = -1;
 			}
 			const auto now = Clock::now();
@@ -1570,17 +1592,30 @@ namespace
 			if (!CvPlayerAI::getPlayerNonInl(game.getActivePlayer()).isTurnActive() && game.getGameState() != GAMESTATE_OVER &&
 				!utility.diplomacy().active())
 			{
-				window.setBusy(true);
-				worker.start([&session, &game] {
-					const auto until = Clock::now() + std::chrono::milliseconds(100);
-					do
-						if (host::Entities::battleWait())
-							Sleep(5);
-						else
-							session.update();
-					while (!CvPlayerAI::getPlayerNonInl(game.getActivePlayer()).isTurnActive() && Clock::now() < until &&
-						game.getGameState() != GAMESTATE_OVER);
-				});
+				// (a move shown: the next update a slice after the last, the window live meanwhile)
+				if (Clock::now() >= nextShownMoveUpdate)
+				{
+					window.setBusy(true);
+					worker.start([&session, &game, &nextShownMoveUpdate] {
+						const auto until = Clock::now() + std::chrono::milliseconds(100);
+						do
+							if (host::Entities::battleWait())
+								Sleep(5);
+							else
+							{
+								// (the update that ends a timer too: the next group's move a slice later)
+								const bool wasShown = shownMoveOn();
+								session.update();
+								if (wasShown || shownMoveOn())
+								{
+									nextShownMoveUpdate = Clock::now() + kShownMoveSlice;
+									break;
+								}
+							}
+						while (!CvPlayerAI::getPlayerNonInl(game.getActivePlayer()).isTurnActive() && Clock::now() < until &&
+							game.getGameState() != GAMESTATE_OVER);
+					});
+				}
 			}
 		}
 		// (the game is ours again before anything else looks at it)
