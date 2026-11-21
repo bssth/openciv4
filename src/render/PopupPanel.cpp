@@ -25,7 +25,9 @@ namespace oc4::render
 		}
 
 		// (as the game's popups: their width, margins, the choices' pictures, the OK button's height)
-		constexpr float kWidth = 396, kPadX = 21, kPadTop = 18, kPadBottom = 20, kIcon = 28, kOk = 24;
+		constexpr float kWidth = 400, kPadX = 21, kPadTop = 18, kPadBottom = 20, kIcon = 28, kOk = 24;
+		constexpr float kStoneLine = 25, kStoneGap = 6, kStoneInset = 9; // (a choice's stone button)
+		constexpr Color kFocus{ 0.45f, 0.62f, 0.95f };                  // (the focus rim on the first)
 		constexpr Color kPanel{ 0.05f, 0.06f, 0.09f }, kEdge{ 0.78f, 0.64f, 0.36f }, kText{ 0.97f, 0.97f, 0.97f }, kHot{ 1, 0.83f, 0.49f };
 		constexpr Color kButton{ 0.13f, 0.16f, 0.22f }, kButtonHover{ 0.24f, 0.31f, 0.44f }, kEditFill{ 0.09f, 0.11f, 0.2f }, kEditRim{ 0.62f, 0.72f, 0.9f };
 
@@ -239,10 +241,11 @@ namespace oc4::render
 		// As the game's: its width, at the right under the top bar (in the middle when narrow).
 		const float w = std::min(kWidth, sw - 40), inner = w - 2 * kPadX;
 		const bool right = sw >= 2.5f * w && !m_view->centered;
-		const float x0 = right ? sw - 20 - w : (sw - w) / 2;
+		const float x0 = right ? sw - 18 - w : (sw - w) / 2; // (Wine at 1600 x 900: its rim 1182-1582 from 77; 1280 wide, the game menu's at 1262)
 		const std::wstring header = widen(m_view->header);
 		std::vector<std::wstring> texts(items.size());
 		std::vector<float> heights(items.size());
+		const bool stone = m_button && !m_button->skin[0].empty();
 		float content = 0;
 		for (size_t i = 0; i < items.size(); ++i)
 		{
@@ -251,7 +254,13 @@ namespace oc4::render
 			switch (items[i].kind)
 			{
 			case Kind::Text: heights[i] = o.richHeight(texts[i], inner, m_textSize, false) + 10; break;
-			case Kind::Button: heights[i] = std::max(kIcon, o.richHeight(texts[i], inner - (icon ? kIcon + 5 : 0), m_textSize, false)) + 8; break;
+			case Kind::Button:
+				// (on the theme's stone button, as the original's: 25 high for a line, the text's
+				// height and 3 for more (two lines of the game font: 47), 6 apart, the text 9 in;
+				// measured in Wine at 1600 x 900)
+				heights[i] = stone ? std::max(kIcon * (icon ? 1.0f : 0.0f), std::max(kStoneLine, o.richHeight(texts[i], inner - 2 * kStoneInset - (icon ? kIcon + 5 : 0), m_textSize, false) + 3)) + kStoneGap
+					: std::max(kIcon, o.richHeight(texts[i], inner - (icon ? kIcon + 5 : 0), m_textSize, false)) + 8;
+				break;
 			case Kind::Radio:
 			case Kind::Check: heights[i] = std::max(26.0f, o.richHeight(texts[i], inner - 30, m_textSize, false) + 8); break;
 			case Kind::Separator: heights[i] = 12; break;
@@ -262,15 +271,20 @@ namespace oc4::render
 		}
 		const float headerHeight = header.empty() ? 0.0f : o.richHeight(header, inner, m_headerSize, false) + 10;
 		const float okHeight = m_view->okButton ? kOk + 10 : 0.0f;
-		float y0 = right ? 80.0f : 30.0f;
-		const float listHeight = std::max(0.0f, std::min(content, sh - y0 - 20 - headerHeight - okHeight - kPadTop - kPadBottom));
-		const float h = kPadTop + headerHeight + listHeight + okHeight + kPadBottom;
+		float y0 = right ? 77.0f : 30.0f;
+		// (the original leaves 19 under a last stone button to the rim: 3 more than the margin)
+		const float tail = stone && !items.empty() && items.back().kind == Kind::Button && !m_view->okButton ? 3.0f : 0.0f;
+		const float listHeight = std::max(0.0f, std::min(content, sh - y0 - 20 - headerHeight - okHeight - kPadTop - kPadBottom - tail));
+		const float h = kPadTop + headerHeight + listHeight + okHeight + kPadBottom + tail;
 		if (!right)
 			y0 = std::max(30.0f, (sh - h) / 2);
 		m_panel = { x0, y0, x0 + w, y0 + h };
 		if (!m_glass.empty() || !m_frame.empty())
 		{
-			Theme::draw(o, m_glass, x0, y0, x0 + w, y0 + h);
+			// (the glass inside the border's margin, GFC_Control_Border_Size_Margin of the window
+			// without a title bar: the border's own sides, filled with the window's colour, round it;
+			// the glass's light top then follows on from the border's, as the original's)
+			Theme::draw(o, m_glass, x0 + 12, y0 + 13, x0 + w - 12, y0 + h - 15);
 			Theme::draw(o, m_frame, x0, y0, x0 + w, y0 + h);
 		}
 		else
@@ -301,6 +315,10 @@ namespace oc4::render
 		m_scroll = std::clamp(m_scroll, 0.0f, m_scrollMax);
 		o.clip(m_list.x0, m_list.y0, m_list.x1, m_list.y1);
 		m_items.assign(items.size(), Rect{});
+		int firstChoice = -1;
+		for (size_t i = 0; i < items.size() && firstChoice < 0; ++i)
+			if (items[i].kind == Kind::Button)
+				firstChoice = int(i);
 		float iy = y - m_scroll;
 		const float rightEdge = x0 + w - kPadX - (m_scrollMax > 0 ? 10 : 0);
 		for (size_t i = 0; i < items.size(); ++i)
@@ -318,7 +336,34 @@ namespace oc4::render
 			case Kind::Text: o.richBlock(texts[i], r.x0, r.y0 + 4, r.x1 - r.x0, m_textSize, false, kText); break;
 			case Kind::Button:
 			{
-				// A choice: its picture and its text, gold under the mouse (its own colours stay).
+				if (stone)
+				{
+					// A choice: the theme's stone button across the window (lit under the mouse), its
+					// picture and its text dark on it; the first has the focus rim until the keys choose.
+					// (the skin is drawn over the whole place: its own indent leaves the gap, 3 above
+					// and below; the stone then shows 1.5 inside the window's text margin)
+					const float by0 = r.y0, by1 = r.y1;
+					const size_t st = hot && !m_button->skin[1].empty() ? 1 : 0;
+					Theme::draw(o, m_button->skin[st], r.x0 - 2.5f, by0, x0 + w - kPadX + 3.5f, by1);
+					if (!m_keyboard && int(i) == firstChoice)
+						o.frame(r.x0 - 1.5f, by0 + 3, x0 + w - kPadX + 1.5f, by1 - 3, kFocus, 0.9f, 4, 1.5f);
+					float tx = r.x0 + kStoneInset;
+					if (const ButtonArt::Icon* ic = m_art.icon(item.icon))
+					{
+						const float iy0 = std::round(by0 + (by1 - by0 - kIcon) / 2);
+						o.image(ic->key, ic->bgra, ic->width, ic->height, 1, tx, iy0, tx + kIcon, iy0 + kIcon);
+						tx += kIcon + 5;
+					}
+					const float tw = x0 + w - kPadX - kStoneInset - tx, th = o.richHeight(texts[i], tw, m_textSize, false);
+					const bool coloured = m_button->coloured;
+					if (coloured)
+						o.setShadow(m_button->shadow[st], m_button->shadowAlpha[st]);
+					o.richBlock(texts[i], tx, std::round(by0 + (by1 - by0 - th) / 2), tw, m_textSize, false, coloured ? m_button->text[st] : kText,
+						coloured ? m_button->textAlpha[st] : 1);
+					o.resetShadow();
+					break;
+				}
+				// Without the theme: its picture and its text, gold under the mouse (its own colours stay).
 				float tx = r.x0;
 				if (const ButtonArt::Icon* ic = m_art.icon(item.icon))
 				{

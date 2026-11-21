@@ -61,8 +61,9 @@ namespace oc4::render
 			Middle middle = Middle::Stretch;
 			bool sides = true;     // the edges are drawn
 			bool section[4]{ true, true, true, true }; // its left, top, right, bottom columns / rows drawn
-			Color fill{};          // Middle::Fill
+			Color fill{};          // Middle::Fill, or the sides with sidesFill
 			float fillAlpha = 0;
+			bool sidesFill = false; // the ring inside its margin filled with its FactorColor (GFC_BITMAPSKIN_SIDES_FILL: a window's border round its glass)
 		};
 		using Skin = std::vector<Layer>;
 		struct Panel
