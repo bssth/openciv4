@@ -151,12 +151,14 @@ namespace oc4::render
 				std::string icon; // a DDS, or ",<file>,<atlas>,<column>,<row>" (64 pixel cells)
 				int group = 0;    // radio buttons and checkboxes
 				bool checked = false;
+				float width = 0, height = 0; // a picture: the size it is asked at (0: its own)
+				bool centred = false;        // a button: its text centred on it
 			};
 			uint64_t serial = 0; // another popup when it changes
 			std::string header;
 			std::vector<Item> items;
 			bool okButton = false;
-			bool centered = false; // in the middle of the window (the game menu's style), not at the right
+			bool menu = false; // the game menu's style (Window_NoTitleBar_Style): narrower, at the same place
 		};
 		void setPopup(const PopupView* popup); // nullptr: none
 		struct PopupAnswer

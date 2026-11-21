@@ -759,6 +759,12 @@ namespace oc4::render
 						l.middle = Layer::Middle::Fill;
 					else if (f.text == "GFC_BITMAPSKIN_SIDES_NOTVISIBLE")
 						l.sides = false;
+					else if (f.text == "GFC_BITMAPSKIN_SIDES_FILL")
+					{
+						l.sidesFill = true;
+						if (const Value* c = has("FactorColor"); c && l.fillAlpha == 0)
+							colour(s, c, l.fill, l.fillAlpha);
+					}
 					else if (f.text == "GFC_BITMAPSKIN_NOTVISIBLE")
 						l.image = l.center = {};
 				}
@@ -791,7 +797,7 @@ namespace oc4::render
 					next = end = 0;
 				}
 			}
-			std::erase_if(out, [](const Layer& l) { return !l.image && !l.center && l.middle != Layer::Middle::Fill; });
+			std::erase_if(out, [](const Layer& l) { return !l.image && !l.center && l.middle != Layer::Middle::Fill && !(l.sidesFill && l.fillAlpha > 0); });
 			return out;
 		}
 
@@ -1001,6 +1007,17 @@ namespace oc4::render
 				continue;
 			if (l.middle == Layer::Middle::Fill && l.fillAlpha > 0)
 				o.rect(x0, y0, x1, y1, l.fill, l.fillAlpha * alpha);
+			else if (l.sidesFill && l.fillAlpha > 0 && !l.image)
+			{
+				// The ring inside its margin (its middle the glass's, drawn by the window inside it).
+				const float ml = std::min(l.margin[0], (x1 - x0) / 2), mr = std::min(l.margin[2], (x1 - x0) / 2);
+				const float mt = std::min(l.margin[1], (y1 - y0) / 2), mb = std::min(l.margin[3], (y1 - y0) / 2);
+				const float a = l.fillAlpha * alpha;
+				o.rect(x0, y0, x1, y0 + mt, l.fill, a);
+				o.rect(x0, y1 - mb, x1, y1, l.fill, a);
+				o.rect(x0, y0 + mt, x0 + ml, y1 - mb, l.fill, a);
+				o.rect(x1 - mr, y0 + mt, x1, y1 - mb, l.fill, a);
+			}
 			if (const Bitmap& b = l.image)
 			{
 				if (l.middle == Layer::Middle::Fixed && l.margin[0] + l.margin[1] + l.margin[2] + l.margin[3] == 0)

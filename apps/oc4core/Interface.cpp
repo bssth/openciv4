@@ -847,10 +847,10 @@ namespace oc4::host
 		popupOf(pPopup)->okButton = bCreateOkButton;
 	}
 
-	void Interface::popupAddDDS(CvPopup* pPopup, const char* szIconFilename, int, int, CvWString szHelpText)
+	void Interface::popupAddDDS(CvPopup* pPopup, const char* szIconFilename, int iWidth, int iHeight, CvWString szHelpText)
 	{
 		if (pPopup && szIconFilename)
-			popupOf(pPopup)->items.push_back({ .kind = Popup::Item::Kind::Image, .help = szHelpText, .icon = szIconFilename });
+			popupOf(pPopup)->items.push_back({ .kind = Popup::Item::Kind::Image, .help = szHelpText, .icon = szIconFilename, .width = iWidth, .height = iHeight });
 	}
 
 	void Interface::popupAddSeparator(CvPopup* pPopup, int)
@@ -867,11 +867,11 @@ namespace oc4::host
 	}
 
 	void Interface::popupAddGenericButton(CvPopup* pPopup, CvWString szText, const char* szIcon, int iButtonId, WidgetTypes eWidgetType, int iData1,
-		int iData2, bool bOption, PopupControlLayout, unsigned int)
+		int iData2, bool bOption, PopupControlLayout, unsigned int uiFlags)
 	{
 		if (!pPopup)
 			return;
-		Popup::Item b{ .kind = Popup::Item::Kind::Button, .text = szText, .icon = szIcon ? szIcon : "", .id = iButtonId };
+		Popup::Item b{ .kind = Popup::Item::Kind::Button, .text = szText, .icon = szIcon ? szIcon : "", .id = iButtonId, .flags = uiFlags };
 		b.widget.m_iData1 = iData1;
 		b.widget.m_iData2 = iData2;
 		b.widget.m_bOption = bOption;

@@ -1109,7 +1109,7 @@ namespace oc4::host
 		v.serial = popup.serial;
 		v.header = gameMarkup(popup.header.c_str());
 		v.okButton = popup.okButton;
-		v.centered = popup.style == "Window_NoTitleBar_Style";
+		v.menu = popup.style == "Window_NoTitleBar_Style";
 		itemOf.clear();
 		const ButtonPopupTypes type = popup.info ? popup.info->getButtonPopupType() : BUTTONPOPUP_TEXT;
 		for (size_t i = 0; i < popup.items.size(); ++i)
@@ -1127,6 +1127,8 @@ namespace oc4::host
 			out.icon = it.icon;
 			out.group = it.kind == Item::Kind::Radio ? int(it.control) * 1000 + it.group : it.group; // (a pulldown's group is not the radio buttons')
 			out.checked = it.checked;
+			out.width = float(it.width), out.height = float(it.height);
+			out.centred = (it.flags & DLL_FONT_CENTER_JUSTIFY) != 0;
 			itemOf.push_back(int(i));
 		}
 		return v;

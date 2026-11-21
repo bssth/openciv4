@@ -108,6 +108,8 @@ namespace oc4::host
 				Control control = Control::RadioButtons;
 				CvWidgetDataStruct widget{ -1, -1, false, WIDGET_GENERAL };
 				bool checked = false; // checkbox; the radio item chosen
+				int width = 0, height = 0; // a picture (popupAddDDS): the size it is asked at
+				unsigned int flags = 0;    // a button: its text's DLL_FONT_* (the game menu's are centred)
 			};
 			CvPopupInfo* info = nullptr; // owned (deleted through its virtual destructor, in the DLL)
 			int python = -1;             // a script's popup: its number there

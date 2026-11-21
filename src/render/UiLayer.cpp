@@ -70,6 +70,8 @@ namespace oc4::render
 			m_dropInner = m_theme.skin("SF_CtrlTheme_Civ4_Control_ComboBox_Standard_PopupBoxTable_Style", "GFC_CtrlTheme_Bitmap_Control_Table_Skin_Inner_Default");
 			m_dropBorder = m_theme.skin("SF_CtrlTheme_Civ4_Control_ComboBox_Standard_PopupBoxTableBorder_Style",
 				"GFC_CtrlTheme_Bitmap_Control_Border_Skin_Full_Default");
+			// (its sides' fill left out: the list's inner skin is drawn under the whole border here)
+			std::erase_if(m_dropBorder, [](const Theme::Layer& l) { return l.sidesFill && !l.image; });
 			m_dropSelect = m_theme.skin(combo, "GFC_CtrlTheme_Bitmap_Control_ComboBox_Skin_PopupItem_Select");
 			constexpr std::string_view scroll = "GFC_Control_StandardScroll_Style";
 			m_shaft = { m_theme.skin(scroll, "GFC_CtrlTheme_Bitmap_Control_Scroll_Skin_VShaft_Default"),
