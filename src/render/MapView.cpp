@@ -410,6 +410,9 @@ float4 PSTerrain(PSIn i) : SV_Target
 		// Hurt in a round it survives (ANIMCAT_MELEE_HURT 23, by set; the ranged have none of
 		// their own); healing (ANIMCAT_HEAL 4).
 		std::optional<anim::Sequence> hurt[3][2], heal;
+		// Giving itself up (ANIMCAT_SURRENDER: event code 1002, a worker's or a settler's), and a
+		// unit's fading out (its XFadeOut, code 1: the material's alpha to 0).
+		std::optional<anim::Sequence> surrender, fadeOut;
 		// Working, by work (irrigate, build, mine, chop, shovel, railroad: categories 50 + 3 a
 		// work): its beginning, the work, a pause in it; founding a city (ANIMCAT_FOUND 40).
 		std::optional<anim::Sequence> work[6][3], found;
@@ -669,7 +672,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 				return false;
 			for (const UnitView& u : map.units)
 			{
-				if (!u.selected)
+				// (none under a stack while it fights, as in the original)
+				if (!u.selected || u.battle >= 0)
 					continue;
 				// (its dots: how the head unit can move)
 				if (const int d = std::clamp(u.moves + 1, 0, 3); d != ring.shown && ring.dots[d])
@@ -1158,6 +1162,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 				for (uint32_t state = 0; state < 3; ++state)
 					wanted.emplace_back(state + 1, &lm.states[state]);
 				wanted.emplace_back(1004u, &lm.heal);
+				wanted.emplace_back(1002u, &lm.surrender);
+				wanted.emplace_back(1u, &lm.fadeOut);
 				std::vector<std::optional<anim::Sequence>> damaged(16);
 				for (uint32_t state = 0; state < 4; ++state)
 					for (uint32_t part = 0; part < 4; ++part)
@@ -2797,14 +2803,19 @@ float4 PSTerrain(PSIn i) : SV_Target
 					else if (const auto w = workSince.find(key); w == workSince.end() || w->second.first != u.work)
 						workSince[key] = { u.work, time };
 					inst.soundAt = { float(u.x) + 0.5f, float(u.y) + 0.5f, 0 };
-					if (u.battle >= 0 && u.attacking && size_t(u.battle) < map.battles.size())
+					// Fighting, as the original shows it (Wine, close up): the defenders stand where they
+					// are; the attackers run up to them, each figure to the one across (to close to fight
+					// hand to hand, a little short of its plot), or, when every round is ranged (both
+					// shoot), half way; to one giving itself up, half way.
+					if (u.battle >= 0 && size_t(u.battle) < map.battles.size() && u.attacking)
 					{
 						const BattleView& b = map.battles[size_t(u.battle)];
 						Vec3 d{ float(b.defenderX - b.attackerX) * S(), float(b.defenderY - b.attackerY) * S(), 0 };
 						if (map.wrapX && std::abs(d.x) > worldW() / 2)
 							d.x -= std::copysign(worldW(), d.x);
+						const bool shooting = !b.rounds.empty() && std::all_of(b.rounds.begin(), b.rounds.end(), [](const BattleRoundView& r) { return r.ranged; });
 						if (const float len = length(d); len > 0)
-							inst.step = d * (0.4f * S() / len);
+							inst.step = d * (b.surrender || shooting ? 0.45f : 1 - (1 - kBattleCloseIn) * S() / len);
 					}
 					if (!art.shadow.empty())
 						if ((inst.shadow = model(art.shadow, {})))
@@ -2917,6 +2928,21 @@ float4 PSTerrain(PSIn i) : SV_Target
 			float at = 0, step = 0;
 			bool dying = false;
 		};
+		// The battle's first rounds that are first strikes, one side's alone (CvUnit::planBattle: as
+		// many as the strikes one has more, or the other's figures killed in them by that many);
+		// the ranged rounds after them (both sides ranged) are both sides'.
+		static int firstStrikeRounds(const BattleView& b)
+		{
+			const int more = std::abs(b.firstStrikes[0] - b.firstStrikes[1]);
+			if (more == 0)
+				return 0;
+			const int struck = b.firstStrikes[0] > b.firstStrikes[1] ? 1 : 0;
+			int killed = 0, ranged = 0;
+			for (const BattleRoundView& r : b.rounds)
+				if (r.ranged)
+					killed += r.killed[struck], ++ranged;
+			return std::min(std::max(more, killed / more), ranged);
+		}
 		BattlePose battlePose(const Instance& inst) const
 		{
 			BattlePose p;
@@ -2924,13 +2950,38 @@ float4 PSTerrain(PSIn i) : SV_Target
 				return p;
 			const BattleView& b = map.battles[size_t(inst.battle)];
 			const auto began = battleStarts.find(b.serial);
-			if (began == battleStarts.end() || b.rounds.empty())
+			if (began == battleStarts.end() || (b.rounds.empty() && !b.surrender))
 				return p;
 			const float slice = kBattleSliceSeconds, t = time - began->second, end = float(b.slices) * slice;
 			if (t < 0 || t > end + 1)
 				return p; // (over: as usual again)
 			p.fighting = true;
-			p.step = inst.attacking ? std::clamp(t / 0.6f, 0.0f, 1.0f) * std::clamp((end - t) / 0.6f, 0.0f, 1.0f) : 0;
+			if (b.surrender)
+			{
+				// Giving itself up, as the original shows it: the attacker steps up and stays; the
+				// other surrenders (its clip, else it stands), fades out over the last half second (its
+				// XFadeOut, else it is gone at the end) and is not seen again until the game takes it.
+				constexpr float fade = 0.5f;
+				if (inst.attacking)
+				{
+					p.step = std::clamp(t / 0.6f, 0.0f, 1.0f);
+					return p;
+				}
+				const LoadedModel& lm = *inst.model;
+				if (t >= end - fade && lm.fadeOut)
+				{
+					p.clip = &*lm.fadeOut, p.at = std::min((t - (end - fade)) / fade * lm.fadeOut->duration(), lm.fadeOut->duration());
+					p.gone = t >= end;
+				}
+				else if (t >= end)
+					p.gone = true;
+				else if (lm.surrender)
+					p.clip = &*lm.surrender, p.at = std::min(t, lm.surrender->duration());
+				return p;
+			}
+			// (the attackers run up while it is set up; they stay to its end, when the survivors stand
+			// in their places again, as the original's do)
+			p.step = std::clamp(t / kBattleRunUp, 0.0f, 1.0f);
 			const LoadedModel& lm = *inst.model;
 			const int side = inst.attacking ? 0 : 1;
 			const float roundsAt = float(kBattleSetupSlices) * slice, roundLength = float(kBattleRoundSlices) * slice;
@@ -2975,11 +3026,18 @@ float4 PSTerrain(PSIn i) : SV_Target
 					p.gone = true;
 					return p;
 				}
+			// Over: those alive stand in their places again at once (the original's do).
+			if (t >= end)
+				return BattlePose{};
 			// A round on: it strikes (the figures a little one after another), or now and then,
-			// in a melee round, it is hit and staggers.
+			// in a melee round, it is hit and staggers. The ranged rounds of first strikes are the
+			// striker's alone: the other stands and takes them (the original: a crossbowman's or a
+			// longbowman's volleys, the axemen not answering).
 			if (t >= roundsAt)
 				if (const int r = int((t - roundsAt) / roundLength); r < int(b.rounds.size()))
 				{
+					if (r < firstStrikeRounds(b) && b.firstStrikes[side] < b.firstStrikes[1 - side])
+						return p;
 					const bool ranged = b.rounds[size_t(r)].ranged || inst.ranged;
 					const anim::Sequence* s = pick(lm.strike, r % 3, ranged);
 					if (!ranged && unitFloat(hash(inst.figureIndex * 7 + side, r, int(b.serial & 0xFFFF))) < 0.35f)
@@ -3829,6 +3887,9 @@ float4 PSTerrain(PSIn i) : SV_Target
 			{
 				const int plot = u.x + u.y * m->map.width;
 				if (options.fog && !m->map.plots[size_t(plot)].visible)
+					continue;
+				// (a stack fighting shows no flag, nor a ring, while the battle is on: the original's)
+				if (u.battle >= 0)
 					continue;
 				Vec3 p{ (float(u.x) + 0.5f) * m->S(), (float(u.y) + 0.5f) * m->S(), 0 };
 				const uint64_t key = uint64_t(uint32_t(u.owner)) << 32 | uint32_t(u.id);

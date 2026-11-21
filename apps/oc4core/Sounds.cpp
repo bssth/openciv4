@@ -347,11 +347,17 @@ namespace oc4::host
 				return; // (music is the soundtrack's and the talks')
 			if (s->notPlayPercent > 0 && std::uniform_int_distribution<int>(0, 99)(rng) < s->notPlayPercent)
 				return;
-			// The same sound asked for again at once (a stack of units moving) plays once.
-			auto& last = recent[{ int(r.table), r.script }];
-			if (now - last < std::chrono::milliseconds(80))
-				return;
-			last = now;
+			// The same sound on the map asked for again at once (a stack of units moving) plays once.
+			// The messages' sounds (2D) all play, on top of each other, as the original's: a Stack
+			// Attack's fights each end with their victory or defeat sound in the same update (three
+			// fights: the jingle about 10 dB louder in Wine, three copies).
+			if (r.table != AudioScripts::Script2D)
+			{
+				auto& last = recent[{ int(r.table), r.script }];
+				if (now - last < std::chrono::milliseconds(80))
+					return;
+				last = now;
+			}
 			const std::string file = fileOf(*s);
 			if (file.empty())
 			{

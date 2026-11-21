@@ -692,6 +692,15 @@ namespace
 			return p && i >= 0 && size_t(i) < popupItems.size() ? capture.popupHelp(*p, popupItems[size_t(i)]) : std::string();
 		});
 		auto last = Clock::now(), captured = last, ticked = last, typed = last;
+		// (the option Keep the camera on a unit after it attacks: the unit, the window's inputs then,
+		// whether the camera went to it after the battle)
+		struct KeptAttacker
+		{
+			IDInfo unit;
+			unsigned inputs = 0;
+			bool looked = false;
+		};
+		std::optional<KeptAttacker> keptAttacker;
 		host::AutoEndTurn autoEndTurn; // (the option: idle turns end by themselves)
 		const auto start = last;
 		long long frames = 0;
@@ -993,6 +1002,26 @@ namespace
 				// city); once the units that moved are done, the next one that waits for orders (the
 				// DLL holds it back with the cycle counter); then whether the turn is over (its "press
 				// Enter", or ending it).
+				// OpenCiv4's option (Keep the camera on a unit after it attacks): the active player's
+				// attacker stays selected, and the camera goes to it when the battle is over, until the
+				// player clicks or types; the next unit waits till then. (Off, as the original: the next unit
+				// is chosen as soon as the battle ends, with Combat Zoom or without.)
+				if (const std::optional<IDInfo> attacker = ui.takeFocusAttacker(); attacker && utility.keepAttacker())
+					keptAttacker = KeptAttacker{ *attacker, window.inputCount(), false };
+				if (keptAttacker)
+				{
+					CvUnit* unit = CvPlayerAI::getPlayerNonInl(keptAttacker->unit.eOwner).getUnit(keptAttacker->unit.iID);
+					if (!utility.keepAttacker() || !unit || window.inputCount() != keptAttacker->inputs || ui.isDiploOrPopupWaiting())
+						keptAttacker.reset();
+					else if (!unit->isFighting() && !keptAttacker->looked)
+					{
+						keptAttacker->looked = true;
+						if (opt.lookX < 0 || opt.viewSeconds <= 0 || std::getenv("OC4_FOLLOW_CAMERA"))
+							window.centerOn(unit->getX(), unit->getY());
+						if (!ui.isSelected(unit))
+							ui.selectUnit(unit, true, false, false);
+					}
+				}
 				if (const auto now = Clock::now(); now - ticked > std::chrono::milliseconds(150))
 				{
 					ticked = now;
@@ -1000,7 +1029,7 @@ namespace
 						std::exchange(askedResearch, player.getNumCities()) != player.getNumCities())
 						player.chooseTech();
 					ui.updatePopups(me);
-					if (ui.getCycleSelectionCounter() > 0)
+					if (ui.getCycleSelectionCounter() > 0 && !keptAttacker)
 					{
 						ui.changeCycleSelectionCounter(-1);
 						if (ui.getCycleSelectionCounter() == 0)
@@ -1519,11 +1548,25 @@ namespace
 			}
 			if (ui.lookAtX >= 0)
 			{
-				// (a scripted game told where to look keeps looking there)
-				if (opt.lookX < 0 || opt.viewSeconds <= 0)
+				// (a scripted game told where to look keeps looking there; development: OC4_FOLLOW_CAMERA=1
+				// lets the game move it, as in play)
+				if (opt.lookX < 0 || opt.viewSeconds <= 0 || std::getenv("OC4_FOLLOW_CAMERA"))
 					window.centerOn(ui.lookAtX, ui.lookAtY);
 				ui.lookAtX = ui.lookAtY = -1;
 			}
+			if (ui.lookAtPointX >= 0)
+			{
+				if (opt.lookX < 0 || opt.viewSeconds <= 0 || std::getenv("OC4_FOLLOW_CAMERA"))
+				{
+					if (ui.lookAtBattleZoom)
+						window.enterBattleView(ui.lookAtPointX, ui.lookAtPointY, ui.lookAtBattleDirX);
+					else
+						window.centerOnPoint(ui.lookAtPointX, ui.lookAtPointY);
+				}
+				ui.lookAtPointX = ui.lookAtPointY = -1;
+			}
+			if (std::exchange(ui.releaseCamera, false))
+				window.leaveBattleView();
 			const auto now = Clock::now();
 				if (changed || now - captured > std::chrono::milliseconds(200))
 				{

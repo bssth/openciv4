@@ -252,6 +252,10 @@ namespace oc4::host
 		void setEdgeScroll(bool on) { m_edgeScroll.set(on); }
 		void forceNoEdgeScroll() { m_edgeScroll.forceOff(); }
 		void chooseEdgeScroll(bool on) { m_edgeScroll.choose(on); }
+		// After the active player's unit attacks, the camera and the selection stay on it until the
+		// player clicks or types (OpenCiv4's option, off: the original selects the next unit).
+		bool keepAttacker() const { return m_keepAttacker; }
+		void setKeepAttacker(bool on) { m_keepAttacker = on; }
 		void resetGraphicOptions()
 		{
 			for (auto& o : m_graphicOptions)
@@ -425,6 +429,7 @@ namespace oc4::host
 		bool m_wasdPan = false, m_forcedWasdPan = false;
 		bool m_autoEndTurn = false, m_forcedAutoEndTurn = false;
 		render::EdgeScrollOption m_edgeScroll;
+		bool m_keepAttacker = false;
 		std::array<std::atomic<int8_t>, 64> m_graphicOptions{}; // 0 the XML's default, 1 off, 2 on (set by the window's thread, read by the game's)
 		AudioScripts m_audio{ m_assets };
 		Sounds m_sounds{ m_assets, m_audio };

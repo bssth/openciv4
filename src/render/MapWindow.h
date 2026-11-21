@@ -46,6 +46,13 @@ namespace oc4::render
 		void lookAt(int x, int y, float distanceInPlots = -1);
 		// Moves the camera over the plot, keeping its distance.
 		void centerOn(int x, int y);
+		// The same over a point of the map, in plots (10.5: the middle of the plot 10): a battle's,
+		// between the attacker's plot and the defender's.
+		void centerOnPoint(float x, float y);
+		// Combat Zoom: the camera glides in close over a battle's point (in plots), turned towards the
+		// attack (dirX: its east-west share, -1..1), and back out to where it was at the battle's end.
+		void enterBattleView(float x, float y, float dirX);
+		void leaveBattleView();
 		// The city screen: the camera flies down to look straight down at the city (again for
 		// another city's screen), and back to where it was when the screen closes.
 		void enterCityView(int x, int y);

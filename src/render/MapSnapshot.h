@@ -187,9 +187,14 @@ namespace oc4::render
 
 	// A battle the game shows (its CvBattleDefinition): the game holds it for `slices` of its
 	// updates, kBattleSliceSeconds each while it is on: setup (the attacker steps up), six a
-	// round (both sides strike; those killed in it die), then its end.
-	constexpr float kBattleSliceSeconds = 0.15f;
+	// round (both sides strike; those killed in it die), then its end. A slice is one of the
+	// original's game updates, 4 a second (measured in Wine: 0.255 s; an axeman's two-round battle
+	// of 20 slices lasts 5.1 s there).
+	constexpr float kBattleSliceSeconds = 0.25f;
 	constexpr int kBattleSetupSlices = 4, kBattleRoundSlices = 6;
+	// The attackers run up while the battle is set up (its first slices), to fight hand to hand this
+	// far across (in plots: a little short of the defenders' places, as the original's stop).
+	constexpr float kBattleRunUp = float(kBattleSetupSlices) * kBattleSliceSeconds, kBattleCloseIn = 0.7f;
 	struct BattleRoundView
 	{
 		bool ranged = false;
@@ -202,7 +207,11 @@ namespace oc4::render
 		int slices = 0;
 		int attackerX = 0, attackerY = 0, defenderX = 0, defenderY = 0;
 		std::vector<BattleRoundView> rounds;
+		// attacker, defender: its first strikes that hit (the game core counts a ranged unit's
+		// only); the battle's first rounds are the one with more's alone.
+		int firstStrikes[2]{};
 		int collateral = 0; // the defender's plot's other units hit too (collateral damage): blasts there
+		bool surrender = false; // the defender gives itself up (it cannot defend): no rounds, it surrenders and fades out
 	};
 
 	struct CityView

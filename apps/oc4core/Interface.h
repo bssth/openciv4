@@ -69,6 +69,16 @@ namespace oc4::host
 		// Where the DLL asked the camera to go (lookAtSelectionPlot, lookAtCityOffset), for the
 		// window; -1 none.
 		int lookAtX = -1, lookAtY = -1;
+		// The same for a point between plots (lookAt with a point of the map: a battle's, half way
+		// from the attacker's plot to the defender's), in plots (10.5 the middle of the plot 10).
+		float lookAtPointX = -1, lookAtPointY = -1;
+		// ... and with the original's Combat Zoom (CAMERALOOKAT_BATTLE_ZOOM_IN: the active player's attack,
+		// No Combat Zoom off): close in, turned towards the attack (its east-west share); then let go
+		// at the battle's end (releaseLockedCamera).
+		bool lookAtBattleZoom = false;
+		float lookAtBattleDirX = 0;
+		bool releaseCamera = false;
+		void releaseLockedCamera() override { releaseCamera = true; }
 		bool isSelected(const CvUnit* pUnit) const { return selected(pUnit); }
 		void lookAtCityOffset(int iCity) override;
 
@@ -215,6 +225,14 @@ namespace oc4::host
 		bool updateCursorType() override { return false; }
 		bool isFocusedWidget() override { return false; }
 		bool isFocused() override { return false; }
+		// A battle the active player's unit fights (or one it is attacked in) has the camera's focus:
+		// CvUnit::setCombatUnit tells it so, and only then the game core looks at the battle
+		// (CvInterface::lookAt with CAMERALOOKAT_BATTLE(_ZOOM_IN)) and lets go of it at the end
+		// (releaseLockedCamera).
+		bool isCombatFocus() override { return m_combatFocus; }
+		void setCombatFocus(bool bNewValue) override;
+		// The active player's unit that attacked last (it had the focus: quick combat too), once.
+		std::optional<IDInfo> takeFocusAttacker() { return std::exchange(m_focusAttacker, std::nullopt); }
 		bool isScoresVisible() override { return false; }
 		// The tech splash (the scripts' CvTechSplashScreen, with the tech's quote): only with the
 		// game's screens up (Screens::start); without them the game core plays the short sound instead.
@@ -337,6 +355,8 @@ namespace oc4::host
 		CvUnit* m_lastSelected = nullptr;
 		bool m_endTurnMessage = false, m_hasMovedUnit = false, m_forcePopup = false;
 		int m_endTurnCounter = 0, m_cycleSelectionCounter = 0;
+		bool m_combatFocus = false;
+		std::optional<IDInfo> m_focusAttacker;
 
 		Popup* popupOf(CvPopup* pPopup) { return reinterpret_cast<Popup*>(pPopup); }
 		void closePopup();
@@ -405,8 +425,12 @@ namespace oc4::host
 				int killed[2]{}, alive[2]{};
 			};
 			std::vector<Round> rounds;
+			int firstStrikes[2]{}; // attacker, defender: the first strikes it had (CvBattleDefinition; ranged units only)
 			int slices = 0; // the game updates it lasts (CvUnit::planBattle's turns)
 			int collateral = 0; // the other units on the defender's plot the attacker's collateral damage hit
+			// A unit that cannot defend gives itself up (MISSION_SURRENDER: a worker or a settler alone,
+			// captured or killed): no rounds; the attacker steps up, it surrenders and fades out.
+			bool surrender = false;
 			std::chrono::steady_clock::time_point start;
 		};
 		static std::vector<Battle> battles(); // those still on (any thread)

@@ -280,6 +280,8 @@ namespace oc4::host
 		host.def("set_edge_scroll", [&utility](bool on) { utility.setEdgeScroll(on); });
 		host.def("choose_edge_scroll", [&utility](bool on) { utility.chooseEdgeScroll(on); });
 		host.def("edge_scroll", [&utility] { return utility.edgeScroll(); });
+		host.def("set_keep_attacker", [&utility](bool on) { utility.setKeepAttacker(on); });
+		host.def("keep_attacker", [&utility] { return utility.keepAttacker(); });
 		host.def("ui_size_at", [](int percent) {
 			const float scale = render::uiScaleFor(percent, g_display.density, g_display.width, g_display.height);
 			return std::pair{ render::uiUnits(g_display.width, scale), render::uiUnits(g_display.height, scale) };
