@@ -1000,7 +1000,12 @@ namespace
 						std::exchange(askedResearch, player.getNumCities()) != player.getNumCities())
 						player.chooseTech();
 					ui.updatePopups(me);
-					if (ui.getCycleSelectionCounter() > 0)
+					// (not while a popup waits, as the game core's own calls: a new city's name is
+					// asked with the camera on the city, not on the next unit; nor while a city's screen
+					// is up: the next unit would take the selection and close it, as when the turn's
+					// "what to build" popup is answered with Examine City. It comes once the screen is
+					// left, after the question the city asks again.)
+					if (ui.getCycleSelectionCounter() > 0 && !ui.isDiploOrPopupWaiting() && !ui.isCityScreenUp())
 					{
 						ui.changeCycleSelectionCounter(-1);
 						if (ui.getCycleSelectionCounter() == 0)
