@@ -88,7 +88,7 @@ class _Widget(object):
 	__slots__ = ('name', 'kind', 'parent', 'mode', 'x', 'y', 'z', 'w', 'h', 'style', 'pstyle', 'text', 'help', 'tex', 'tex2',
 		'wt', 'd1', 'd2', 'opt', 'flags', 'font', 'shown', 'enabled', 'state', 'hittest', 'seq', 'vertical', 'scroll', 'children',
 		'bars', 'lists', 'columns', 'rows', 'headers', 'iconw', 'iconh', 'items', 'selected', 'color', 'size', 'defw', 'defh', 'points',
-		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed')
+		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed', 'helpWidget')
 
 	def __init__(self, name, kind):
 		self.name = name
@@ -101,6 +101,7 @@ class _Widget(object):
 		self.pstyle = 0
 		self.text = u''
 		self.help = u''
+		self.helpWidget = None  # (type, data1, data2): its help the game core's for these (oc4wb)
 		self.tex = self.tex2 = ''
 		self.wt, self.d1, self.d2, self.opt = -1, -1, -1, False
 		self.flags = _FONT_LEFT
@@ -147,7 +148,7 @@ class _Screen(object):
 		self.shown = False
 		self.main = False
 		self.dims = None
-		self.helpArea = None   # (x, y, width, minWidth, expandRight, expandDown)
+		self.helpArea = None   # (x, y, width, minWidth, expandRight, expandDown, framed)
 		self.helpText = u''
 		self.minimap = None
 		self.mm = None         # its own minimap's layers (not the main interface's): see _Minimap
@@ -946,7 +947,8 @@ class CyGInterfaceScreen(object):
 			_set(w, 'shown', False)
 
 	def setHelpTextArea(self, fWidth, eFont, fX, fY, fZ, bFloating, szArtFile, bExpandRight, bExpandDown, uiFlags, iMinWidth):
-		self._s.helpArea = (int(fX), int(fY), int(fWidth), int(iMinWidth), bool(bExpandRight), bool(bExpandDown))
+		# (with art, the city screen's, it is framed; without, the main interface's, see-through)
+		self._s.helpArea = (int(fX), int(fY), int(fWidth), int(iMinWidth), bool(bExpandRight), bool(bExpandDown), bool(szArtFile))
 
 	def setHelpTextString(self, szString):
 		self._s.helpText = _text(szString)
@@ -1886,6 +1888,16 @@ def typeIntoEdit(text):
 			value = value[:-1]
 		elif c in (u'\r', u'\x1b'):
 			_editFocus[0] = None
+			if c == u'\r' and w.name.startswith('OC4WB'):
+				# (the World Builder's edit window: Enter tells the script, as the original's)
+				_set(w, 'text', value)
+				try:
+					import oc4wb
+					oc4wb.editDone(w.name, value)
+				except Exception:
+					import traceback
+					traceback.print_exc()
+				return
 			break # (the rest of the keys are not the edit box's)
 		elif c >= u' ' and (w.allowed is None or c in w.allowed) and (not w.maxChars or len(value) < w.maxChars):
 			value += c
@@ -1972,17 +1984,67 @@ def rowClicked(fileId, name, part, shift, ctrl):
 
 
 def helpArea():
-	"""(x, y, width, min width, expand right, expand down) of the main interface's help, or None."""
+	"""(x, y, width, min width, expand right, expand down, framed) of the main interface's help, or None."""
 	for s in _screens.values():
 		if s.main and s.helpArea is not None:
 			return s.helpArea
 	return None
 
 
-def widgetText(fileId, name):
+def tooltipPlace(fileId, name, x0, y0, x1, y1, mx, my, width):
+	"""Where a widget's help goes when it is a tooltip, as the original's, or None (the help area):
+	(x, y, max width, expand right, expand down). In the World Builder the main interface and its
+	help area are hidden and the help is a small box at the widget: under the mouse in its tool
+	window (oc4wb's OC4WB... widgets: 12 px left of the mouse, 31 under it), else beside the
+	widget, on the side away from the screen's edge (the top right buttons': 3 px left of it,
+	3 down). Measured in Wine (BtS 3.19, BUG + BULL, 1600x900)."""
+	try:
+		if not oc4host.ui_world_builder():
+			return None
+	except Exception:
+		return None
+	name = _str(name)
+	if name.startswith('OC4WB'):
+		return (mx - 12, my + 31, 400, True, True)
+	if (x0 + x1) / 2.0 > width / 2.0:
+		return (x0 - 3, y0 + 3, 400, False, True)
+	return (x1 + 3, y0 + 3, 400, True, True)
+
+
+def widgetText(fileId, name, widget=-1, data1=-1, data2=-1, option=False):
+	"""A widget's help: the help text the script gave it, else, for the widget types the original's
+	executable answers itself (the World Builder's buttons), the executable's."""
 	s = _screens.get(fileId)
 	w = s.get(name) if s is not None else None
-	return w.help if w is not None else u''
+	text = w.help if w is not None else u''
+	if not text and w is not None and getattr(w, 'helpWidget', None):
+		# (the game core's help for another widget type than the widget's: the World Builder's
+		# palette, its items a unit's, a building's, ... help)
+		try:
+			text = oc4host.widget_help(*w.helpWidget)
+		except Exception:
+			import traceback
+			traceback.print_exc()
+	if not text and widget >= 0:
+		text = exeWidgetHelp(widget, data1, data2, option)
+	return text
+
+
+def exeWidgetHelp(widget, data1, data2, option=False):
+	"""What the original's executable shows for a widget the game's core has no help for: the World
+	Builder's own buttons (its texts, oc4wb), else the scripts' CvGameInterface.getWidgetHelp (BUG
+	answers its own widget types there: the great people bar, the options button, its advisors')."""
+	text = u''
+	try:
+		import oc4wb
+		text = oc4wb.widgetHelp(widget, data1, data2)
+		if not text:
+			import CvGameInterface
+			text = CvGameInterface.getWidgetHelp((int(widget), int(data1), int(data2), bool(option))) or u''
+	except Exception:
+		import traceback
+		traceback.print_exc()
+	return text
 
 
 def toggle(fileId, name):

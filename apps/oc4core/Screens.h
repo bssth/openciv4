@@ -119,6 +119,7 @@ namespace oc4::host
 			int widget = -1, data1 = -1, data2 = -1;
 			bool option = false;
 			bool checkbox = false;
+			float x0 = 0, y0 = 0, x1 = 0, y1 = 0; // (where it is drawn: a tooltip goes beside it)
 			std::string movie; // (a movie's file)
 		};
 		void rebuild(render::MapWindow& window);

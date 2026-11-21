@@ -674,8 +674,16 @@ def _place(screen, n, x, y, w, h):
 	elif k in ('hslider', 'vslider'):
 		# (its stops, each a little button: the slider set to the one clicked)
 		stops = n.maximum - n.minimum + 1
-		for s in range(stops):
-			value = n.minimum + s
+		# (a wide range, as the World Builder diplomacy's -100 to 100: every few values a stop,
+		# as many as fit, the ends kept)
+		step = 1
+		if k == 'hslider' and stops > max(2, (w - 4) / 4):
+			step = (stops + (w - 4) / 4 - 1) / max(1, (w - 4) / 4)
+		values = range(n.minimum, n.maximum + 1, step)
+		if values[-1] != n.maximum:
+			values.append(n.maximum)
+		stops = len(values)
+		for s, value in enumerate(values):
 			if k == 'hslider':
 				size = max(3, min(10, (w - 4) / max(1, stops) - 1))
 				bx, by, bw, bh = x + s * (size + 1), y + 2, size, 14
@@ -683,7 +691,7 @@ def _place(screen, n, x, y, w, h):
 			else:
 				bx, by, bw, bh = x + 8, y + 2 + s * 4, 40, 3
 				on = value >= int(n.value)
-			bname = 'OptSlider%d' % (n.id * 1000 + s)
+			bname = 'OptSlider%d' % (n.id * 1000 + value - n.minimum)
 			screen.addCheckBoxGFC(bname, '', '', bx, by, bw, bh, general, -1, -1, '')
 			b = screen._s.get(bname)
 			if b is not None:

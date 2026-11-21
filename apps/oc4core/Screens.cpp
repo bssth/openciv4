@@ -200,6 +200,14 @@ namespace oc4::host
 		Interface& ui = utility.gameInterface();
 
 		// dirty bits, what shows
+		// The game core's help for a widget type and its data (the World Builder's palette: its
+		// items' help is a unit's, a building's, ..., though a click on them is the palette's).
+		host.def("widget_help", [](int type, int data1, int data2) {
+			CvWStringBuffer text;
+			CvWidgetDataStruct w{ data1, data2, false, static_cast<WidgetTypes>(type) };
+			CvDLLWidgetData::getInstance().parseHelp(text, w);
+			return std::wstring(text.getCString());
+		});
 		host.def("ui_is_dirty", [&ui](int bit) { return ui.isDirty(static_cast<InterfaceDirtyBits>(bit)); });
 		host.def("ui_set_dirty", [&ui](int bit, bool value) { ui.setDirty(static_cast<InterfaceDirtyBits>(bit), value); });
 		host.def("ui_make_dirty", [&ui] { ui.makeInterfaceDirty(); });
@@ -1103,25 +1111,44 @@ if _walls:
 		{
 			m_hovered = hovered;
 			const std::string text = hovered >= 0 && size_t(hovered) < m_items.size() ? help(m_items[size_t(hovered)]) : std::string();
-			float x = 7, y = float(height) - 172, w = 350;
-			bool right = true, down = false;
+			float x = 7, y = float(height) - 172, w = 300;
+			bool right = true, down = false, framed = false, fit = false;
 			try
 			{
-				if (py::object area = py::module_::import("oc4screens").attr("helpArea")(); !area.is_none())
+				// (a tooltip at the widget where the original shows one: the World Builder's)
+				const auto [mx, my] = window.mousePosition();
+				const Item* it = hovered >= 0 && size_t(hovered) < m_items.size() ? &m_items[size_t(hovered)] : nullptr;
+				if (py::object tip = it && !text.empty() ? py::module_::import("oc4screens").attr("tooltipPlace")(it->screen, it->name, it->x0, it->y0, it->x1, it->y1, mx, my, width)
+						: py::none(); !tip.is_none())
+				{
+					auto t = tip.cast<py::tuple>();
+					x = t[0].cast<float>();
+					y = t[1].cast<float>();
+					w = t[2].cast<float>();
+					right = t[3].cast<bool>();
+					down = t[4].cast<bool>();
+					// (in the theme's tooltip, as Wine's: the map under it at 15 %)
+					fit = framed = true;
+				}
+				else if (py::object area = py::module_::import("oc4screens").attr("helpArea")(); !area.is_none())
 				{
 					auto t = area.cast<py::tuple>();
 					x = t[0].cast<float>();
 					y = t[1].cast<float>();
-					w = t[2].cast<float>();
+					// (the original wraps at the minimum width when there is one: the main
+					// interface's 300 of 350)
+					const float minWidth = t[3].cast<float>();
+					w = minWidth > 0 ? minWidth : t[2].cast<float>();
 					right = t[4].cast<bool>();
 					down = t[5].cast<bool>();
+					framed = t.size() > 6 && t[6].cast<bool>();
 				}
 			}
 			catch (py::error_already_set& e)
 			{
 				printPythonError(e);
 			}
-			window.setUiHelp(text, x, y, w, right, down);
+			window.setUiHelp(text, x, y, w, right, down, framed, fit);
 		}
 	}
 
@@ -1132,12 +1159,17 @@ if _walls:
 			CvWStringBuffer text;
 			CvWidgetDataStruct w{ item.data1, item.data2, item.option, static_cast<WidgetTypes>(item.widget) };
 			CvDLLWidgetData::getInstance().parseHelp(text, w);
-			g_help = text.getCString();
-			return gameMarkup(text.getCString());
+			if (!text.isEmpty())
+			{
+				g_help = text.getCString();
+				return gameMarkup(text.getCString());
+			}
+			// (the widget types the original's executable answers itself, as the World Builder's
+			// buttons: their help from the script's own text, then the executable's)
 		}
 		try
 		{
-			const std::wstring text = toWide(py::module_::import("oc4screens").attr("widgetText")(item.screen, item.name));
+			const std::wstring text = toWide(py::module_::import("oc4screens").attr("widgetText")(item.screen, item.name, item.widget != WIDGET_GENERAL ? item.widget : -1, item.data1, item.data2, item.option));
 			g_help = text;
 			return gameMarkup(text.c_str());
 		}
@@ -1208,6 +1240,7 @@ if _walls:
 			info.data1 = t[18].cast<int>();
 			info.data2 = t[19].cast<int>();
 			info.option = t[20].cast<bool>();
+			info.x0 = item.x0, info.y0 = item.y0, info.x1 = item.x1, info.y1 = item.y1;
 			info.checkbox = item.kind == Kind::CheckBox;
 			if (item.kind == Kind::Movie)
 				info.movie = item.texture;
