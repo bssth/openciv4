@@ -310,6 +310,10 @@ endif()
 if(WIN32)
 	target_link_libraries(oc4core PRIVATE dbghelp bcrypt winmm shell32 ole32 advapi32 ws2_32)
 endif()
+if(APPLE)
+	# (the user's time format for the interface clock: CFDateFormatter)
+	target_link_libraries(oc4core PRIVATE "-framework CoreFoundation")
+endif()
 # Includes the SDK headers, so it shares the game core's dialect (no UNICODE, lenient conformance).
 target_compile_definitions(oc4core PRIVATE OC4_GAMECORE_IMPORT _USRDLL _CRT_SECURE_NO_WARNINGS "OC4_DEFAULT_PYTHON_HOME=\"${OC4_PYTHON27_DIR}\""
 	"OC4_GAME_CORE_DLL=\"${OC4_GAME_CORE_NAME}.dll\"")
@@ -378,6 +382,16 @@ target_include_directories(auto_end_turn_test PRIVATE apps/oc4core)
 target_link_libraries(auto_end_turn_test PRIVATE oc4_options)
 add_test(NAME auto_end_turn COMMAND auto_end_turn_test)
 set_target_properties(auto_end_turn_test PROPERTIES FOLDER "tests")
+
+# The player options kept in the player's profile, and the options screen's OpenCiv4 tab
+# (oc4options.py, with a stand-in host).
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+	add_test(NAME player_options COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/player_options_test.py
+		${CMAKE_CURRENT_SOURCE_DIR}/apps/oc4core/python)
+	add_test(NAME options_other COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/options_other_test.py
+		${CMAKE_CURRENT_SOURCE_DIR}/apps/oc4core/python)
+endif()
 
 add_executable(xml_decode_test tests/xml_decode_test.cpp)
 target_include_directories(xml_decode_test PRIVATE apps/oc4core)

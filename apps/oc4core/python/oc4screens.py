@@ -2485,9 +2485,12 @@ _cpe.CyUserProfile.getYields = lambda self: False
 _cpe.CyUserProfile.getScores = lambda self: True
 
 
+_clockText = [lambda: unicode(time.strftime('%H:%M'))] # (oc4options': the user's time format, the alarm's *)
+
+
 def getClockText():
 	"""The time of day for the interface's clock (the engine's, in CvPythonExtensions)."""
-	return unicode(time.strftime('%H:%M'))
+	return _clockText[0]()
 
 
 _cpe.getClockText = getClockText
