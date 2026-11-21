@@ -248,8 +248,9 @@ namespace oc4::render
 			return out;
 		}
 
-		// Each point's way out of the shape (by a unit across its edges): the edges' normals mitred.
-		std::vector<std::array<float, 2>> outward(const std::vector<std::array<float, 2>>& p)
+		// Each point's way out of the shape (by a unit across its edges): the edges' normals mitred
+		// (an open line's ends: their one edge's).
+		std::vector<std::array<float, 2>> outward(const std::vector<std::array<float, 2>>& p, bool closed = true)
 		{
 			const size_t n = p.size();
 			float area = 0;
@@ -264,8 +265,8 @@ namespace oc4::render
 			}
 			for (size_t i = 0; i < n; ++i)
 			{
-				const auto& a = edge[(i + n - 1) % n];
-				const auto& b = edge[i];
+				const auto& a = edge[!closed && i == 0 ? 0 : (i + n - 1) % n];
+				const auto& b = edge[!closed && i + 1 == n ? n - 2 : i];
 				float mx = a[0] + b[0], my = a[1] + b[1];
 				const float len = std::hypot(mx, my);
 				if (len < 1e-4f)
@@ -307,18 +308,18 @@ namespace oc4::render
 		}
 	}
 
-	void Overlay::strokeClosed(const std::vector<std::array<float, 2>>& p, float width, uint32_t color)
+	void Overlay::strokeClosed(const std::vector<std::array<float, 2>>& p, float width, uint32_t color, bool closed)
 	{
 		const size_t n = p.size();
 		if (n < 2 || width <= 0)
 			return;
 		use(nullptr);
-		const auto o = outward(p);
+		const auto o = outward(p, closed);
 		const float pixels = width * m_scale, soft = 0.5f / m_scale;
 		const uint32_t peak = pixels < 1 ? scaled(color, pixels) : color;
 		const float edge = width / 2 + soft, solid = std::max(width / 2 - soft, 0.0f);
 		const auto strip = [&](float t0, uint32_t c0, float t1, uint32_t c1) {
-			for (size_t i = 0; i < n; ++i)
+			for (size_t i = 0; i + (closed ? 0 : 1) < n; ++i)
 			{
 				const size_t j = (i + 1) % n;
 				const float ax = p[i][0] + o[i][0] * t0, ay = p[i][1] + o[i][1] * t0, bx = p[j][0] + o[j][0] * t0, by = p[j][1] + o[j][1] * t0;
@@ -390,6 +391,18 @@ namespace oc4::render
 	{
 		if (m_drawing)
 			fillConvex({ { x[0], y[0] }, { x[1], y[1] }, { x[2], y[2] }, { x[3], y[3] } }, premultiplied(color, alpha));
+	}
+
+	void Overlay::polygon(const std::vector<std::array<float, 2>>& points, Color color, float alpha)
+	{
+		if (m_drawing)
+			fillConvex(points, premultiplied(color, alpha));
+	}
+
+	void Overlay::polyline(const std::vector<std::array<float, 2>>& points, Color color, float alpha, float width)
+	{
+		if (m_drawing)
+			strokeClosed(points, width, premultiplied(color, alpha), false);
 	}
 
 	void Overlay::image(uint64_t key, const std::vector<uint8_t>& bgra, uint32_t w, uint32_t h, uint64_t version, float x0, float y0, float x1, float y1,

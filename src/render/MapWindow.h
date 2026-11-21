@@ -295,6 +295,7 @@ namespace oc4::render
 				bool border = false;
 				bool fill = false; // the whole plot coloured (a globe layer's)
 				bool hatched = false; // (borders) as the original's AreaBorder texture: rounded, a glow inside, hatched
+				int style = -1; // (coloured plots) the original's PlotStyles: 23 a dot in four corners (BUG's dot map); else a circle
 			};
 			struct Sign
 			{

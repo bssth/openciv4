@@ -1708,6 +1708,60 @@ namespace oc4::render
 			edges(0, m.color, std::min(1.0f, m.alpha + 0.1f), 3);
 		}
 
+		// A coloured plot of the original's PlotStyles TARGET (22) or DOT_TARGET (23): its picture in
+		// plottexture.dds (a 128-texel cell of the plot), laid on the ground in the plot's colour:
+		// four rounded corners 4 texels wide, 8 in from the plot's edges, reaching 30 texels along
+		// them; DOT_TARGET with a dot of radius 23 in the middle (BUG's dot map draws its cities'
+		// dots so).
+		static constexpr int kPlotStyleTarget = 22, kPlotStyleDotTarget = 23;
+		void drawTarget(const MapWindow::PlotMarks::Mark& m, float S)
+		{
+			const auto project = [&](float u, float v, float& sx, float& sy) {
+				return groundToScreen((float(m.x) + u) * S, (float(m.y) + v) * S, 3, sx, sy);
+			};
+			float cx = 0, cy = 0, ex = 0, ey = 0;
+			if (!project(0.5f, 0.5f, cx, cy) || !project(0.6f, 0.5f, ex, ey))
+				return;
+			const float perPlot = 10 * std::hypot(ex - cx, ey - cy); // (pixels a plot across, near its middle)
+			constexpr float kTexel = 1.0f / 128, kEdge = 10 * kTexel, kReach = 38 * kTexel, kRound = 8 * kTexel, kDot = 23 * kTexel;
+			const float width = std::max(1.0f, 4 * kTexel * perPlot);
+			const float alpha = std::min(1.0f, m.alpha);
+			constexpr float pi = 3.14159265f;
+			// a corner: along one edge, round, along the other (u, v from the corner, mirrored)
+			for (const auto& [su, sv] : { std::pair{ 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } })
+			{
+				const auto at = [&](float a, float b, float& sx, float& sy) {
+					return project(su ? 1 - a : a, sv ? 1 - b : b, sx, sy);
+				};
+				std::vector<std::pair<float, float>> path{ { kEdge, kReach } };
+				for (int i = 0; i <= 6; ++i)
+				{
+					const float t = pi * (1.0f + 0.5f * float(i) / 6); // (from west round to south of the arc's centre)
+					path.push_back({ kEdge + kRound + kRound * std::cos(t), kEdge + kRound + kRound * std::sin(t) });
+				}
+				path.push_back({ kReach, kEdge });
+				std::vector<std::array<float, 2>> line;
+				for (const auto& [a, b] : path)
+					if (float sx = 0, sy = 0; at(a, b, sx, sy))
+						line.push_back({ sx, sy });
+				if (line.size() == path.size())
+					overlay->polyline(line, m.color, alpha, width);
+			}
+			if (m.style != kPlotStyleDotTarget)
+				return;
+			// the dot
+			constexpr int kSteps = 24;
+			std::vector<std::array<float, 2>> dot;
+			for (int i = 0; i < kSteps; ++i)
+			{
+				const float t = 2 * pi * float(i) / kSteps;
+				if (float sx = 0, sy = 0; project(0.5f + kDot * std::cos(t), 0.5f + kDot * std::sin(t), sx, sy))
+					dot.push_back({ sx, sy });
+			}
+			if (dot.size() == kSteps)
+				overlay->polygon(dot, m.color, alpha);
+		}
+
 		// The marked plots: circles; the outline of each layer's and colour's set of plots, its
 		// edges where the next plot is not of it; the signs' captions.
 		void drawMarks()
@@ -1763,6 +1817,8 @@ namespace oc4::render
 						}
 					}
 				}
+				else if (m.style == kPlotStyleTarget || m.style == kPlotStyleDotTarget)
+					drawTarget(m, S);
 				else
 				{
 					float cx = 0, cy = 0, ex = 0, ey = 0;

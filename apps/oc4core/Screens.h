@@ -106,6 +106,10 @@ namespace oc4::host
 		// manager's kbdEvent, down and up, with the mouse and the plot under it (BUG's shortcuts
 		// are there). True if they took it (it goes no further then).
 		bool keyEvent(int key, bool shift, bool ctrl, bool alt, int mouseX, int mouseY, int plotX, int plotY);
+		// The mouse onto another plot of the map: CvScreensInterface's mouseOverPlot for each screen
+		// shown over the main interface, as the original engine tells them (BUG's dot map editor
+		// draws the city it would place there).
+		void mouseOverPlot();
 
 		bool menuUp(); // the main menu, a talk or a screen over the map: the arrows are its
 

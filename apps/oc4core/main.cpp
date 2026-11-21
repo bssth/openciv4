@@ -1223,6 +1223,40 @@ namespace
 			// The WorldBuilder: the mouse over the map is its screen's (where it is, its buttons held,
 			// its clicks: CvScreensInterface's mouseOverPlot, leftMouseDown, rightMouseDown), and the
 			// plot its brush is on outlined (WorldBuilderGetHighlightPlot); the game's clicks wait.
+			// Out of it, the mouse over the map as the original engine keeps it for the scripts
+			// (CyInterface's getMouseOverPlot, isLeftMouseDown, isRightMouseDown; BUG's dot map editor
+			// reads them every frame and draws its city where the mouse is): the plot under it, the
+			// screens over the map told when it moves to another, and its buttons held. A click
+			// whose press no frame saw (a scripted one, or one quicker than a frame) is held for this
+			// frame, so that it is seen once.
+			if (!ui.worldBuilder() && !opt.ownInterface)
+			{
+				static bool heldSeen[2] = {};
+				const auto [hx, hy] = window.hoveredPlot();
+				ui.mouseOverMap = hx >= 0 && window.uiHovered() < 0;
+				int px = ui.mouseOverMap ? hx : ui.mouseX, py = ui.mouseOverMap ? hy : ui.mouseY;
+				bool clicked[2] = {};
+				for (const auto& click : clicks)
+					if (!click.clear && !click.either)
+					{
+						clicked[click.right ? 1 : 0] = true;
+						px = click.x, py = click.y;
+					}
+				if (px != ui.mouseX || py != ui.mouseY)
+				{
+					ui.mouseX = px, ui.mouseY = py;
+					if (px >= 0)
+						screens.mouseOverPlot();
+				}
+				bool down[2];
+				for (int b = 0; b < 2; ++b)
+				{
+					const bool held = render::mouseHeld(b == 0);
+					down[b] = (ui.mouseOverMap && held) || (clicked[b] && !heldSeen[b]);
+					heldSeen[b] = held || (heldSeen[b] && !clicked[b]);
+				}
+				ui.mouseLeft = down[0], ui.mouseRight = down[1];
+			}
 			window.setWorldBuilder(ui.worldBuilder());
 			if (ui.worldBuilder())
 			{
@@ -1453,9 +1487,11 @@ namespace
 				for (const auto& m : marks)
 				{
 					const auto [x, y] = m.core ? host::windowPlot({ m.x, m.y }) : std::pair{ m.x, m.y };
-					// (the WorldBuilder's plot and brush in the original's area border style)
-					const bool hatched = m.border && (m.layer == AREA_BORDER_LAYER_HIGHLIGHT_PLOT || m.layer == AREA_BORDER_LAYER_WORLD_BUILDER);
-					shownMarks.marks.push_back({ x, y, m.layer, { m.r, m.g, m.b }, m.a, m.border, false, hatched });
+					// (the WorldBuilder's plot and brush in the original's area border style, and the layers
+					// past the game's own that scripts draw: BUG's dot map's cities, as in the Wine game)
+					const bool hatched = m.border && (m.layer == AREA_BORDER_LAYER_HIGHLIGHT_PLOT || m.layer == AREA_BORDER_LAYER_WORLD_BUILDER ||
+						m.layer >= NUM_AREA_BORDER_LAYERS);
+					shownMarks.marks.push_back({ x, y, m.layer, { m.r, m.g, m.b }, m.a, m.border, false, hatched, m.style });
 				}
 				for (const auto& s : signs)
 				{

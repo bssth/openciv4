@@ -246,9 +246,9 @@ namespace oc4::host
 		// CyEngine's marks on the map (the game core's coordinates): coloured plots, outlines,
 		// signs and landmarks
 		Engine& engine = utility.engine();
-		host.def("engine_mark", [&engine](int x, int y, float r, float g, float b, float a, int layer, bool border) {
-			engine.mark({ x, y, r, g, b, a, layer, border, true });
-		});
+		host.def("engine_mark", [&engine](int x, int y, float r, float g, float b, float a, int layer, bool border, int style) {
+			engine.mark({ x, y, r, g, b, a, layer, border, true, style });
+		}, py::arg("x"), py::arg("y"), py::arg("r"), py::arg("g"), py::arg("b"), py::arg("a"), py::arg("layer"), py::arg("border"), py::arg("style") = -1);
 		host.def("engine_effect", [&engine](int effect, float x, float y, float z, float rotation) { engine.TriggerEffect(effect, NiPoint3(x, y, z), rotation); });
 		// The player's profile (oc4options): where it is kept, how loud the sounds play.
 		host.def("profile_path", [] {
@@ -1506,6 +1506,23 @@ if _walls:
 		}
 		m_utility.setModifierKeys(false, false, false);
 		return taken;
+	}
+
+	void Screens::mouseOverPlot()
+	{
+		if (!m_active || m_menu)
+			return;
+		try
+		{
+			py::module_ entry = py::module_::import("CvScreensInterface");
+			for (py::handle id : py::module_::import("oc4screens").attr("shownScreens")().cast<py::list>())
+				if (const int screen = id.cast<int>(); screen != kDiplomacyScreen)
+					entry.attr("mouseOverPlot")(py::make_tuple(screen));
+		}
+		catch (py::error_already_set& e)
+		{
+			printPythonError(e);
+		}
 	}
 
 	bool Screens::diploKey(unsigned key)

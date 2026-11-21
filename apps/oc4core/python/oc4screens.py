@@ -2387,13 +2387,19 @@ class CyEngine(object):
 	def getSelectionCursorVisibility(self): return _engineFlags['cursor']
 	def setSelectionCursorVisibility(self, b): _engineFlags['cursor'] = bool(b)
 	# the plots it marks (oc4host keeps them, the window draws them): coloured, outlined
-	def addColoredPlot(self, iX, iY, color, ePlotStyle, eLayer):
-		oc4host.engine_mark(_int(iX), _int(iY), float(color.r), float(color.g), float(color.b), float(color.a), _int(eLayer, 0), False)
+	# (the Mac engine's has no style, addColoredPlot(iX, iY, color, eLayer): BUG calls it so where
+	# sys.platform is darwin, for its dot map's dots, which on Windows it draws as
+	# PLOT_STYLE_DOT_TARGET, its default icon: so drawn here too, as the Wine game shows them)
+	def addColoredPlot(self, iX, iY, color, ePlotStyle, eLayer=None):
+		if eLayer is None:
+			ePlotStyle, eLayer = _cpe.PlotStyles.PLOT_STYLE_DOT_TARGET, ePlotStyle
+		oc4host.engine_mark(_int(iX), _int(iY), float(color.r), float(color.g), float(color.b), float(color.a), _int(eLayer, 0), False,
+			_int(ePlotStyle, -1))
 
 	def addColoredPlotAlt(self, iX, iY, ePlotStyle, eLayer, szColor, fAlpha):
 		c = _namedColor(szColor)
 		if c is not None:
-			oc4host.engine_mark(_int(iX), _int(iY), c[0], c[1], c[2], c[3] * float(fAlpha), _int(eLayer, 0), False)
+			oc4host.engine_mark(_int(iX), _int(iY), c[0], c[1], c[2], c[3] * float(fAlpha), _int(eLayer, 0), False, _int(ePlotStyle, -1))
 
 	def clearColoredPlots(self, eLayer): oc4host.engine_clear(_int(eLayer, -1), False)
 
