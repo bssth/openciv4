@@ -660,6 +660,7 @@ namespace
 		};
 		host::Screens::setTextWidth([&window](const std::string& markup, int font) { return window.textWidth(markup, font); });
 		host::Screens::setTextHeight([&window](const std::string& markup, int width, int font) { return window.textHeight(markup, width, font); });
+		host::Screens::setTableRow([&window](const std::string& style) { return window.tableRow(style); });
 		window.setUiWheel([&screens](int x, int y, int delta) { return screens.wheel(x, y, delta); });
 		struct ForgetWheel
 		{
@@ -1740,6 +1741,7 @@ namespace
 		host::Screens screens(utility);
 		host::Screens::setTextWidth([&window](const std::string& markup, int font) { return window.textWidth(markup, font); });
 		host::Screens::setTextHeight([&window](const std::string& markup, int width, int font) { return window.textHeight(markup, width, font); });
+		host::Screens::setTableRow([&window](const std::string& style) { return window.tableRow(style); });
 		window.setUiWheel([&screens](int x, int y, int delta) { return screens.wheel(x, y, delta); });
 		std::vector<std::pair<fs::path, std::string>> saveFolders;
 		if (const fs::path documents = documentsFolder(); !documents.empty())

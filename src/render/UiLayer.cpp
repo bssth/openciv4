@@ -562,15 +562,50 @@ namespace oc4::render
 					o.richText(text, x0 + 8, y0 + (h - o.richHeight(text, 4096, m_sizes[2], false)) / 2, m_sizes[2], false, it.state ? kHot : kText, alpha);
 					break;
 				}
-				if (it.state || hot)
-					o.rect(x0, y0, x1, y1, { 0.25f, 0.3f, 0.42f }, it.state ? 0.7f : 0.4f, 0);
+				// (its row under it has the look: alternate, under the mouse, selected)
 				float tx = x0 + 4;
 				if (!it.texture.empty() && icon(it.texture, x0 + 2, y0 + 1, x0 + h - 1, y1 - 1, alpha))
 					tx = x0 + h + 2;
 				const bool right = (it.flags & 2) != 0, centre = (it.flags & 4) != 0;
 				const std::wstring text = widen(it.text);
-				o.richText(text, right ? x1 - 4 : centre ? (x0 + x1) / 2 : tx, y0 + (h - o.richHeight(text, 4096, m_sizes[2], false)) / 2, m_sizes[2], false,
-					kText, alpha, right ? Overlay::Align::Right : centre ? Overlay::Align::Center : Overlay::Align::Left);
+				// (in its font, size 2 a table's, 3 a list box's; in the middle of the room the style
+				// leaves round a cell's content)
+				const float size = m_sizes[size_t(std::clamp(it.font, 0, 4))];
+				float above = 0, below = 0;
+				if (const Theme::Table* t = m_theme.loaded() ? m_theme.table(it.style) : nullptr)
+					above = t->content[1], below = t->content[3];
+				const float ty = y0 + above + (h - above - below - o.richHeight(text, 4096, size, false)) / 2;
+				o.richText(text, right ? x1 - 4 : centre ? (x0 + x1) / 2 : tx, ty, size, false, kText, alpha,
+					right ? Overlay::Align::Right : centre ? Overlay::Align::Center : Overlay::Align::Left);
+				break;
+			}
+			case Kind::Row:
+			{
+				// A table's or list box's row: the theme's skin for it (Civ4Theme_Table.thm's .Row):
+				// every other one Alt_, under the mouse Rollover (the whole row, whichever of its
+				// cells is), selected Select.
+				if (it.flags & 2)
+				{
+					// (the table's own background, under its rows: the theme's inner skin)
+					if (const Theme::Table* t = m_theme.loaded() ? m_theme.table(it.style) : nullptr)
+						Theme::draw(o, t->inner, x0, y0, x1, y1, alpha);
+					break;
+				}
+				bool over = inside(it, m_mouseX, m_mouseY);
+				for (size_t j = i + 1; over && j < m_items.size(); ++j)
+					if (const Item& above = m_items[j]; (above.interactive || above.blocks) && inside(above, m_mouseX, m_mouseY))
+					{
+						over = above.kind == Kind::Cell && above.y0 == y0 && above.y1 == y1 && above.x0 >= x0 && above.x1 <= x1;
+						break;
+					}
+				const bool alt = (it.flags & 1) != 0;
+				if (const Theme::Table* t = m_theme.loaded() ? m_theme.table(it.style) : nullptr)
+				{
+					using R = Theme::Table::Row;
+					Theme::draw(o, t->row[alt][it.state ? (over ? R::SelectRollover : R::Select) : over ? R::Rollover : R::Default], x0, y0, x1, y1, alpha);
+				}
+				else if (it.state || over)
+					o.rect(x0, y0, x1, y1, { 0.25f, 0.3f, 0.42f }, it.state ? 0.7f : 0.4f, 0);
 				break;
 			}
 			case Kind::Line:

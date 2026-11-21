@@ -262,6 +262,10 @@ namespace oc4::render
 				{ "BUTTON_STYLE_CITY_B03BC", "Button_CityBtn10_Style" }, { "BUTTON_STYLE_CITY_B03BR", "Button_CityBtn11_Style" },
 				{ "BUTTON_STYLE_CITY_PLUS", "Button_Plus_Style" }, { "BUTTON_STYLE_CITY_MINUS", "Button_Minus_Style" },
 				{ "BUTTON_STYLE_ARROW_LEFT", "Button_CityArrowL_Style" }, { "BUTTON_STYLE_ARROW_RIGHT", "Button_CityArrowR_Style" },
+				// (TableStyles, by their names: Civ4Theme_Custom.thm's custom tables)
+				{ "TABLE_STYLE_STANDARD", "GFC_Control_StandardTable_Style" }, { "TABLE_STYLE_EMPTY", "Table_Empty_Style" },
+				{ "TABLE_STYLE_ALTEMPTY", "Table_AltEmpty_Style" }, { "TABLE_STYLE_CITY", "Table_City_Style" },
+				{ "TABLE_STYLE_EMPTYSELECTINACTIVE", "Table_EmptySelectInactive_Style" }, { "TABLE_STYLE_ALTDEFAULT", "Table_AltStandard_Style" },
 			};
 			return m;
 		}
@@ -287,6 +291,7 @@ namespace oc4::render
 		std::map<std::string, std::unique_ptr<Panel>, std::less<>> panels;   // (null: the theme has none)
 		std::map<std::string, std::unique_ptr<Button>, std::less<>> buttons;
 		std::map<std::string, std::unique_ptr<Progress>, std::less<>> progresses;
+		std::map<std::string, std::unique_ptr<Table>, std::less<>> tables;
 		std::vector<std::string> problems;
 		std::set<std::string> told;
 		bool loaded = false;
@@ -923,6 +928,35 @@ namespace oc4::render
 				p.reset();
 		}
 		return (m->progresses[key] = std::move(p)).get();
+	}
+
+	const Theme::Table* Theme::table(std::string_view style)
+	{
+		if (const auto it = m->tables.find(style); it != m->tables.end())
+			return it->second.get();
+		std::unique_ptr<Table> t;
+		const Style* s = m->loaded ? m->styleFor(style) : nullptr;
+		if (!s && m->loaded)
+			s = m->findStyle("GFC_Control_StandardTable_Style");
+		if (s)
+		{
+			// (Civ4Theme_Table.thm: the standard table's rows are blank, every other one
+			// selection.tga in AltCell, a selected one in Select; Table_StandardCiv_Style adds the
+			// Rollover gold; GFC_Control_Size_ListItem, 24, is the cell's height)
+			t = std::make_unique<Table>();
+			static const char* const kRow[] = { "Default", "Rollover", "Select", "SelectRollover" };
+			for (size_t alt = 0; alt < 2; ++alt)
+				for (size_t i = 0; i < Table::RowCount; ++i)
+					t->row[alt][i] = m->skin(s, m->property(s, std::string("GFC_CtrlTheme_Bitmap_Control_Table_Skin_Row_") + (alt ? "Alt_" : "") + kRow[i]));
+			if (const Value* v = m->resolve(s, m->property(s, "GFC_Control_Table_Size_CellHeight")); v && v->kind == Value::Kind::Number && v->number > 0)
+				t->cellHeight = float(v->number);
+			m->margins(s, m->property(s, "GFC_Control_Table_Size_CellContentMargin"), t->content);
+			// (the standard table's: table_innerTB.tga in the theme's BG; a GFlags(...) NoInnerFill none)
+			const Value* noFill = m->resolve(s, m->property(s, "GFC_Control_Table_Flag_NoInnerFill"));
+			if (!noFill || noFill->kind != Value::Kind::Call)
+				t->inner = m->skin(s, m->property(s, "GFC_CtrlTheme_Bitmap_Control_Table_Skin_Inner_Default"));
+		}
+		return (m->tables[std::string(style)] = std::move(t)).get();
 	}
 
 	Theme::Bitmap Theme::modulate(const Bitmap& b, Color c, float alpha)

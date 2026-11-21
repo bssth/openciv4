@@ -402,6 +402,12 @@ target_link_libraries(theme_combine_test PRIVATE oc4_options oc4_render)
 add_test(NAME theme_combine COMMAND theme_combine_test)
 set_target_properties(theme_combine_test PROPERTIES FOLDER "tests")
 
+add_executable(theme_table_test tests/theme_table_test.cpp)
+target_include_directories(theme_table_test PRIVATE src)
+target_link_libraries(theme_table_test PRIVATE oc4_options oc4_render)
+add_test(NAME theme_table COMMAND theme_table_test)
+set_target_properties(theme_table_test PROPERTIES FOLDER "tests")
+
 if(WIN32 AND TARGET freetype)
 	add_executable(text_layout_freetype_test tests/text_layout_test.cpp src/render/TextLayout.cpp src/render/FontFreeType.cpp)
 	target_include_directories(text_layout_freetype_test PRIVATE src)

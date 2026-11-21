@@ -1167,10 +1167,12 @@ class CyGInterfaceScreen(object):
 	def addListBoxGFC(self, szName, helpText, iX, iY, iWidth, iHeight, eStyle=0):
 		w = self._s.add(szName, 'listbox')
 		w.help, w.x, w.y, w.w, w.h, w.items = _text(helpText), int(iX), int(iY), int(iWidth), int(iHeight), []
+		w.pstyle = _style(_cpe.TableStyles, eStyle)
 
 	def attachListBoxGFC(self, szAttachTo, szName, helpText, eStyle=0):
 		w = self._s.add(szName, 'listbox', szAttachTo, 'flow')
 		w.help, w.items = _text(helpText), []
+		w.pstyle = _style(_cpe.TableStyles, eStyle)
 
 	def appendListBoxString(self, szAttachTo, item, eType=-1, iData1=-1, iData2=-1, iJustify=_FONT_LEFT):
 		w = self._s.get(szAttachTo)
@@ -1428,9 +1430,33 @@ def version():
 	return _version[0]
 
 
-_LIST_ROW = 20   # a list box's row, and a step of the wheel in what scrolls by pixels
+_LIST_ROW = 20   # a step of the wheel in what scrolls by pixels
 _DROP_ROW = 22   # a row of a pull down's open list
 _heights = {}    # (text, width, font) -> how high it is
+_tableRows = {}  # a table style -> (least row height, room above, room below a cell's content), the theme's
+
+
+def _rowHeight(style, size, least=0):
+	"""A table's or list box's row: the style's cell height (GFC_Control_Size_ListItem, 24), or
+	taller for a line of its text (font size: a table's 2, a list box's 3) and the room the style
+	leaves above and below it (Size_CellContentMargin: BUG's Table_StandardCiv_Style 1 and 2, its
+	military advisor's list 25 high), or for its pictures."""
+	row = _tableRows.get(style)
+	if row is None:
+		try:
+			row = tuple(oc4host.ui_table_row(style))
+		except Exception:
+			row = (24, 2, 2)
+		_tableRows[style] = row
+	line = _textHeight(u'<font=%d>Ag</font>' % size, 4096)
+	return int(max(row[0], least, line + row[1] + row[2]))
+
+
+def _tableInner(base, x, y, width, height, clip, style, w, out):
+	"""A table's or list box's own background under its rows (the theme's Inner skin: the standard
+	table's blue gradient; none for the Empty styles)."""
+	out.append((base + (-199,), 'row', x, y, x + width, y + height, clip, style, u'', '', '', 0, 2, False, True, 0, None, -1, -1, -1, False,
+		w.z, w.seq))
 
 
 def _origin(s):
@@ -1590,9 +1616,11 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 	if kind == 'table':
 		# (the theme's cell height, GFC_Control_Size_ListItem; taller for a table whose cells have pictures)
 		pictures = [1 for row in w.rows for cell in row.values() if cell and cell[1]]
-		rowHeight = max(24, w.iconh) if pictures else 24
+		style = w.style or w.pstyle
+		rowHeight = _rowHeight(style, 2, w.iconh if pictures else 0)
 		# (its rows scroll under its headers, in its box)
 		box = _clipTo(clip, (x, y, x + width, y + height)) if height else clip
+		_tableInner(base, x, y, width, height or (len(w.rows) + (1 if w.headers else 0)) * rowHeight, box, style, w, out)
 		top = y
 		if w.headers:
 			cx = x
@@ -1610,17 +1638,21 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 		if w.sort is not None and w.sort[0] >= 0:
 			column = w.sort[0]
 			order.sort(key=lambda ri: _sortKey(w.rows[ri].get(column)), reverse=w.sort[1])
-		for ri in order:
+		for at, ri in enumerate(order):
 			r = w.rows[ri]
 			if height and (cy + rowHeight <= top or cy >= y + height):
 				cy += rowHeight
 				continue
+			# (the row's look under its cells: every other one the theme's Alt_, selected; as wide
+			# as its columns, as in the original: BUG's domestic advisor's rows end with its last)
+			out.append((base + (-200 - ri,), 'row', x, cy, x + (sum(c[1] for c in w.columns) or width), cy + rowHeight, body, style, u'', '', '', 0, at & 1, ri in w.picked, True, 0, None,
+				-1, -1, -1, False, w.z, w.seq))
 			cx = x
 			for ci, c in enumerate(w.columns):
 				cell = r.get(ci)
 				if cell is not None:
 					flags = _FONT_RIGHT if c[2] else cell[5]
-					out.append((base + ((ri << 8) | ci,), 'cell', cx, cy, cx + c[1], cy + rowHeight, body, w.style, cell[0], cell[1], '', 2, flags,
+					out.append((base + ((ri << 8) | ci,), 'cell', cx, cy, cx + c[1], cy + rowHeight, body, style, cell[0], cell[1], '', 2, flags,
 						ri in w.picked, True, 0, None, cell[2], cell[3], cell[4], len(cell) > 6 and cell[6], w.z, w.seq))
 				# (a control attached to the cell: there, scrolling with its row)
 				control = s.widgets.get(w.cells.get((ri, ci))) if w.cells else None
@@ -1632,14 +1664,21 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 	if kind == 'listbox':
 		box = _clipTo(clip, (x, y, x + width, y + height)) if height else clip
 		items = w.items or []
-		w.extent = len(items) * _LIST_ROW
-		_scrolls(w, x, y, x + width, y + height if height else y + w.extent, s.id, _LIST_ROW, out)
+		# (a list box's text is in the theme's normal font, size 3: a row of BUG's military
+		# advisor's list is 25 high, a table's text size 2)
+		style = w.style or w.pstyle
+		rowHeight = _rowHeight(style, 3)
+		w.extent = len(items) * rowHeight
+		_tableInner(base, x, y, width, height or w.extent, box, style, w, out)
+		_scrolls(w, x, y, x + width, y + height if height else y + w.extent, s.id, rowHeight, out)
 		cy = y - w.offset
 		for i, item in enumerate(items):
-			if not height or (cy + _LIST_ROW > y and cy < y + height):
-				out.append((base + (i,), 'cell', x, cy, x + width, cy + _LIST_ROW, box, w.style, item[0], '', '', 2, item[4], w.selected == i, True, 0, None,
+			if not height or (cy + rowHeight > y and cy < y + height):
+				out.append((base + (-200 - i,), 'row', x, cy, x + width, cy + rowHeight, box, style, u'', '', '', 0, i & 1, w.selected == i, True, 0, None,
+					-1, -1, -1, False, w.z, w.seq))
+				out.append((base + (i,), 'cell', x, cy, x + width, cy + rowHeight, box, style, item[0], '', '', 3, item[4], w.selected == i, True, 0, None,
 					item[1], item[2], item[3], False, w.z, w.seq))
-			cy += _LIST_ROW
+			cy += rowHeight
 		return
 	if kind == 'multiline' and w.mode != 'flow' and width > 0 and height > 0:
 		# (in a box of its own: clipped there, and it scrolls when it is longer)

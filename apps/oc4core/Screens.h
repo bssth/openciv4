@@ -75,6 +75,7 @@ namespace oc4::host
 		static void setTextWidth(std::function<int(const std::string& markup, int font)> width);
 		// How high a text is when it wraps at a width, in a widget's font (FontTypes).
 		static void setTextHeight(std::function<int(const std::string& markup, int width, int font)> height);
+		static void setTableRow(std::function<std::array<float, 3>(const std::string& style)> row);
 		// The main interface up; false if the scripts failed (the host keeps its own then).
 		bool start(int width, int height);
 		bool active() const { return m_active; }

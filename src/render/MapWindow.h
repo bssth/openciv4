@@ -204,7 +204,8 @@ namespace oc4::render
 			enum class Kind : uint8_t
 			{
 				Panel, Image, ImageButton, Button, CheckBox, Label, Text, Multiline, Bar, Line, Header, Cell, Dropdown, EndTurnText,
-				EndTurnButton, Minimap, Graphic, Separator, Edit, Slider, Flag, Scrollbar, Leaderhead, Model, Movie
+				EndTurnButton, Minimap, Graphic, Separator, Edit, Slider, Flag, Scrollbar, Leaderhead, Model, Movie,
+				Row // a table's or list box's row, under its cells (flags 1: an Alt_ one; state: selected; flags 2: the table's background)
 			};
 			Kind kind = Kind::Panel;
 			float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
@@ -342,6 +343,9 @@ namespace oc4::render
 		// How high a text with the screens' markup is when it wraps at a width, in a widget's
 		// font (FontTypes), as the screens draw their multi-line texts.
 		int textHeight(const std::string& markup, int width, int font) const;
+		// A table style's row (the theme's): its least height, and the room above and below a
+		// cell's content.
+		std::array<float, 3> tableRow(const std::string& style) const;
 		// The interactive item under the mouse, -1 none.
 		int uiHovered() const;
 		// As if the mouse rested on that item (a scripted game's look at its help).

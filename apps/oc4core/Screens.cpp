@@ -127,6 +127,7 @@ namespace oc4::host
 		std::function<int(const std::string&, int)> g_textWidth; // how wide a text is in the window
 		render::MapWindow::UiDisplay g_display; // the window's, for the scale's choices
 		std::function<int(const std::string&, int, int)> g_textHeight; // how high it is, wrapped at a width
+		std::function<std::array<float, 3>(const std::string&)> g_tableRow; // a table style's row: least height, room above and below
 
 		// (before the window is up: its markup left out, a symbol about two letters wide)
 		int estimatedWidth(const std::wstring& text)
@@ -531,6 +532,12 @@ namespace oc4::host
 			return g_textHeight ? g_textHeight(gameMarkup(toWide(text).c_str()), width, font) : (int(toWide(text).size()) * 7 / std::max(1, width) + 1) * 16;
 		});
 
+		// a table style's row, as the theme has it: (least height, room above, room below its content)
+		host.def("ui_table_row", [](const std::string& style) {
+			const std::array<float, 3> r = g_tableRow ? g_tableRow(style) : std::array<float, 3>{ 24, 2, 2 };
+			return py::make_tuple(r[0], r[1], r[2]);
+		});
+
 		// the plot list (the main interface's row size for the DLL's clicks on it)
 		host.def("ui_plot_list_offset", [&ui] { return ui.getPlotListOffset(); });
 		host.def("ui_plot_list_column", [&ui] { return ui.getPlotListColumn(); });
@@ -706,6 +713,7 @@ if _walls:
 
 	void Screens::setTextWidth(std::function<int(const std::string&, int)> width) { g_textWidth = std::move(width); }
 	void Screens::setTextHeight(std::function<int(const std::string&, int, int)> height) { g_textHeight = std::move(height); }
+	void Screens::setTableRow(std::function<std::array<float, 3>(const std::string&)> row) { g_tableRow = std::move(row); }
 
 	bool Screens::start(int width, int height)
 	{
@@ -1156,7 +1164,7 @@ if _walls:
 			{ "bar", Kind::Bar }, { "line", Kind::Line }, { "header", Kind::Header }, { "cell", Kind::Cell }, { "dropdown", Kind::Dropdown },
 			{ "endturn", Kind::EndTurnText }, { "endbutton", Kind::EndTurnButton }, { "minimap", Kind::Minimap }, { "graphic", Kind::Graphic },
 			{ "separator", Kind::Separator }, { "edit", Kind::Edit }, { "slider", Kind::Slider }, { "option", Kind::Cell }, { "flag", Kind::Flag }, { "scrollbar", Kind::Scrollbar },
-			{ "leaderhead", Kind::Leaderhead }, { "model", Kind::Model }, { "movie", Kind::Movie } };
+			{ "leaderhead", Kind::Leaderhead }, { "model", Kind::Model }, { "movie", Kind::Movie }, { "row", Kind::Row } };
 		std::vector<render::MapWindow::UiItem> items;
 		m_items.clear();
 		if (const char* dump = std::getenv("OC4_UI_DUMP"))

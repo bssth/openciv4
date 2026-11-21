@@ -119,6 +119,22 @@ namespace oc4::render
 			Skin rim;          // over it all (HBorder)
 		};
 		const Progress* progress(std::string_view style);
+		// A table's or list box's look (GFC_Control_Table): its rows' skins, every other row the
+		// Alt_ one, under the mouse and selected; how high a row is at least, and the room
+		// round a cell's content (style: a table style; the standard table when the theme has
+		// none such).
+		struct Table
+		{
+			enum Row : uint8_t
+			{
+				Default, Rollover, Select, SelectRollover, RowCount
+			};
+			std::array<std::array<Skin, RowCount>, 2> row; // [alt][state]
+			Skin inner; // its background (none with Flag_NoInnerFill: the Empty styles)
+			float cellHeight = 24;
+			float content[4]{ 4, 2, 4, 2 }; // left, top, right, bottom
+		};
+		const Table* table(std::string_view style);
 
 		// The bitmap with the colour added, less half (the AddSigned combine): how the end of turn
 		// button's glass takes its red or green.
