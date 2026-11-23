@@ -68,6 +68,7 @@ def show(title, maps, folders, message='', page='', mods=()):
 
 
 def relayout():
+	_keepCustom()
 	_draw()
 
 
@@ -103,6 +104,12 @@ def escape():
 
 def _draw():
 	screen = _screen()
+	if _state['page'] == 'custom':
+		offsets = _state.setdefault('customOffsets', {})
+		for name in ('CGRoster', 'CGSettingsPanel', 'CGOptionsPanel', 'CGVictoriesPanel'):
+			widget = screen._s.get(name)
+			if widget is not None:
+				offsets[name] = widget.offset
 	oc4screens.reset(MENU)
 	W, H = screen.getXResolution(), screen.getYResolution()
 	screen.setDimensions(0, 0, W, H)
@@ -114,12 +121,16 @@ def _draw():
 		scale = max(W / 1024.0, H / 768.0)
 		w, h = int(1024 * scale), int(768 * scale)
 		screen.addDDSGFC('MenuBackground', art, (W - w) / 2, (H - h) / 2, w, h, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
+	if _state['page'] == 'custom':
+		_setupPanel(screen, 'CGBackdrop', '__setupBackdrop', 0, 0, W, H)
+		_customPage(screen, W, H)
+		return
 	screen.addPanel('MenuTitleBar', u'', u'', True, False, 0, 0, W, 56, _cpe.PanelStyles.PANEL_STYLE_TOPBAR)
 	screen.setLabel('MenuTitle', 'Background', u'<font=4b>' + _state['title'] + u'</font>', 1 << 2, W / 2, 14, 0,
 		_cpe.FontTypes.TITLE_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
 	screen.setLabel('MenuVersion', 'Background', u'<font=1>openciv4 - temporary menu</font>', 1 << 1, W - 12, H - 24, 0,
 		_cpe.FontTypes.SMALL_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
-	{'main': _mainPage, 'new': _newPage, 'custom': _customPage, 'load': _loadPage, 'multi': _multiPage, 'mods': _modsPage}[_state['page']](screen, W, H)
+	{'main': _mainPage, 'new': _newPage, 'load': _loadPage, 'multi': _multiPage, 'mods': _modsPage}[_state['page']](screen, W, H)
 
 
 def _background():
@@ -598,170 +609,193 @@ def _label(screen, name, text, x, y, font=2, flags=1 << 0, help=None):
 		screen.setLabel(name, 'Background', text, flags, x, y, 0, _cpe.FontTypes.GAME_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
 
 
-def _checkBox(screen, name, on, x, y, size):
-	screen.addCheckBoxGFC(name, '', '', x, y, size, size, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1, _cpe.ButtonStyles.BUTTON_STYLE_STANDARD)
-	screen.setStyle(name, 'GFC_Control_StandardCheckBox_Style')
-	screen.setState(name, on)
+def _setupPanel(screen, name, style, x, y, w, h, scroll=False):
+	screen.addPanel(name, u'', u'', True, scroll, x, y, w, h, _cpe.PanelStyles.PANEL_STYLE_EMPTY)
+	screen.setStyle(name, style)
+	screen.setHitTest(name, _cpe.HitTestTypes.HITTEST_NOHIT)
+	if scroll:
+		screen._s.get(name).offset = _state.get('customOffsets', {}).get(name, 0)
 
 
-def _customPage(screen, W, H):
-	"""As the original's: the players' rows across the top (status, team, civilization, leader,
-	difficulty; a closed slot's greyed), below them Settings, Options and Victories."""
+def _setupParent(screen, name, panel):
+	# The stock dropdown and button constructors place widgets at the screen's origin.
+	# Give them local coordinates in the scroll panel so the children clip and move as one.
+	w = screen._s.get(name)
+	screen._s.order.remove(name)
+	screen._s.get(panel).children.append(name)
+	w.parent, w.mode = panel, 'rel'
+
+
+def _setupField(screen, panel, name, x, y, width, choices, selected, items):
+	_pullDown(screen, name, x, y, width, choices, selected)
+	_setupParent(screen, name, panel)
+	screen.setStyle(name, '__setupField')
+	items[name] = [data for text, data in choices]
+
+
+def _setupLabel(screen, panel, name, text, x, y, font=2):
+	screen.setLabelAt(name, panel, u'<font=%s>%s</font>' % (font, text), 1 << 0, x, y, 0,
+		_cpe.FontTypes.GAME_FONT, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
+
+
+def _setupSection(screen, name, title, x, y, w, h):
+	_setupPanel(screen, name + 'Frame', '__setupPanel', x, y, w, h)
+	_label(screen, name + 'Title', u'<color=229,207,161>%s</color>' % title, x + 13, y + 10, '2b')
+	_setupPanel(screen, name, 'PANEL_STYLE_EMPTY', x + 10, y + 34, w - 20, h - 42, True)
+
+
+def _setupRoster(screen, x, y, w, h, c, shown, items, random):
 	gc = _gc()
-	c = _custom()
-	_state['customItems'] = items = {}
-	x, y = 20, 64
-	w, h = W - 40, H - 84
-	screen.addPanel('CGPanel', u'', u'', True, False, x, y, w, h, _cpe.PanelStyles.PANEL_STYLE_MAIN)
-	_label(screen, 'CGHeader', _t('TXT_KEY_MAIN_MENU_CUSTOM_GAME', u'Custom Game').upper(), W / 2, y + 14, '3b', 1 << 2)
-	random = _t('TXT_KEY_MAIN_MENU_RANDOM', u'Random')
-	grey = lambda text: u'<color=160,160,160>%s</color>' % text
-
-	# Players: the open slots and the next closed one (opening it shows the one after).
-	slots = c['slots']
-	lastOpen = max([p for p, s in enumerate(slots) if s['status'] != 'closed'] + [0])
-	shown = min(len(slots), lastOpen + 2)
-	px, pw = x + 20, w - 40
-	ptop = y + 50
-	# (the rows give way to the options below: their check boxes need perColumn rows)
-	options = _gameOptions()
-	box = 20
-	perColumn = (len(options) + 1) / 2
-	below = 80 + perColumn * (box + 1) + 16
-	# (more rows than fit at the smallest height: as many as fit, paged with the arrows)
-	fit = max(2, (y + h - 72 - 12 - ptop - below) / 26)
-	first = 0
-	if shown > fit:
-		first = max(0, min(_state.get('customFirstRow', 0), shown - fit))
-		_button(screen, 'MenuRowsUp', u'^', x + w - 96, y + 10, 36, 32)
-		_button(screen, 'MenuRowsDown', u'v', x + w - 56, y + 10, 36, 32)
-		screen.enable('MenuRowsUp', first > 0)
-		screen.enable('MenuRowsDown', first + fit < shown)
-	_state['customFirstRow'] = first
-	rows = range(first, min(shown, first + fit))
-	rowH = max(26, min(36, (y + h - 72 - 12 - ptop - below) / len(rows)))
-	parts = [0.21, 0.14, 0.36, 0.145, 0.145] # status, team, leader, civilization, difficulty
+	_setupPanel(screen, 'CGRosterFrame', '__setupPanel', x, y, w, h)
+	parts = (16, 12, 26, 29, 17)
 	gap = 8
-	inner = pw - 16 - gap * (len(parts) - 1)
-	widths = [int(inner * f) for f in parts]
-	cols = [px + 8]
-	for wd in widths[:-1]:
-		cols.append(cols[-1] + wd + gap)
-	anyCiv = _leadAnyCiv(c)
+	inside = w - 36
+	space = inside - 12 - gap * (len(parts) - 1)
+	columns, widths = [], []
+	for fraction in parts:
+		columns.append(6 if not columns else columns[-1] + widths[-1] + gap)
+		widths.append(space * fraction / 100)
+
+	_setupPanel(screen, 'CGRosterHeader', '__setupBand', x + 1, y + 1, w - 2, 33)
+	titles = (_t('TXT_KEY_MAIN_MENU_PLAYER', u'Player'), _t('TXT_KEY_PITBOSS_TEAM', u'Team'),
+		u'Civilization', _t('TXT_KEY_PITBOSS_LEADER', u'Leader'), _t('TXT_KEY_PITBOSS_DIFFICULTY', u'Difficulty'))
+	for i, (title, col) in enumerate(zip(titles, columns)):
+		_label(screen, 'CGColumn%d' % i, u'<color=229,207,161>%s</color>' % title, x + 20 + col, y + 10, '2b')
+	panel = 'CGRoster'
+	_setupPanel(screen, panel, 'PANEL_STYLE_EMPTY', x + 10, y + 35, w - 20, h - 42, True)
+
 	human, ai = _civs(True), _civs(False)
-	aiHandicap = gc.getHandicapInfo(gc.getDefineINT('AI_HANDICAP')).getDescription()
-	for p in rows:
-		slot = slots[p]
-		ry = ptop + (p - first) * rowH
-		screen.addPanel('CGRow%d' % p, u'', u'', True, False, px, ry, pw, rowH - 4, _cpe.PanelStyles.PANEL_STYLE_IN)
-		dy = ry + (rowH - 4 - 24) / 2
+	anyCiv = _leadAnyCiv(c)
+	teams = [(u'Team %d' % (t + 1), t) for t in range(len(c['slots']))]
+	handicap = gc.getHandicapInfo(gc.getDefineINT('AI_HANDICAP')).getDescription()
+	for p, slot in enumerate(c['slots'][:shown]):
+		ry = p * 32
+		row = 'CGRow%d' % p
+		style = '__setupHuman' if p == 0 else '__setupBand' if p % 2 else '__setupStripe'
+		_setupPanel(screen, row, style, 0, ry, inside, 31)
+		_setupParent(screen, row, panel)
 		if p == 0:
-			_label(screen, 'CGHuman', _t('TXT_KEY_MAIN_MENU_HUMAN', u'Human'), cols[0] + 6, dy + 3)
+			_setupLabel(screen, panel, 'CGHuman', _t('TXT_KEY_MAIN_MENU_HUMAN', u'Human'), columns[0] + 7, ry + 8, '2b')
 		else:
-			_pullDown(screen, 'CGStatus%d' % p, cols[0], dy, widths[0],
-				[(_t('TXT_KEY_MAIN_MENU_AI', u'AI'), 'ai'), (_t('TXT_KEY_MAIN_MENU_CLOSED', u'Closed'), 'closed')], slot['status'])
-			items['CGStatus%d' % p] = ('ai', 'closed')
+			_setupField(screen, panel, 'CGStatus%d' % p, columns[0], ry + 4, widths[0],
+				[(_t('TXT_KEY_MAIN_MENU_AI', u'AI'), 'ai'), (_t('TXT_KEY_MAIN_MENU_CLOSED', u'Closed'), 'closed')], slot['status'], items)
 		if slot['status'] == 'closed':
-			for k, text in ((1, u'Team %d' % (p + 1)), (2, random), (3, random), (4, aiHandicap)):
-				_label(screen, 'CGClosed%d_%d' % (k, p), grey(text), cols[k] + 6, dy + 3)
+			for k in range(1, len(columns)):
+				_setupLabel(screen, panel, 'CGClosed%d_%d' % (k, p), u'<color=138,151,166>\u2014</color>', columns[k] + 8, ry + 8)
 			continue
-		teams = [(u'Team %d' % (t + 1), t) for t in range(len(slots))]
-		_pullDown(screen, 'CGTeam%d' % p, cols[1], dy, widths[1], teams, slot['team'])
-		items['CGTeam%d' % p] = [d for t, d in teams]
-		# (every leader the slot can have: choosing one chooses its civilization, unless any
-		# leader may lead any civilization)
-		leaders = [(random, '')] + (anyCiv and _civLeaders('', True) or _leadersOf([t for n, t in (p == 0 and human or ai)]))
-		_pullDown(screen, 'CGLeader%d' % p, cols[2], dy, widths[2], leaders, slot['leader'])
-		items['CGLeader%d' % p] = [d for t, d in leaders]
-		civs = [(random, '')] + (p == 0 and human or ai)
-		_pullDown(screen, 'CGCiv%d' % p, cols[3], dy, widths[3], civs, slot['civ'])
-		items['CGCiv%d' % p] = [d for t, d in civs]
+
+		civs = human if p == 0 else ai
+		leaders = _civLeaders('', True) if anyCiv else _leadersOf([t for n, t in civs])
+		for k, key, choices in ((1, 'Team', teams), (2, 'Civ', [(random, '')] + civs), (3, 'Leader', [(random, '')] + leaders)):
+			_setupField(screen, panel, 'CG%s%d' % (key, p), columns[k], ry + 4, widths[k], choices, slot[key.lower()], items)
 		if p == 0:
 			handicaps = [(gc.getHandicapInfo(i).getDescription(), gc.getHandicapInfo(i).getType()) for i in range(gc.getNumHandicapInfos())]
-			_pullDown(screen, 'CGhandicap', cols[4], dy, widths[4], handicaps, c['handicap'])
-			items['CGhandicap'] = [d for t, d in handicaps]
+			_setupField(screen, panel, 'CGhandicap', columns[4], ry + 4, widths[4], handicaps, c['handicap'], items)
 		else:
-			_label(screen, 'CGDifficulty%d' % p, grey(aiHandicap), cols[4] + 6, dy + 3)
+			_setupLabel(screen, panel, 'CGDifficulty%d' % p, u'<color=175,187,201>%s</color>' % handicap, columns[4] + 8, ry + 8)
 
-	# Settings, Options, Victories.
-	btop = ptop + len(rows) * rowH + 12
-	bbottom = max(y + h - 72, btop + 120)
-	bw = w - 40 - 2 * gap
-	bwidths = [int(bw * 0.36), int(bw * 0.36)]
-	bwidths.append(bw - bwidths[0] - bwidths[1])
-	# (a narrow window: Options as wide as two columns of its labels need, from Victories first)
-	longest = max([len(gc.getGameOptionInfo(o).getDescription()) for o in options] + [10])
-	need = 2 * (40 + int(longest * 7.5)) + 16
-	if bwidths[1] < need:
-		take = min(need - bwidths[1], max(0, bwidths[2] - 180))
-		bwidths[1] += take
-		bwidths[2] -= take
-		take = min(need - bwidths[1], max(0, bwidths[0] - 240))
-		bwidths[1] += take
-		bwidths[0] -= take
-	bx = [x + 20, x + 20 + bwidths[0] + gap, x + 20 + bwidths[0] + bwidths[1] + 2 * gap]
-	for k, (name, title) in enumerate((('CGSettingsPanel', _t('TXT_KEY_MAIN_MENU_SETTINGS', u'Settings')),
-			('CGOptionsPanel', _t('TXT_KEY_MAIN_MENU_OPTIONS', u'Options')), ('CGVictoriesPanel', _t('TXT_KEY_MAIN_MENU_VICTORIES', u'Victories')))):
-		screen.addPanel(name, u'', u'', True, False, bx[k], btop, bwidths[k], bbottom - btop, _cpe.PanelStyles.PANEL_STYLE_IN)
-		_label(screen, name + 'Title', title.upper(), bx[k] + 10, btop + 8, '2b')
-	ctop = btop + 40
 
-	# Settings: labels right-aligned before their pull downs, the map script's options after.
-	labelX = bx[0] + max(int(bwidths[0] * 0.3), 96)
-	ddX, ddW = labelX + 10, bx[0] + bwidths[0] - labelX - 22
+def _setupSettings(screen, width, c, items, random):
+	panel = 'CGSettingsPanel'
 	mapOptions, climate, sea = _mapOptions(c['map'])
-	rows = [('map', u'Map:', [(m, m) for m in _state['maps']], c['map'])]
-	short = {'size': u'Size:', 'climate': u'Climate:', 'sea': u'Sealevel:', 'era': u'Era:', 'speed': u'Speed:'}
+	rows = [('map', _t('TXT_KEY_PITBOSS_MAP', u'Map').rstrip(u': '), [(m, m) for m in _state['maps']], c['map'])]
+	short = {'size': ('SIZE', u'Size'), 'climate': ('CLIMATE', u'Climate'), 'sea': ('SEALEVEL', u'Sea Level'),
+		'era': ('ERA', u'Era'), 'speed': ('SPEED', u'Speed')}
 	for key, label, count, get, default in _worldRows():
 		if key == 'handicap' or (key == 'climate' and not climate) or (key == 'sea' and not sea):
 			continue
-		rows.append((key, short.get(key, label), [(get(i).getDescription(), get(i).getType()) for i in range(count)], c[key]))
+		tag, fallback = short[key]
+		label = _t('TXT_KEY_PITBOSS_' + tag, fallback).rstrip(u': ')
+		rows.append((key, label, [(get(i).getDescription(), get(i).getType()) for i in range(count)], c[key]))
 	chosen = c['mapOptions'].setdefault(c['map'], {})
 	for i, name, values, default, canRandom in mapOptions:
-		choices = [(t, v) for v, t in values] + (canRandom and [(random, -1)] or [])
+		choices = [(t, v) for v, t in values] + ([(random, -1)] if canRandom else [])
 		rows.append(('MapOpt%d' % i, name, choices, chosen.get(i, default)))
-	sh = max(26, min(36, (bbottom - ctop - 8) / max(1, len(rows))))
-	for k, (key, label, choices, selected) in enumerate(rows):
-		ry = ctop + k * sh
-		name = key == 'map' and 'CGMap' or 'CG' + key
-		_label(screen, name + 'Label', label, labelX, ry + 3, 2, 1 << 1)
-		_pullDown(screen, name, ddX, ry, ddW, choices, selected)
-		items[name] = [d for t, d in choices]
+	labelWidth = min(width / 2, max(oc4screens._textWidth(label) for key, label, choices, selected in rows) + 14)
+	ry = 0
+	for key, label, choices, selected in rows:
+		name = 'CGMap' if key == 'map' else 'CG' + key
+		stacked = oc4screens._textWidth(label) > labelWidth - 10
+		_setupLabel(screen, panel, name + 'Label', label, 4, ry + 4)
+		ddX, ddY = (4, ry + 22) if stacked else (labelWidth, ry)
+		_setupField(screen, panel, name, ddX, ddY, width - ddX, choices, selected, items)
+		ry += 32 + (22 if stacked else 0)
 
-	# Options: Advanced Start's points, then the check boxes (two columns if one is too long).
-	ox = bx[1] + 16
-	advancedStart = 'GAMEOPTION_ADVANCED_START' in c['options']
-	pointsLabel = u'Advanced Start Base Points:'
-	_label(screen, 'CGStartPointsLabel', advancedStart and pointsLabel or grey(pointsLabel), bx[1] + bwidths[1] - 100, ctop + 3, 2, 1 << 1)
-	screen.addEditBoxGFC('CGStartPoints', bx[1] + bwidths[1] - 90, ctop, 70, 26, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1, _cpe.FontTypes.GAME_FONT)
-	screen.setEditBoxString('CGStartPoints', u'%d' % c.get('startPoints', 600))
-	screen.setEditBoxMaxCharCount('CGStartPoints', 6, 6)
-	screen.setEditBoxCharacters('CGStartPoints', u'0123456789')
-	screen.enable('CGStartPoints', advancedStart)
-	otop = ctop + 40
-	avail = bbottom - otop - 8
-	columns = (len(options) * (box + 6) > avail) and 2 or 1
-	perColumn = (len(options) + columns - 1) / columns
-	oh = max(box + 1, min(box + 16, avail / max(1, perColumn)))
-	for k, o in enumerate(options):
-		info = gc.getGameOptionInfo(o)
-		cx = ox + (k / perColumn) * ((bwidths[1] - 24) / columns)
-		cy = otop + (k % perColumn) * oh
-		_checkBox(screen, 'CGOption%d' % o, info.getType() in c['options'], cx, cy, box)
-		_label(screen, 'CGOptionLabel%d' % o, info.getDescription(), cx + box + 8, cy + 1, help=info.getHelp())
 
-	# Victories: those a single player game can have (the target score's needs one set).
-	vh = max(box + 1, min(box + 16, (bbottom - ctop - 8) / max(1, len(_victories()))))
-	for k, v in enumerate(_victories()):
-		info = gc.getVictoryInfo(v)
-		cy = ctop + k * vh
-		_checkBox(screen, 'CGVictory%d' % v, info.getType() in c['victories'], bx[2] + 16, cy, box)
-		_label(screen, 'CGVictoryLabel%d' % v, info.getDescription(), bx[2] + 16 + box + 8, cy + 1)
+def _setupChecks(screen, panel, prefix, entries, selected, width, columns):
+	gap = 8
+	if width < 425:
+		columns = 1
+	colW = (width - gap * (columns - 1)) / columns
+	perColumn = (len(entries) + columns - 1) / columns
+	for k, (i, info) in enumerate(entries):
+		cx, cy = 2 + (k / perColumn) * (colW + gap), (k % perColumn) * 26
+		name = '%s%d' % (prefix, i)
+		screen.addCheckBoxGFCAt(panel, name, '', '', cx, cy + 4, 17, 17, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1)
+		screen.setStyle(name, '__setupCheck')
+		screen.setState(name, info.getType() in selected)
+		label = '%sLabel%d' % (prefix, i)
+		title = info.getDescription()
+		shown = title
+		if oc4screens._textWidth(title) > colW - 29:
+			end = len(title) - 1
+			while end > 0 and oc4screens._textWidth(title[:end].rstrip() + u'\u2026') > colW - 29:
+				end -= 1
+			shown = title[:end].rstrip() + u'\u2026'
+		screen.setTextAt(label, panel, u'<font=2>%s</font>' % shown, 1 << 0, cx + 25, cy + 5, 0)
+		help = info.getHelp() if prefix == 'CGOption' else u''
+		screen._s.get(label).help = u'\n'.join(t for t in (title if shown != title else u'', help) if t)
 
+
+def _customPage(screen, W, H):
+	gc = _gc()
+	c = _custom()
+	_state['customItems'] = items = {}
+	w = min(W - 52, 1344)
+	x, y = (W - w) / 2, 20
+	_setupPanel(screen, 'CGHeader', '__setupPanel', x, y, w, 48)
+	_label(screen, 'CGTitle', _t('TXT_KEY_MAIN_MENU_CUSTOM_GAME', u'Custom Game'), x + 15, y + 10, '4b')
+	_label(screen, 'CGGame', u'<color=193,201,210>%s</color>' % _state['title'], x + w - 15, y + 15, 2, 1 << 1)
+
+	lastOpen = max([p for p, s in enumerate(c['slots']) if s['status'] != 'closed'] + [0])
+	shown = min(len(c['slots']), lastOpen + 2)
+	random = _t('TXT_KEY_MAIN_MENU_RANDOM', u'Random')
+	rosterY = y + 60
+	rosterH = 42 + 32 * min(shown, max(4, H / 96))
+	_setupRoster(screen, x, rosterY, w, rosterH, c, shown, items, random)
+
+	gap = 12
+	btop, bottom = rosterY + rosterH + gap, H - 78
+	bh = bottom - btop
+	bw = w - 2 * gap
+	settingsW, optionsW = bw * 32 / 100, bw * 45 / 100
+	victoriesW = bw - settingsW - optionsW
+	optionsX, victoriesX = x + settingsW + gap, x + settingsW + optionsW + 2 * gap
+
+	_setupSection(screen, 'CGSettingsPanel', _t('TXT_KEY_MAIN_MENU_SETTINGS', u'Settings'), x, btop, settingsW, bh)
+	_setupSection(screen, 'CGOptionsPanel', _t('TXT_KEY_MAIN_MENU_OPTIONS', u'Options'), optionsX, btop, optionsW, bh)
+	_setupSection(screen, 'CGVictoriesPanel', _t('TXT_KEY_MAIN_MENU_VICTORIES', u'Victories'), victoriesX, btop, victoriesW, bh)
+	_setupSettings(screen, settingsW - 37, c, items, random)
+	_setupChecks(screen, 'CGOptionsPanel', 'CGOption', [(o, gc.getGameOptionInfo(o)) for o in _gameOptions()],
+		c['options'], optionsW - 39, 2)
+	_setupChecks(screen, 'CGVictoriesPanel', 'CGVictory', [(v, gc.getVictoryInfo(v)) for v in _victories()],
+		c['victories'], victoriesW - 39, 1)
+
+	fy = bottom + 12
+	_setupPanel(screen, 'CGActions', '__setupPanel', x, fy, w, 46)
+	_button(screen, 'MenuBack', _t('TXT_KEY_MAIN_MENU_GO_BACK', u'Go Back'), x + 7, fy + 6, 116, 34)
+	screen.setStyle('MenuBack', '__setupField')
+	_button(screen, 'MenuCustomLaunch', _t('TXT_KEY_MAIN_MENU_LAUNCH', u'Launch!'), x + w - 149, fy + 6, 142, 34)
+	screen.setStyle('MenuCustomLaunch', '__setupPrimary')
 	if _state['message']:
-		_label(screen, 'CGMessage', u'<color=255,96,96>' + _state['message'] + u'</color>', W / 2, y + h - 52, 2, 1 << 2)
-	_button(screen, 'MenuCustomLaunch', _t('TXT_KEY_MAIN_MENU_LAUNCH', u'Launch!'), x + w - 230, y + h - 60, 200)
-	_button(screen, 'MenuBack', _t('TXT_KEY_MAIN_MENU_GO_BACK', u'Go Back'), x + 30, y + h - 60, 200)
+		_label(screen, 'CGMessage', u'<color=255,172,139>%s</color>' % _state['message'], W / 2, fy + 14, 2, 1 << 2)
+	elif 'GAMEOPTION_ADVANCED_START' in c['options']:
+		_label(screen, 'CGStartPointsLabel', u'Advanced Start Base Points', W / 2 - 16, fy + 14, 2, 1 << 1)
+		screen.addEditBoxGFC('CGStartPoints', W / 2, fy + 10, 76, 26, _cpe.WidgetTypes.WIDGET_GENERAL, -1, -1, _cpe.FontTypes.GAME_FONT)
+		screen.setStyle('CGStartPoints', '__setupField')
+		screen.setEditBoxString('CGStartPoints', u'%d' % c.get('startPoints', 600))
+		screen.setEditBoxMaxCharCount('CGStartPoints', 6, 6)
+		screen.setEditBoxCharacters('CGStartPoints', u'0123456789')
 
 
 def _victories():
@@ -804,11 +838,12 @@ def _keepCustom():
 	shownVictories = set(_victories())
 	c['victories'] = [gc.getVictoryInfo(v).getType() for v in range(gc.getNumVictoryInfos())
 		if (screen.getCheckBoxState('CGVictory%d' % v) if v in shownVictories else gc.getVictoryInfo(v).getType() in c['victories'])]
-	try:
-		points = _u(screen.getEditBoxString('CGStartPoints')).strip()
-		c['startPoints'] = min(999999, max(0, int(points or u'0')))
-	except (ValueError, TypeError, AttributeError):
-		pass
+	if screen._s.get('CGStartPoints') is not None:
+		try:
+			points = _u(screen.getEditBoxString('CGStartPoints')).strip()
+			c['startPoints'] = min(999999, max(0, int(points or u'0')))
+		except (ValueError, TypeError, AttributeError):
+			pass
 	shown = set(_gameOptions())
 	c['options'] = [gc.getGameOptionInfo(o).getType() for o in range(gc.getNumGameOptionInfos())
 		if (screen.getCheckBoxState('CGOption%d' % o) if o in shown else gc.getGameOptionInfo(o).getType() in c['options'])]
@@ -972,9 +1007,6 @@ def handleInput(args):
 	elif function == 'MenuCustom':
 		_state['message'] = u''
 		_state['page'] = 'custom'
-	elif function in ('MenuRowsUp', 'MenuRowsDown'):
-		_keepCustom()
-		_state['customFirstRow'] = _state.get('customFirstRow', 0) + (function == 'MenuRowsUp' and -1 or 1)
 	elif function == 'MenuCustomLaunch':
 		_customLaunch()
 		return 1
