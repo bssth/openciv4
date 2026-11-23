@@ -342,6 +342,12 @@ namespace oc4::render
 		m_layouts.clear();
 	}
 
+	void Overlay::addFontFolders(const std::vector<std::filesystem::path>& folders)
+	{
+		m_fonts.addFolders(folders);
+		m_layouts.clear();
+	}
+
 	void Overlay::rect(float x0, float y0, float x1, float y1, Color color, float alpha, float radius)
 	{
 		if (m_drawing && x1 > x0 && y1 > y0)

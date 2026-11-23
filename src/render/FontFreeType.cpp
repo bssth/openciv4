@@ -28,8 +28,15 @@ namespace oc4::render
 
 		// Asked in turn for a family missing from the system, then for a character the face lacks.
 		constexpr const wchar_t* kDefaults[] = { L"Segoe UI", L"DejaVu Sans", L"Liberation Sans", L"Noto Sans", L"Arial", L"Helvetica" };
+		// For a missing serif family (the game's Sylfaen when neither the game's own fonts nor
+		// Wine's are found): serifs with a large x-height first, as Sylfaen's.
+		constexpr const wchar_t* kSerifFamilies[] = { L"sylfaen", L"georgia", L"times new roman", L"times", L"cambria", L"constantia",
+			L"palatino linotype", L"book antiqua", L"garamond" };
+		constexpr const wchar_t* kSerifDefaults[] = { L"Sylfaen", L"Georgia", L"Noto Serif", L"DejaVu Serif", L"Liberation Serif",
+			L"Times New Roman", L"Times" };
 		constexpr const wchar_t* kFallbacks[] = { L"Segoe UI", L"Segoe UI Symbol", L"DejaVu Sans", L"Noto Sans", L"Noto Sans Symbols",
-			L"Noto Sans Symbols 2", L"Arial", L"Microsoft YaHei", L"Noto Sans CJK SC", L"Malgun Gothic", L"Meiryo", L"Nirmala UI" };
+			L"Noto Sans Symbols 2", L"Arial", L"Microsoft YaHei", L"Noto Sans CJK SC", L"Malgun Gothic", L"Meiryo", L"Nirmala UI",
+			L"Arial Unicode MS", L"Apple Symbols", L"Hiragino Sans", L"PingFang SC", L"Apple SD Gothic Neo" }; // (the last: macOS's)
 
 		std::wstring lower(std::wstring s)
 		{
@@ -217,31 +224,40 @@ namespace oc4::render
 		std::vector<Face> faces;
 		std::map<std::tuple<std::wstring, bool, bool>, int> byName;
 
+		std::vector<fs::path> extra; // (addFolders')
+
 		void scan()
 		{
 			scanned = true;
-			std::error_code ec;
 			for (const fs::path& folder : fontFolders())
-				for (fs::recursive_directory_iterator it(folder, fs::directory_options::skip_permission_denied, ec), end; it != end; it.increment(ec))
+				scan(folder);
+			for (const fs::path& folder : extra)
+				scan(folder);
+		}
+
+		void scan(const fs::path& folder)
+		{
+			std::error_code ec;
+			for (fs::recursive_directory_iterator it(folder, fs::directory_options::skip_permission_denied, ec), end; it != end; it.increment(ec))
+			{
+				const std::wstring ext = lower(it->path().extension().wstring());
+				if (ec || (ext != L".ttf" && ext != L".otf" && ext != L".ttc"))
+					continue;
+				FT_Face f = nullptr;
+				if (FT_New_Face(library, it->path().string().c_str(), -1, &f) != 0)
+					continue;
+				const FT_Long count = f->num_faces;
+				FT_Done_Face(f);
+				for (FT_Long i = 0; i < count; ++i)
 				{
-					const std::wstring ext = lower(it->path().extension().wstring());
-					if (ec || (ext != L".ttf" && ext != L".otf" && ext != L".ttc"))
+					if (FT_New_Face(library, it->path().string().c_str(), i, &f) != 0)
 						continue;
-					FT_Face f = nullptr;
-					if (FT_New_Face(library, it->path().string().c_str(), -1, &f) != 0)
-						continue;
-					const FT_Long count = f->num_faces;
+					if (f->family_name)
+						files.emplace(lower(widenAscii(f->family_name)),
+							File{ it->path(), i, (f->style_flags & FT_STYLE_FLAG_BOLD) != 0, (f->style_flags & FT_STYLE_FLAG_ITALIC) != 0 });
 					FT_Done_Face(f);
-					for (FT_Long i = 0; i < count; ++i)
-					{
-						if (FT_New_Face(library, it->path().string().c_str(), i, &f) != 0)
-							continue;
-						if (f->family_name)
-							files.emplace(lower(widenAscii(f->family_name)),
-								File{ it->path(), i, (f->style_flags & FT_STYLE_FLAG_BOLD) != 0, (f->style_flags & FT_STYLE_FLAG_ITALIC) != 0 });
-						FT_Done_Face(f);
-					}
 				}
+			}
 		}
 
 		int make(const std::wstring& family, bool bold, bool italic, bool orDefault)
@@ -264,6 +280,12 @@ namespace oc4::render
 			{
 				if (!orDefault)
 					return -1;
+				const std::wstring name = lower(family);
+				if (std::ranges::any_of(kSerifFamilies, [&](const wchar_t* f) { return name == f; }))
+					for (const wchar_t* other : kSerifDefaults)
+						if (lower(other) != name)
+							if (const int i = make(other, bold, italic, false); i >= 0)
+								return byName[key] = i;
 				for (const wchar_t* other : kDefaults)
 					if (other != family)
 						if (const int i = make(other, bold, italic, false); i >= 0)
@@ -335,6 +357,23 @@ namespace oc4::render
 		for (auto& f : m->faces)
 			FT_Done_Face(f.face);
 		FT_Done_FreeType(m->library);
+	}
+
+	void Fonts::addFolders(const std::vector<std::filesystem::path>& folders)
+	{
+		bool added = false;
+		for (const fs::path& folder : folders)
+		{
+			std::error_code ec;
+			if (!fs::is_directory(folder, ec) || std::ranges::find(m->extra, folder) != m->extra.end())
+				continue;
+			m->extra.push_back(folder);
+			if (m->scanned)
+				m->scan(folder);
+			added = true;
+		}
+		if (added)
+			m->byName.clear(); // (a family found missing, or a stand-in's, may be there now; the faces made stay)
 	}
 
 	int Fonts::face(const std::wstring& family, bool bold, bool italic) { return m->make(family, bold, italic, true); }

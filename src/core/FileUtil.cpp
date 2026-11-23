@@ -32,6 +32,11 @@ namespace oc4
 		return std::string(s.begin(), s.end());
 	}
 
+	std::filesystem::path pathFromUtf8(const std::string& text)
+	{
+		return std::filesystem::path(std::u8string(text.begin(), text.end()));
+	}
+
 	std::string utf8GenericPath(const std::filesystem::path& path)
 	{
 		const std::u8string s = path.generic_u8string();

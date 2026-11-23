@@ -759,6 +759,12 @@ namespace oc4::render
 						l.middle = Layer::Middle::Fill;
 					else if (f.text == "GFC_BITMAPSKIN_SIDES_NOTVISIBLE")
 						l.sides = false;
+					else if (f.text == "GFC_BITMAPSKIN_SIDES_FILL")
+					{
+						l.sidesFill = true;
+						if (const Value* c = has("FactorColor"); c && l.fillAlpha == 0)
+							colour(s, c, l.fill, l.fillAlpha);
+					}
 					else if (f.text == "GFC_BITMAPSKIN_NOTVISIBLE")
 						l.image = l.center = {};
 				}
@@ -791,7 +797,7 @@ namespace oc4::render
 					next = end = 0;
 				}
 			}
-			std::erase_if(out, [](const Layer& l) { return !l.image && !l.center && l.middle != Layer::Middle::Fill; });
+			std::erase_if(out, [](const Layer& l) { return !l.image && !l.center && l.middle != Layer::Middle::Fill && !(l.sidesFill && l.fillAlpha > 0); });
 			return out;
 		}
 
@@ -846,6 +852,36 @@ namespace oc4::render
 	}
 
 	std::filesystem::path Theme::file() const { return m->base; }
+
+	std::vector<fs::path> Theme::fontFolders() const
+	{
+		std::vector<fs::path> out;
+		std::error_code ec;
+		const auto add = [&](const fs::path& p) {
+			if (fs::is_directory(p, ec) && std::ranges::find(out, p) == out.end())
+				out.push_back(p);
+		};
+		for (const fs::path& layer : m->roots) // (each layer's Assets folder's parent)
+		{
+			add(layer / "Resource" / "Civ4");
+			add(layer / "Resource" / "Fonts");
+			add(layer / "Assets" / "res" / "Fonts");
+		}
+		// A Wine prefix: .../drive_c/Program Files/... holds the Windows fonts the original had.
+		for (const fs::path& layer : m->roots)
+			for (fs::path p = layer; p.has_relative_path() && p != p.parent_path(); p = p.parent_path())
+				if (lower(utf8Path(p.filename())) == "drive_c")
+				{
+					for (const char* fonts : { "windows/Fonts", "Windows/Fonts", "windows/fonts" }) // (the first there: one folder)
+						if (fs::is_directory(p / fonts, ec))
+						{
+							add(p / fonts);
+							break;
+						}
+					break;
+				}
+		return out;
+	}
 
 	bool Theme::loaded() const { return m->loaded; }
 	const std::vector<std::string>& Theme::problems() const { return m->problems; }
@@ -938,6 +974,15 @@ namespace oc4::render
 		return out;
 	}
 
+	Color Theme::colour(std::string_view name, Color fallback)
+	{
+		Color c = fallback;
+		float alpha = 1;
+		if (m->loaded && !m->colour(nullptr, m->anywhere(std::string(name)), c, alpha))
+			c = fallback;
+		return c;
+	}
+
 	Theme::Bitmap Theme::addSigned(const Bitmap& b, Color c)
 	{
 		if (!b)
@@ -957,6 +1002,34 @@ namespace oc4::render
 							const int straight = slot->bgra[i + k] * 255 / a; // (premultiplied: undo, add, again)
 							slot->bgra[i + k] = uint8_t(std::clamp(straight + add[k], 0, 255) * a / 255);
 						}
+				slot->key = (uint64_t(0x7E) << 56) | ++m->nextKey;
+			}
+		Bitmap out = b;
+		if (slot)
+			out.picture = slot.get();
+		return out;
+	}
+
+	Theme::Bitmap Theme::glow(const Bitmap& b, Color c)
+	{
+		if (!b)
+			return b;
+		const int r = std::clamp(int(c.r * 255), 0, 255), g = std::clamp(int(c.g * 255), 0, 255), bl = std::clamp(int(c.b * 255), 0, 255);
+		const std::string key = lower(b.picture->path) + "|glow" + std::to_string(r) + "," + std::to_string(g) + "," + std::to_string(bl);
+		auto& slot = m->pictures[key];
+		if (!slot)
+			if (const Picture* plain = m->picture(b.picture->path, nullptr, 1))
+			{
+				slot = std::make_unique<Picture>(*plain);
+				const int colour[3] = { bl, g, r }; // (BGRA)
+				for (size_t i = 0; i + 3 < slot->bgra.size(); i += 4)
+				{
+					// (its brightness the alpha: white is the colour, black nothing; premultiplied)
+					const int lum = std::max({ slot->bgra[i], slot->bgra[i + 1], slot->bgra[i + 2] }) * slot->bgra[i + 3] / 255;
+					for (int k = 0; k < 3; ++k)
+						slot->bgra[i + size_t(k)] = uint8_t(colour[k] * lum / 255);
+					slot->bgra[i + 3] = uint8_t(lum);
+				}
 				slot->key = (uint64_t(0x7E) << 56) | ++m->nextKey;
 			}
 		Bitmap out = b;
@@ -992,6 +1065,31 @@ namespace oc4::render
 			o.imagePart(b.picture->key, b.picture->bgra, b.picture->width, b.picture->height, 1, x0, y0, x1, y1, b.x0, b.y0, b.x1, b.y1, alpha);
 	}
 
+	bool Theme::covers(const Skin& skin, float rx0, float ry0, float rx1, float ry1, float x, float y)
+	{
+		for (const Layer& l : skin)
+		{
+			// (the layer's place and its nine pieces, as draw puts them)
+			const float x0 = rx0 + l.indent[0], y0 = ry0 + l.indent[1], x1 = rx1 - l.indent[2], y1 = ry1 - l.indent[3];
+			if (x1 <= x0 || y1 <= y0 || x < x0 || x >= x1 || y < y0 || y >= y1)
+				continue;
+			if (l.middle == Layer::Middle::Fill && l.fillAlpha > 0)
+				return true;
+			if (!l.image && !l.center)
+				continue;
+			if (l.middle != Layer::Middle::Empty || !l.image)
+				return true;
+			float ml = l.margin[0], mt = l.margin[1], mr = l.margin[2], mb = l.margin[3];
+			if (ml + mr > x1 - x0)
+				ml = mr = (x1 - x0) / 2;
+			if (mt + mb > y1 - y0)
+				mt = mb = (y1 - y0) / 2;
+			if (x < x0 + ml || x >= x1 - mr || y < y0 + mt || y >= y1 - mb)
+				return true;
+		}
+		return false;
+	}
+
 	void Theme::draw(Overlay& o, const Skin& skin, float rx0, float ry0, float rx1, float ry1, float alpha)
 	{
 		for (const Layer& l : skin)
@@ -1001,6 +1099,17 @@ namespace oc4::render
 				continue;
 			if (l.middle == Layer::Middle::Fill && l.fillAlpha > 0)
 				o.rect(x0, y0, x1, y1, l.fill, l.fillAlpha * alpha);
+			else if (l.sidesFill && l.fillAlpha > 0 && !l.image)
+			{
+				// The ring inside its margin (its middle the glass's, drawn by the window inside it).
+				const float ml = std::min(l.margin[0], (x1 - x0) / 2), mr = std::min(l.margin[2], (x1 - x0) / 2);
+				const float mt = std::min(l.margin[1], (y1 - y0) / 2), mb = std::min(l.margin[3], (y1 - y0) / 2);
+				const float a = l.fillAlpha * alpha;
+				o.rect(x0, y0, x1, y0 + mt, l.fill, a);
+				o.rect(x0, y1 - mb, x1, y1, l.fill, a);
+				o.rect(x0, y0 + mt, x0 + ml, y1 - mb, l.fill, a);
+				o.rect(x1 - mr, y0 + mt, x1, y1 - mb, l.fill, a);
+			}
 			if (const Bitmap& b = l.image)
 			{
 				if (l.middle == Layer::Middle::Fixed && l.margin[0] + l.margin[1] + l.margin[2] + l.margin[3] == 0)

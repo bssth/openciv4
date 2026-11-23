@@ -4,6 +4,7 @@
 #include "render/UiScale.h"
 #include "render/WasdPan.h"
 #include "render/EdgeScroll.h"
+#include "render/DoubleClick.h"
 #include "render/PadMap.h"
 
 #include "render/Leaderhead.h"
@@ -19,6 +20,7 @@
 #include "render/Input.h"
 #include "media/Movie.h"
 
+#include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_hints.h>
@@ -32,6 +34,8 @@
 #include <DirectXMath.h>
 
 #include <algorithm>
+#include <thread>
+#include <mutex>
 #include <set>
 #include <tuple>
 #include <array>
@@ -92,8 +96,11 @@ namespace oc4::render
 			overlay = std::make_unique<Overlay>(*renderer);
 			updateUiScale();
 			overlay->setArt(&art);
-			// The game's interface theme: the screens' and the popups' look, the text's face.
-			if (theme.load(assets.layerRoots()))
+			// The game's interface theme: the screens' and the popups' look, the text's face (the
+			// game's own Sylfaen, from its folders or Wine's, where the system lacks it).
+			const bool themed = theme.load(assets.layerRoots());
+			overlay->addFontFolders(theme.fontFolders());
+			if (themed)
 			{
 				std::array<float, 5> sizes{};
 				for (int i = 0; i < 5; ++i)
@@ -216,18 +223,22 @@ namespace oc4::render
 		std::wstring actionHelpText;
 		bool downOnActions = false;
 		std::wstring info;
-		std::vector<std::pair<std::wstring, float>> messages;
+		std::vector<std::pair<std::wstring, Color>> messages; // (newest first)
 		MapWindow::ScreenMinimap screenMinimap;
 		MapWindow::Layers layers, layersApplied;
 		MapWindow::PlotMarks plotMarks;
 		std::array<std::wstring, 3> yieldSymbols;
 		bool pathing = false;     // the right button held while playing: the way to the plot under the mouse
+		bool pathCancelled = false; // ... let go of with Esc: the button's release is no order
 		bool goingTo = false;     // the go-to mode (G) while playing: the same, without the button
 		MapWindow::PathView path; // that way, as the host found it
 		std::vector<uint8_t> screenPixels;
 		std::pair<uint64_t, uint64_t> screenPixelsFor{ ~0ull, ~0ull };
 		int downX = 0, downY = 0;
 		bool downLeft = false;
+		int buttonClicks = 1; // the mouse button's clicks in a row (2: a double click)
+		DoubleClick doubleClick; // (counts the left button's presses: DoubleClick.h)
+		std::optional<MapWindow::PlotClick> firstClick; // the map click a double click's second click is on
 		std::function<std::string(int, int)> plotHelp;
 		ButtonArt art;
 		Theme theme;
@@ -235,6 +246,8 @@ namespace oc4::render
 		std::function<std::string(int)> popupHelp;
 		bool busy = false; // the game runs on another thread: nothing asked of it
 		bool edgeScroll = false;
+		int maxFrameRate = 0; // (0: no cap)
+		std::chrono::steady_clock::time_point nextFrame{};
 		std::function<bool(int, int, int)> uiWheel; // the screens' (a table or list scrolled)
 		bool downOnPopup = false;
 		UiLayer ui;
@@ -270,6 +283,7 @@ namespace oc4::render
 		std::function<uint64_t(std::shared_ptr<const audio::Pcm>)> playMovieSound;
 		std::function<void(uint64_t)> stopMovieSound;
 		std::vector<std::string> moviesDone;
+		bool lowMovieQuality = false; // (Movie Quality low: the map is not drawn while a movie plays)
 		static std::string modelKey(const UiItem& it)
 		{
 			if (it.kind == UiItem::Kind::Flag)
@@ -279,6 +293,9 @@ namespace oc4::render
 		}
 		std::vector<MapWindow::UiClick> uiClicks;
 		bool downOnUi = false;
+		bool sliderDrag = false; // (the left button held on a slider: it follows the mouse)
+		std::mutex folderMutex; // (the folder dialog answers on a thread of its own)
+		std::optional<std::string> chosenFolder;
 		std::pair<int, int> helpPlot{ -1, -1 };
 		bool helpCombat = false; // (plotHelpText was asked with the right button held: the odds of an attack there)
 		std::wstring plotHelpText;
@@ -1252,6 +1269,14 @@ namespace oc4::render
 			}
 			if (k != key::Shift && k != key::Control && k != key::Menu)
 				++inputs;
+			// Esc with the right button held: the way shown is let go, and the button's release orders nothing (as the original's).
+			if (k == key::Escape && pathing)
+			{
+				pathing = false;
+				pathCancelled = true;
+				path = {};
+				return;
+			}
 			if (uiTakesKeys && !ctrl && !alt && uiKey(k, shift))
 				return;
 			// (W A S D panning: the press is the map's, not the game's hotkey)
@@ -1302,7 +1327,12 @@ namespace oc4::render
 			mouseY = y;
 			popup.hover(x, y);
 			ui.hover(x, y);
-			if (minimapDrag)
+			if (sliderDrag)
+			{
+				if (const int item = ui.pressed(); item >= 0)
+					uiClicks.push_back({ item, false, false, false, false, x, y });
+			}
+			else if (minimapDrag)
 				jumpFromMinimap(std::clamp(x, int(minimapRect[0]), int(minimapRect[2])), std::clamp(y, int(minimapRect[1]), int(minimapRect[3])));
 			else if (panning)
 			{
@@ -1333,13 +1363,24 @@ namespace oc4::render
 				downX = x;
 				downY = y;
 				downLeft = left;
+				pathCancelled = false;
+				if (!left || buttonClicks < 2)
+					firstClick.reset(); // (no double click: what the last click was on is forgotten)
 			}
-			// On a popup: its buttons (the map around it still pans).
+			// On a popup: its buttons.
 			if (down && popup.contains(x, y))
 			{
 				downOnPopup = true;
+				if (left)
+					popup.press(x, y); // (a choice shows pressed while held)
 				return;
 			}
+			// Elsewhere a popup leaves nothing a press, as the original's (Wine, the plain game and BUG
+			// alike, the build, research and civic questions: the map, its minimap, the main
+			// interface's buttons, End Turn, the action bar): only a screen of its own over the map
+			// takes clicks. (a release still ends what was held before it came)
+			if (down && popup.active() && !(ui.active() && ui.solid(x, y, false)))
+				return;
 			// On the main interface's minimap: the camera goes there (and follows while held), as the
 			// original's (where the team's map is not centred yet, the minimap and the camera's leash
 			// keep the map's edges hidden).
@@ -1355,6 +1396,21 @@ namespace oc4::render
 			{
 				downOnUi = true;
 				ui.press(x, y, !left);
+				// (a slider is set where it is pressed, and follows the mouse while held)
+				if (const int item = ui.pressed(); left && item >= 0 && ui.items()[size_t(item)].kind == UiItem::Kind::Slider &&
+					ui.items()[size_t(item)].enabled)
+				{
+					sliderDrag = true;
+					SDL_CaptureMouse(true);
+					uiClicks.push_back({ item, false, mods.shift, mods.ctrl, mods.alt, x, y });
+				}
+				return;
+			}
+			if (!down && std::exchange(sliderDrag, false))
+			{
+				SDL_CaptureMouse(false);
+				downOnUi = false;
+				ui.release(x, y, mods.shift, mods.ctrl, mods.alt);
 				return;
 			}
 			if (!down && std::exchange(downOnUi, false))
@@ -1380,9 +1436,16 @@ namespace oc4::render
 			{
 				if (downLeft && std::abs(x - downX) + std::abs(y - downY) < 5) // (button up messages do not say which)
 					popup.click(x, y);
+				popup.release();
 				return;
 			}
 			// The right button held while playing shows the way there; let go, the units go there.
+			if (!down && std::exchange(pathCancelled, false))
+			{
+				SDL_CaptureMouse(false);
+				panning = orbiting = minimapDrag = false;
+				return;
+			}
 			if (!down && std::exchange(pathing, false))
 			{
 				SDL_CaptureMouse(false);
@@ -1401,9 +1464,26 @@ namespace oc4::render
 				mouseX = x;
 				mouseY = y;
 				// (a city's bar is over the figures: a click on it is on its city)
-				const auto figure = view->cityBarAt(float(x), float(y)) ? std::nullopt : figureUnder(x, y);
-				if (const auto p = figure ? *figure : hoveredPlot(); p.first >= 0)
+				const bool onBar = view->cityBarAt(float(x), float(y)).has_value();
+				const auto figure = onBar ? std::nullopt : figureUnder(x, y);
+				const auto first = std::exchange(firstClick, std::nullopt);
+				if (downLeft && buttonClicks >= 2 && first)
+				{
+					// The second click of a double click: on what the first was on (the city, its bar,
+					// a figure), whatever moved under the mouse in between (the camera, figures, the bar).
+					MapWindow::PlotClick c = *first;
+					c.shift = mods.shift, c.ctrl = mods.ctrl, c.alt = mods.alt;
+					c.twice = true;
+					clicks.push_back(c);
+				}
+				else if (const auto p = figure ? *figure : hoveredPlot(); p.first >= 0)
+				{
 					clicks.push_back({ p.first, p.second, !downLeft, mods.shift, mods.ctrl, mods.alt, figure.has_value() });
+					clicks.back().twice = buttonClicks >= 2;
+					clicks.back().onCityBar = onBar;
+					if (downLeft && buttonClicks < 2)
+						firstClick = clicks.back();
+				}
 			}
 			if (down)
 			{
@@ -1434,6 +1514,13 @@ namespace oc4::render
 
 		void onWheel(int delta)
 		{
+			// (while a popup is up the wheel scrolls it wherever the mouse is, as the original's;
+			// a screen of its own over the map keeps its own)
+			if (popup.active() && !(ui.active() && ui.solid(mouseX, mouseY, false)))
+			{
+				popup.wheel(mouseX, mouseY, delta, true);
+				return;
+			}
 			if (popup.wheel(mouseX, mouseY, delta))
 				return;
 			// On the screens: what scrolls there, else nothing (the map only zooms where it shows).
@@ -1679,18 +1766,26 @@ namespace oc4::render
 			renderer->setGlobe(g.x, g.y, g.radius, g.wrapWidth);
 			fitFov();
 			// (beyond the map: black as the ground not seen, until the team's map is centred)
-			renderer->beginFrame(camera, view->seenBounds() ? Vec3{ 0, 0, 0 } : Vec3{ 0.05f, 0.07f, 0.10f });
+			// (a movie playing with the Movie Quality low: no map behind it, black, as the original)
+			const bool mapShown = !(lowMovieQuality && !movies.empty());
+			renderer->beginFrame(camera, view->seenBounds() || !mapShown ? Vec3{ 0, 0, 0 } : Vec3{ 0.05f, 0.07f, 0.10f });
 			view->options.cityScreen = cityView;
-			view->draw();
+			if (mapShown)
+				view->draw();
+			else
+				renderer->pass(); // (cleared, black, though nothing is drawn)
 			renderer->endFrame();
 			syncHeads();
 			renderHeads();
 			if (!overlay->begin())
 				return;
-			view->drawOverlay(*overlay);
-			drawMarks();
-			drawLayers();
-			drawPath();
+			if (mapShown)
+			{
+				view->drawOverlay(*overlay);
+				drawMarks();
+				drawLayers();
+				drawPath();
+			}
 			if (ui.active())
 			{
 				// The game's own interface: it has the status, the scores, the unit's buttons.
@@ -2190,17 +2285,25 @@ namespace oc4::render
 			}
 		}
 
-		// The messages: centred lines under the top of the interface, the newest lowest.
+		// The messages as the original's: a see-through black box under the top bar, 606 wide in
+		// the middle, a line of 18 for each, newest at the top, each line a bullet and its text in
+		// its colour with a shadow (measured in Wine at 1600 x 900: box 500-1106 x 50-159 for six
+		// lines, black at a quarter, bullets at 507, text at 514).
 		void drawMessages()
 		{
 			if (messages.empty())
 				return;
-			const float size = ui.textSize(2), line = std::round(size * 1.4f), cx = overlay->screenWidth() / 2;
-			float y = ui.active() ? 74 : 70;
-			for (const auto& [text, alpha] : messages)
+			constexpr float kWidth = 606, kTop = 50, kLine = 18, kBullet = 7, kText = 14;
+			const float size = ui.textSize(2), x0 = std::round(overlay->screenWidth() / 2 - kWidth / 2);
+			const float y1 = kTop + kLine * float(messages.size()) + 1;
+			overlay->rect(x0, kTop, x0 + kWidth, y1, { 0, 0, 0 }, 0.25f, 0);
+			float y = kTop;
+			for (const auto& [text, colour] : messages)
 			{
-				overlay->richText(text, cx, y, size, false, { 0.93f, 0.93f, 0.9f }, alpha, Overlay::Align::Center);
-				y += line;
+				const float h = overlay->richHeight(text, 4096, size, false), ty = std::round(y + 1 + (kLine - h) / 2);
+				overlay->rect(x0 + kBullet, y + kLine / 2, x0 + kBullet + 2, y + kLine / 2 + 2, { 0.85f, 0.85f, 0.85f }, 1, 0);
+				overlay->richText(text, x0 + kText, ty, size, false, colour, 1, Overlay::Align::Left);
+				y += kLine;
 			}
 		}
 
@@ -2508,6 +2611,15 @@ namespace oc4::render
 				m.view->update(dt);
 			render();
 			renderer->present();
+			// (a frame cap: the next frame no sooner than its share of the second after this one)
+			if (maxFrameRate > 0)
+			{
+				const auto period = std::chrono::nanoseconds(1'000'000'000LL / maxFrameRate);
+				const auto done = std::chrono::steady_clock::now();
+				if (done < nextFrame)
+					std::this_thread::sleep_until(nextFrame);
+				nextFrame = std::max(nextFrame, done - period) + period;
+			}
 		}
 
 		float windowDensity() const { return window ? SDL_GetWindowPixelDensity(window) : 1; }
@@ -2576,6 +2688,16 @@ namespace oc4::render
 				}
 				else if (e.button.button == SDL_BUTTON_LEFT || e.button.button == SDL_BUTTON_RIGHT)
 				{
+					// (the double click is counted by the presses' own times: DoubleClick.h; a
+					// button let go keeps its press's count)
+					if (e.button.button == SDL_BUTTON_RIGHT)
+					{
+						if (down)
+							doubleClick.reset();
+						buttonClicks = 1;
+					}
+					else if (down)
+						buttonClicks = doubleClick.press(e.button.timestamp, e.button.x, e.button.y);
 					if (down)
 						++inputs; // (a click is the player's too: inputCount)
 					onButton(down && e.button.button == SDL_BUTTON_LEFT, down, x, y);
@@ -2783,6 +2905,13 @@ namespace oc4::render
 		o.healthBars = g.healthBars;
 		o.frozen = g.frozen;
 		o.effects = g.effects;
+		o.globeBuildings = g.globeBuildings;
+		m->lowMovieQuality = g.lowMovieQuality;
+		if (m->renderer)
+		{
+			m->renderer->setLowResTextures(g.lowResTextures);
+			m->renderer->setSamples(uint32_t(std::max(1, g.samples)));
+		}
 		setFullscreen(g.fullscreen);
 	}
 
@@ -2832,30 +2961,52 @@ namespace oc4::render
 		SDL_SetCursor(it->second ? it->second : SDL_GetDefaultCursor());
 	}
 
-	void MapWindow::mouseClick(int x, int y)
+	void MapWindow::mouseClick(int x, int y, bool twice)
 	{
 		m->onMouseMove(x, y);
-		m->onButton(true, true, x, y);
-		m->onButton(false, false, x, y);
+		for (int n = 1; n <= (twice ? 2 : 1); ++n)
+		{
+			m->buttonClicks = n;
+			m->onButton(true, true, x, y);
+			m->onButton(false, false, x, y);
+		}
+		m->buttonClicks = 1;
+	}
+
+	void MapWindow::mouseDrag(int x0, int y0, int x1, int y1, int steps)
+	{
+		m->onMouseMove(x0, y0);
+		m->onButton(true, true, x0, y0);
+		for (int i = 1; i <= steps; ++i)
+			m->onMouseMove(x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps);
+		m->onButton(true, false, x1, y1);
+	}
+
+	void MapWindow::mouseMove(int x, int y) { m->onMouseMove(x, y); }
+
+	void MapWindow::mouseButton(int x, int y, bool left, bool down)
+	{
+		m->onMouseMove(x, y);
+		m->onButton(left && down, down, x, y); // (as SDL's: a button let go says not which)
 	}
 
 	std::optional<MapWindow::PlotClick> MapWindow::clickAt(int x, int y, bool right) const
 	{
-		// (a city's bar stands for the city, as the original's: its screen opens)
+		// (a city's bar stands for the city, as the original's)
 		const auto bar = m->view->cityBarAt(float(x), float(y));
 		const auto figure = bar ? std::nullopt : m->figureUnder(x, y);
 		const auto p = bar ? *bar : figure ? *figure : m->plotUnder(x, y);
 		if (p.first < 0)
 			return std::nullopt;
 		PlotClick c;
-		c.x = p.first, c.y = p.second, c.right = right, c.onFigure = figure.has_value();
+		c.x = p.first, c.y = p.second, c.right = right, c.onFigure = figure.has_value(), c.onCityBar = bar.has_value();
 		return c;
 	}
-	void MapWindow::setMessages(std::vector<std::pair<std::string, float>> messages)
+	void MapWindow::setMessages(const std::vector<Message>& messages)
 	{
 		m->messages.clear();
-		for (auto& [text, alpha] : messages)
-			m->messages.push_back({ widen(text), alpha });
+		for (const Message& message : messages)
+			m->messages.push_back({ widen(message.text), message.color });
 	}
 	void MapWindow::setPopup(const PopupView* popup) { m->popup.set(popup); }
 	std::optional<MapWindow::PopupAnswer> MapWindow::takePopupAnswer() { return m->popup.takeAnswer(); }
@@ -2867,6 +3018,7 @@ namespace oc4::render
 		m->askPlotHelp();
 	}
 	void MapWindow::setEdgeScroll(bool on) { m->edgeScroll = on; }
+	void MapWindow::setMaxFrameRate(int fps) { m->maxFrameRate = std::clamp(fps, 0, 1000); }
 	void MapWindow::setSoundHandler(std::function<void(const std::string& tag, float x, float y)> handler)
 	{
 		if (m->view)
@@ -2918,6 +3070,21 @@ namespace oc4::render
 	MapWindow::UiDisplay MapWindow::uiDisplay() const { return { m->renderer->width(), m->renderer->height(), m->windowDensity() }; }
 	bool MapWindow::uiActive() const { return m->ui.active(); }
 	std::vector<MapWindow::UiClick> MapWindow::takeUiClicks() { return std::exchange(m->uiClicks, {}); }
+	void MapWindow::chooseFolder(const std::string& start)
+	{
+		SDL_ShowOpenFolderDialog(
+			[](void* self, const char* const* files, int) {
+				auto& impl = *static_cast<Impl*>(self);
+				const std::lock_guard lock(impl.folderMutex);
+				impl.chosenFolder = files && files[0] ? std::string(files[0]) : std::string();
+			},
+			m.get(), m->window, start.empty() ? nullptr : start.c_str(), false);
+	}
+	std::optional<std::string> MapWindow::takeChosenFolder()
+	{
+		const std::lock_guard lock(m->folderMutex);
+		return std::exchange(m->chosenFolder, std::nullopt);
+	}
 	void MapWindow::setUiTextFocus(bool focus) { m->uiTextFocus = focus; }
 	std::wstring MapWindow::takeUiTyped() { return std::exchange(m->uiTyped, {}); }
 	void MapWindow::typeText(const std::string& utf8)
@@ -2946,9 +3113,9 @@ namespace oc4::render
 		return std::format("camera at {:.1f},{:.1f} (height {:.0f}), {:.1f} plots away, pitch {:.2f}", m->camera.target.x / p, m->camera.target.y / p,
 			m->camera.target.z, m->camera.distance / p, m->camera.pitch);
 	}
-	void MapWindow::setUiHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown)
+	void MapWindow::setUiHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown, bool framed, bool floating)
 	{
-		m->ui.setHelp(text, x, y, width, expandRight, expandDown);
+		m->ui.setHelp(text, x, y, width, expandRight, expandDown, framed, floating);
 	}
 	void MapWindow::pressKeys(const std::string& keys)
 	{
