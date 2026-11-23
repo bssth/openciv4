@@ -57,6 +57,11 @@ namespace oc4::render
 		// Part of the picture (sx0..sy1 in its pixels) over the rectangle.
 		void imagePart(uint64_t key, const std::vector<uint8_t>& bgra, uint32_t width, uint32_t height, uint64_t version, float x0, float y0, float x1,
 			float y1, float sx0, float sy0, float sx1, float sy1, float alpha = 1);
+		// Part of the picture (sx0..sy1 in its pixels) over a mesh of (n + 1) x (n + 1) points, row
+		// by row from its top left corner (two triangles a cell): laid on the ground in perspective,
+		// say. Its pixels times the colour. The picture is taken to stay the same under its key.
+		void imageMesh(uint64_t key, const std::vector<uint8_t>& bgra, uint32_t width, uint32_t height, const std::vector<std::array<float, 2>>& points,
+			int n, float sx0, float sy0, float sx1, float sy1, Color tint, float alpha = 1);
 		// y is the top of the text; returns its width.
 		float text(std::wstring_view text, float x, float y, float size, Color color, float alpha = 1, bool bold = false, Align align = Align::Left,
 			bool shadow = true);
@@ -113,6 +118,8 @@ namespace oc4::render
 		void drawLayout(const Layout& l, float x, float y, Color color, float alpha, bool shadow);
 		void drawGlyphs(const Layout& l, float x, float y, Color color, float alpha, bool ownColours);
 
+		// The bitmap kept for the picture under its key, uploaded when new or changed.
+		const GpuImage* upload(uint64_t key, const std::vector<uint8_t>& bgra, uint32_t width, uint32_t height, uint64_t version);
 		void use(const GpuImage* image);
 		void vertex(float x, float y, uint32_t color, float u = 0, float v = 0);
 		void pixelVertex(float x, float y, uint32_t color, float u, float v); // (x, y in pixels)

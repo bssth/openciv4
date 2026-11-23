@@ -547,6 +547,66 @@ namespace
 		for (const FAStarNode* n = gDLL->getFAStarIFace()->GetLastNode(finder); n; n = n->m_pParent)
 			way.points.push_back({ n->m_iX, n->m_iY, n->m_iData2 });
 		std::ranges::reverse(way.points);
+		// (an enemy the units see there: the move ends in an attack, its ring red; a worker's road
+		// there, Route To: its rings green)
+		way.attack = GC.getMap().plot(destX, destY)->isVisibleEnemyUnit(head->getOwner());
+		way.route = ui.getInterfaceMode() == INTERFACEMODE_ROUTE_TO;
+		return way;
+	}
+
+	// The selected units' own way, as the original draws it while they are selected with no button
+	// held (seen in Wine, testgames/shots/wine-gopath): the Go To orders their group already has
+	// (MISSION_MOVE_TO from the head of its mission queue on), each a leg from where the one
+	// before ends. The first has its turns' rings; those queued after it (Shift) are dots to a
+	// green ring without a number. The key says what it was found for.
+	using MissionKey = std::vector<int>;
+	MissionKey missionKey(host::Interface& ui)
+	{
+		MissionKey key;
+		const CvUnit* head = ui.getHeadSelectedUnit();
+		const CvSelectionGroup* group = head ? head->getGroup() : nullptr;
+		if (!group || head->getOwner() != GC.getGame().getActivePlayer() || !group->plot())
+			return key;
+		key = { group->plot()->getX(), group->plot()->getY(), GC.getGame().getGameTurn() };
+		for (CLLNode<MissionData>* n = group->headMissionQueueNode(); n && n->m_data.eMissionType == MISSION_MOVE_TO; n = group->nextMissionQueueNode(n))
+			key.insert(key.end(), { n->m_data.iData1, n->m_data.iData2 });
+		return key.size() > 3 ? key : MissionKey{};
+	}
+	render::MapWindow::PathView missionPath(host::Interface& ui, const MissionKey& key)
+	{
+		render::MapWindow::PathView way;
+		way.mission = true;
+		CvUnit* head = ui.getHeadSelectedUnit();
+		CvSelectionGroup* group = head ? head->getGroup() : nullptr;
+		if (key.size() < 5 || !group)
+			return way;
+		FAStar* finder = &GC.getInterfacePathFinder();
+		gDLL->getFAStarIFace()->SetData(finder, group);
+		int x = key[0], y = key[1];
+		way.points.push_back({ x, y, 1 });
+		for (size_t i = 3; i + 1 < key.size(); i += 2)
+		{
+			const int toX = key[i], toY = key[i + 1];
+			if (toX == x && toY == y)
+				continue;
+			// (a leg the pathfinder finds no way for ends the way there)
+			if (!gDLL->getFAStarIFace()->GeneratePath(finder, x, y, toX, toY, false, MOVE_DECLARE_WAR, true))
+				break;
+			// (the orders queued after the first: their plots without turns, turn 0; the window draws
+			// them as dots to a green ring without a number)
+			const bool queued = !way.legEnds.empty();
+			std::vector<render::MapWindow::PathView::Point> leg;
+			for (const FAStarNode* n = gDLL->getFAStarIFace()->GetLastNode(finder); n && n->m_pParent; n = n->m_pParent)
+				leg.push_back({ n->m_iX, n->m_iY, queued ? 0 : n->m_iData2 });
+			std::ranges::reverse(leg);
+			way.points.insert(way.points.end(), leg.begin(), leg.end());
+			way.legEnds.push_back(way.points.size() - 1);
+			x = toX, y = toY;
+		}
+		if (way.points.size() < 2)
+			way.points.clear();
+		else
+			way.legEnds.pop_back(); // (the last is the way's end)
 		return way;
 	}
 
@@ -764,6 +824,8 @@ namespace
 		std::vector<int> actionIds; // the action of each button the window shows
 		std::optional<std::pair<int, int>> pathShown; // where the way the window shows leads
 		std::pair<const void*, int> pathFrom{};        // (the unit it starts from and its plot: the gamepad's plot cursor shows it all the while)
+		int pathFoundIn = NO_INTERFACEMODE;            // (the interface mode it was found in: Route To's rings are green)
+		MissionKey pathMission;                        // (with none pointed at: the selected units' orders it shows)
 		std::tuple<const void*, const void*, int, int> coloredFor{}; // what was selected when the plots were last coloured
 		uint64_t marksShown = ~0ull; // the marks the window has
 		uint64_t cameraShown = 0;     // the game's camera turn and tilt the window has (engine.cameraVersion)
@@ -1485,13 +1547,22 @@ namespace
 			const InterfaceModeTypes pathMode = ui.getInterfaceMode();
 			window.setGoingTo(playing && pathMode > NO_INTERFACEMODE && pathMode < NUM_INTERFACEMODE_TYPES && GC.getInterfaceModeInfo(pathMode).getGotoPlot() &&
 				pathHead && pathHead->getOwner() == me);
-			if (const auto target = playing ? window.pathTarget() : std::nullopt; target != pathShown || (target && from != pathFrom))
+			if (const auto target = playing ? window.pathTarget() : std::nullopt; target != pathShown || (target && (from != pathFrom || pathMode != pathFoundIn)))
 			{
 				pathShown = target;
 				pathFrom = from;
+				pathFoundIn = ui.getInterfaceMode();
 				ui.setGotoPlot(target ? GC.getMap().plot(target->first, target->second) : nullptr);
 				window.setPath(target ? findPath(ui, *target) : render::MapWindow::PathView{});
+				pathMission.clear();
 			}
+			// (no plot pointed at: the selected units' own Go To orders, if they have any)
+			if (!pathShown)
+				if (auto key = playing ? missionKey(ui) : MissionKey{}; key != pathMission)
+				{
+					pathMission = std::move(key);
+					window.setPath(missionPath(ui, pathMission));
+				}
 			// The plots the game core colours for what is selected (the city's worked plots, the
 			// recommended city sites, a ranged unit's reach, ...), when it says they changed, as
 			// the original engine asks it for them (CvGame::updateColoredPlots).

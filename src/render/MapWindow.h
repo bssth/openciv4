@@ -340,6 +340,13 @@ namespace oc4::render
 			};
 			std::vector<Point> points;
 			bool reachable = true;
+			bool attack = false; // the move ends in an attack: its last ring red
+			bool route = false;  // a worker's road there (Route To): green rings, no turns
+			// The selected units' own Go To orders: drawn with no button held. Each queued order
+			// is a leg; legEnds are the points (not the last) where one ends, each with its ring.
+			// The legs after the first have turn 0: dots to a green ring without a number.
+			bool mission = false;
+			std::vector<size_t> legEnds;
 		};
 		void setPath(PathView path);
 		// An effect the game sets off there (MapView::triggerEffect).

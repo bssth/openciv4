@@ -398,11 +398,8 @@ namespace oc4::render
 		imagePart(key, bgra, w, h, version, x0, y0, x1, y1, 0, 0, float(w), float(h), alpha);
 	}
 
-	void Overlay::imagePart(uint64_t key, const std::vector<uint8_t>& bgra, uint32_t w, uint32_t h, uint64_t version, float x0, float y0, float x1,
-		float y1, float sx0, float sy0, float sx1, float sy1, float alpha)
+	const GpuImage* Overlay::upload(uint64_t key, const std::vector<uint8_t>& bgra, uint32_t w, uint32_t h, uint64_t version)
 	{
-		if (!m_drawing || w == 0 || h == 0 || bgra.size() < size_t(w) * h * 4 || x1 <= x0 || y1 <= y0 || sx1 <= sx0 || sy1 <= sy0)
-			return;
 		Bitmap& b = m_bitmaps[key];
 		// (a picture the draws not yet made show is changed only after them)
 		if (!b.image || b.width != w || b.height != h)
@@ -422,14 +419,48 @@ namespace oc4::render
 			b.version = version;
 		}
 		if (!b.image)
-			return;
+			return nullptr;
 		b.used = m_frame;
 		b.batch = m_batch;
-		use(b.image.get());
+		return b.image.get();
+	}
+
+	void Overlay::imagePart(uint64_t key, const std::vector<uint8_t>& bgra, uint32_t w, uint32_t h, uint64_t version, float x0, float y0, float x1,
+		float y1, float sx0, float sy0, float sx1, float sy1, float alpha)
+	{
+		if (!m_drawing || w == 0 || h == 0 || bgra.size() < size_t(w) * h * 4 || x1 <= x0 || y1 <= y0 || sx1 <= sx0 || sy1 <= sy0)
+			return;
+		const GpuImage* image = upload(key, bgra, w, h, version);
+		if (!image)
+			return;
+		use(image);
 		const float u0 = sx0 / float(w), v0 = sy0 / float(h), u1 = sx1 / float(w), v1 = sy1 / float(h);
 		const uint32_t c = m_imageColour ? *m_imageColour : pack(alpha, alpha, alpha, alpha);
 		vertex(x0, y0, c, u0, v0), vertex(x1, y0, c, u1, v0), vertex(x1, y1, c, u1, v1);
 		vertex(x0, y0, c, u0, v0), vertex(x1, y1, c, u1, v1), vertex(x0, y1, c, u0, v1);
+	}
+
+	void Overlay::imageMesh(uint64_t key, const std::vector<uint8_t>& bgra, uint32_t w, uint32_t h, const std::vector<std::array<float, 2>>& points,
+		int n, float sx0, float sy0, float sx1, float sy1, Color tint, float alpha)
+	{
+		if (!m_drawing || w == 0 || h == 0 || bgra.size() < size_t(w) * h * 4 || n < 1 || points.size() < size_t(n + 1) * size_t(n + 1))
+			return;
+		const GpuImage* image = upload(key, bgra, w, h, 0);
+		if (!image)
+			return;
+		use(image);
+		const uint32_t c = premultiplied(tint, alpha);
+		const auto at = [&](int i, int j) {
+			const auto& p = points[size_t(j) * size_t(n + 1) + size_t(i)];
+			const float t = float(i) / float(n), u = float(j) / float(n);
+			vertex(p[0], p[1], c, (sx0 + (sx1 - sx0) * t) / float(w), (sy0 + (sy1 - sy0) * u) / float(h));
+		};
+		for (int j = 0; j < n; ++j)
+			for (int i = 0; i < n; ++i)
+			{
+				at(i, j), at(i + 1, j), at(i + 1, j + 1);
+				at(i, j), at(i + 1, j + 1), at(i, j + 1);
+			}
 	}
 
 	void Overlay::bitmap(const GpuImage* image, float x0, float y0, float x1, float y1, float alpha)
