@@ -1993,14 +1993,14 @@ namespace oc4::render
 		// black disc with a bevelled rim, on a pin whose tip is the plot. The bubble keeps its size
 		// at every zoom and stands up and away from the middle of the screen: left of the plot on
 		// the left half, right of it on the right half (side: -1 left, 1 right).
-		void drawResourceBubble(float tipX, float tipY, const ButtonArt::Icon& icon, float side)
+		void drawResourceBubble(float tipX, float tipY, const ButtonArt::Icon& icon, float side, Color rim)
 		{
 			constexpr float r = 25.5f, offX = 29, offY = 31;
 			const float cx = tipX + side * offX, cy = tipY - offY;
 			// The pin: from the disc's lower edge down to the plot.
 			const float px[4] = { cx - side * 2.5f, cx - side * 24, tipX, tipX };
 			const float py[4] = { cy + 25, cy + 11, tipY, tipY };
-			overlay->quad(px, py, { 0.86f, 0.86f, 0.9f }, 0.9f);
+			overlay->quad(px, py, rim, 0.9f);
 			overlay->line(px[1], py[1], tipX, tipY, { 0.2f, 0.2f, 0.22f }, 0.7f, 1);
 			overlay->line(px[0], py[0], tipX, tipY, { 0.2f, 0.2f, 0.22f }, 0.7f, 1);
 			overlay->circle(cx, cy, r, { 0, 0, 0 }, 1);
@@ -2008,7 +2008,7 @@ namespace oc4::render
 			const ButtonArt::Icon& round = roundIcon(icon);
 			const float ir = (r - 2) / kRoundIconCut;
 			overlay->image(round.key, round.bgra, round.width, round.height, 1, cx - ir, cy - ir, cx + ir, cy + ir);
-			overlay->ellipse(cx, cy, r - 1.5f, r - 1.5f, { 0.78f, 0.78f, 0.8f }, 1, 3);
+			overlay->ellipse(cx, cy, r - 1.5f, r - 1.5f, rim, 1, 3);
 			overlay->ellipse(cx, cy, r, r, { 0.1f, 0.1f, 0.1f }, 0.8f, 1);
 		}
 
@@ -2082,7 +2082,7 @@ namespace oc4::render
 				return sx > -40 && sy > -40 && sx < overlay->screenWidth() + 40 && sy < overlay->screenHeight() + 40;
 			};
 			const float zoom = std::clamp(12 * plot() / camera.distance, 0.6f, 1.4f);
-			struct Bubble { float x, y; const ButtonArt::Icon* icon; float side; };
+			struct Bubble { float x, y; const ButtonArt::Icon* icon; float side; Color rim; };
 			std::vector<Bubble> bubbles;
 			if (bubbleSides.size() != map.plots.size())
 				bubbleSides.assign(map.plots.size(), 0);
@@ -2098,7 +2098,12 @@ namespace oc4::render
 					// (on a city's screen the original shows no resources' bubbles, nor units' icons)
 					if (layers.resources && !cityView && p.bonus >= 0 && size_t(p.bonus) < map.bonusButtons.size())
 						if (const ButtonArt::Icon* ic = art.icon(map.bonusButtons[size_t(p.bonus)]))
-							bubbles.push_back({ sx, sy, ic, bubbleSide(size_t(x) + size_t(y) * size_t(map.width), sx) });
+						{
+							// The snapshot gives the owner as known to the active team.
+							const Color rim = p.owner >= 0 && size_t(p.owner) < map.players.size()
+								? map.players[size_t(p.owner)].primary : Color{ 0.80f, 0.80f, 0.80f };
+							bubbles.push_back({ sx, sy, ic, bubbleSide(size_t(x) + size_t(y) * size_t(map.width), sx), rim });
+						}
 					if (low && layers.yields)
 					{
 						// (a row a yield, as many of its symbol as it gives: five and more as a number)
@@ -2125,7 +2130,7 @@ namespace oc4::render
 			// (in the plots' order, south to north and west to east, as the original draws them: where
 			// bubbles crowd, the farther and the more easterly one covers its neighbour)
 			for (const Bubble& b : bubbles)
-				drawResourceBubble(b.x, b.y, *b.icon, b.side);
+				drawResourceBubble(b.x, b.y, *b.icon, b.side, b.rim);
 			if (low && layers.units && !cityView)
 				for (const UnitView& u : map.units)
 				{
