@@ -205,4 +205,10 @@ namespace oc4::host
 		}
 		std::filesystem::rename(tmp, path);
 	}
+
+	std::string md5Hex(const void* data, size_t size)
+	{
+		const std::byte* const bytes = static_cast<const std::byte*>(data);
+		return md5Hex(std::vector<std::byte>(bytes, bytes + size));
+	}
 }

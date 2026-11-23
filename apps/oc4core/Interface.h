@@ -232,6 +232,11 @@ namespace oc4::host
 		// The mouse as its screen asks for it: the plot under it (the game core's coordinates,
 		// -1 none), its buttons, whether it is over the map rather than a widget.
 		void setWorldBuilder(bool bTurnOn) override;
+		// The game menu's Your Details and Game Details (CONTROL_DETAILS, CONTROL_ADMIN_DETAILS):
+		// the game core's popups for them, BUTTONPOPUP_DETAILS (with the password alone when
+		// asked) and BUTTONPOPUP_ADMIN.
+		void showDetails(bool bPasswordOnly) override;
+		void showAdminDetails() override;
 		bool worldBuilder() const { return m_worldBuilder; }
 		int mouseX = -1, mouseY = -1;
 		bool mouseLeft = false, mouseRight = false, mouseOverMap = false;

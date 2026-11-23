@@ -905,6 +905,18 @@ namespace oc4::host
 		m_queued.push_front({ pInfo, player, nullptr, true });
 	}
 
+	void Interface::showDetails(bool bPasswordOnly)
+	{
+		CvPopupInfo* const info = new CvPopupInfo(BUTTONPOPUP_DETAILS);
+		info->setOption1(bPasswordOnly); // (launchDetailsPopup: the civ's password alone, when it has none yet)
+		addPopup(info, GC.getGame().getActivePlayer(), true, false);
+	}
+
+	void Interface::showAdminDetails()
+	{
+		addPopup(new CvPopupInfo(BUTTONPOPUP_ADMIN), GC.getGame().getActivePlayer(), true, false);
+	}
+
 	bool Interface::isPopupQueued()
 	{
 		const PlayerTypes active = GC.getGame().getActivePlayer();
@@ -1056,8 +1068,6 @@ namespace oc4::host
 		{
 			switch (type)
 			{
-			case BUTTONPOPUP_ADMIN:
-			case BUTTONPOPUP_ADMIN_PASSWORD:
 			case BUTTONPOPUP_DIPLOMACY:
 			case BUTTONPOPUP_ADDBUDDY:
 			case BUTTONPOPUP_FORCED_DISCONNECT:

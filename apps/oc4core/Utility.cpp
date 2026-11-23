@@ -3,7 +3,10 @@
 #include "DataStream.h"
 #include "GameFont.h"
 #include "Net.h"
+#include "SaveFile.h"
 #include "core/FileUtil.h"
+
+#include <cstring>
 
 #include "CvDeal.h"
 #include "CvGameAI.h"
@@ -296,6 +299,25 @@ namespace oc4::host
 			return;
 		}
 		m_messages.push_back(pData);
+	}
+
+	char* Utility::md5String(char* szString)
+	{
+		m_md5 = szString ? md5Hex(szString, std::strlen(szString)) : std::string();
+		return m_md5.data();
+	}
+
+	void Utility::sendPlayerInfo(PlayerTypes)
+	{
+		// (CvDLLButtonPopup has set the leader and civ names, password and email in the init core;
+		// the names show on the scoreboard, the city bars and the help texts)
+		m_interface.makeInterfaceDirty();
+	}
+
+	void Utility::sendGameInfo(const CvWString& szGameName, const CvWString& szAdminPassword)
+	{
+		GC.getInitCore().setGameName(szGameName);
+		GC.getInitCore().setAdminPassword(szAdminPassword, false); // (hashed already, or empty for none)
 	}
 
 	void Utility::sendMakeAI(PlayerTypes ePlayer)

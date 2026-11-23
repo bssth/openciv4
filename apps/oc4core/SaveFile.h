@@ -24,6 +24,10 @@
 
 namespace oc4::host
 {
+	// 32 lowercase hex digits of the MD5 of the bytes (the save's last field, and the passwords the
+	// game core keeps hashed: Utility::md5String).
+	std::string md5Hex(const void* data, size_t size);
+
 	struct SaveFile
 	{
 		static constexpr int kVersion = 302;

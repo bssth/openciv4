@@ -209,7 +209,19 @@ namespace oc4::host
 		bool isGameActive() override { return m_gameActive; }
 		int GetLocalNetworkID() override { return -1; }
 		bool IsPitbossHost() const override { return false; }
-		int getChtLvl() override { return 0; }
+		// The cheat level: the Game Details popup's "Allow Debug Tools" box sets it (BUTTONPOPUP_ADMIN,
+		// single player only); the game core shows its debug help while it is above 0.
+		int getChtLvl() override { return m_chtLvl; }
+		void setChtLvl(int iLevel) override { m_chtLvl = iLevel; }
+		// The passwords the game core keeps hashed (CvInitCore's admin and civ passwords): a plain
+		// MD5 in lowercase hex here. (Whether the original's is the same is not known: a password
+		// set in the original may not match here.)
+		char* md5String(char* szString) override;
+		// The details popups' answers (BUTTONPOPUP_DETAILS, BUTTONPOPUP_ADMIN): the game core sends
+		// them to every player; with no one else here, the init core takes them as they are.
+		void sendPlayerInfo(PlayerTypes eActivePlayer) override;
+		void sendGameInfo(const CvWString& szGameName, const CvWString& szAdminPassword) override;
+		bool isFMPMgrPublic() override { return false; } // (no internet game)
 		bool GetWorldBuilderMode() override { return m_interface.worldBuilder(); }
 		int getCurrentLanguage() const override { return m_language; }
 		void setCurrentLanguage(int iNewLanguage) override { m_language = iNewLanguage; }
@@ -449,6 +461,8 @@ namespace oc4::host
 		std::map<std::string, std::ofstream> m_logs;
 		std::string m_modFolder, m_modName;
 		int m_language = 0;
+		int m_chtLvl = 0;
+		std::string m_md5; // (md5String's answer, until the next)
 		bool m_gameActive = false, m_gameInitializing = false;
 		bool m_shift = false, m_ctrl = false, m_alt = false;
 
