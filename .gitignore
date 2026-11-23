@@ -5,3 +5,4 @@
 *.user
 /external/
 /mods/
+__pycache__/

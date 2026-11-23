@@ -356,6 +356,14 @@ namespace
 		}
 		if (argc <= 1)
 			o.menu = true; // (started as a game is: its menu)
+#ifndef _WIN32
+		if (o.mod)
+		{
+			std::string native = utf8Path(*o.mod);
+			std::replace(native.begin(), native.end(), '\\', '/');
+			o.mod = fs::u8path(native);
+		}
+#endif
 		if (o.civ4Root.empty())
 			o.civ4Root = findCiv4();
 		if (o.civ4Root.empty())
@@ -2135,6 +2143,7 @@ int wmain(int argc, wchar_t** argv)
 				modDir = modDir->parent_path();
 			const bool installed = opt.mod->is_relative();
 			modFolder = installed ? opt.mod->lexically_normal().make_preferred().string() : "Mods\\" + modDir->filename().string();
+			std::replace(modFolder.begin(), modFolder.end(), '/', '\\'); // original saves use Windows separators
 			if (!modFolder.ends_with('\\'))
 				modFolder += '\\';
 			dllModFolder = installed ? modFolder : modDir->string() + '\\';

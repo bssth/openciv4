@@ -1,0 +1,37 @@
+name: Linux headless
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Development packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang ninja-build pkg-config build-essential python3-dev libssl-dev libffi-dev zlib1g-dev \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev libxss-dev libxfixes-dev libxext-dev libxtst-dev \
+            libwayland-dev wayland-protocols libxkbcommon-dev libasound2-dev libpulse-dev libdecor-0-dev
+      - uses: actions/cache@v4
+        with:
+          path: external
+          key: linux-headless-deps-v1-${{ runner.arch }}-${{ hashFiles('tools/setup_linux.py') }}
+      - name: Prepare verified dependencies
+        run: python3 tools/setup_linux.py --jobs 2
+      - name: Build
+        run: |
+          cmake --preset linux-headless
+          cmake --build --preset linux-headless --parallel 2
+      - name: Asset-free tests without a display or audio device
+        run: env -u DISPLAY -u WAYLAND_DISPLAY SDL_AUDIODRIVER=dummy ctest --test-dir build/linux-headless --output-on-failure
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: linux-headless-test-logs
+          path: build/linux-headless/Testing/Temporary/
