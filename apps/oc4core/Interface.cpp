@@ -390,9 +390,33 @@ namespace oc4::host
 		return head && head->getGroup() && head->getGroup()->canStartMission(MISSION_FOUND, -1, -1, head->plot(), true);
 	}
 
+	namespace
+	{
+		std::mutex g_entityEraMutex;
+		std::unordered_map<const void*, int> g_entityEras; // a unit's entity: the era it was made in (-1: no era change since: the owner's now)
+	}
+
 	void Entities::createUnitEntity(CvUnit* pUnit)
 	{
 		pUnit->setEntity(reinterpret_cast<CvEntity*>(pUnit));
+		// (the constructor makes it before the unit has an owner: its era is the one before the
+		// first era change after this, or the owner's now)
+		std::lock_guard lock(g_entityEraMutex);
+		g_entityEras[pUnit] = -1;
+	}
+
+	void Entities::updateGraphicEra(CvUnitEntity* pEntity, EraTypes eOldEra)
+	{
+		std::lock_guard lock(g_entityEraMutex);
+		if (const auto it = g_entityEras.find(pEntity); pEntity && eOldEra != NO_ERA && it != g_entityEras.end() && it->second < 0)
+			it->second = eOldEra;
+	}
+
+	int Entities::entityEra(const CvUnit& unit, int era)
+	{
+		std::lock_guard lock(g_entityEraMutex);
+		const auto it = g_entityEras.find(&unit);
+		return it != g_entityEras.end() && it->second >= 0 ? it->second : era;
 	}
 
 	bool Entities::IsSelected(const CvEntity* pEntity) const
@@ -416,6 +440,10 @@ namespace oc4::host
 	void Entities::destroyEntity(CvEntity*& pEntity, bool)
 	{
 		s_missions.erase(pEntity);
+		{
+			std::lock_guard lock(g_entityEraMutex);
+			g_entityEras.erase(pEntity);
+		}
 		{
 			std::lock_guard lock(g_movementMutex);
 			if (const auto* unit = reinterpret_cast<const CvUnit*>(pEntity))

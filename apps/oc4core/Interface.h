@@ -429,6 +429,16 @@ namespace oc4::host
 		void SetSiegeTower(CvUnitEntity* pEntity, bool show) override;
 		bool GetSiegeTower(CvUnitEntity* pEntity) override;
 		static bool siegeTower(const CvUnit& unit); // (any thread)
+		// The era a unit's entity was made in. The original engine makes a unit's figures when its
+		// entity is made (the unit's constructor, so also every unit of a loaded game; and
+		// CvUnit::reloadEntity, when a general joins the unit) with its owner's era's art. When the
+		// era changes (CvPlayer::setCurrentEra tells each of the player's units' entities, with the
+		// old era: updateGraphicEra), the unit's own figures change, but the general riding with it
+		// keeps its figure until the entity is made again (seen in Wine:
+		// testgames/shots/wine-unitera-led/). entityEra: that old era if the era changed since the
+		// entity was made, else era (the owner's now). (any thread)
+		void updateGraphicEra(CvUnitEntity* pEntity, EraTypes eOldEra) override;
+		static int entityEra(const CvUnit& unit, int era);
 
 		// Whether a unit rests (fortified, asleep, on sentry, healing): told so last and
 		// still waiting; one never told (in a loaded game) when it is waiting.

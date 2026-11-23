@@ -1399,12 +1399,13 @@ namespace oc4::host
 							s.models[size_t(u.models.back())].ranged = info->getActAsRanged();
 							s.models[size_t(u.models.back())].battleDistance = info->getBattleDistance();
 						}
-					// (the great general's figure: its era's warlord, as CvUnitInfo::getArtInfo picks the
-					// early, middle or late art; the tags are not exported, BtS names them)
+					// (the great general's figure: the warlord of the era the unit's entity was made in, as
+					// CvUnitInfo::getArtInfo picks the early, middle or late art; the tags are not exported,
+					// BtS names them. Not the owner's era now: an era change leaves it, see entityEra)
 					if (shown->getLeaderUnitType() != NO_UNIT)
 					{
-						const int eras = GC.getNumEraInfos();
-						const char* tag = era > eras / 2 ? "ART_DEF_UNIT_WARLORD_MODERN" : era > eras / 4 ? "ART_DEF_UNIT_WARLORD_MEDIEVAL" : "ART_DEF_UNIT_WARLORD_ANCIENT";
+						const int eras = GC.getNumEraInfos(), made = Entities::entityEra(*shown, era);
+						const char* tag = made > eras / 2 ? "ART_DEF_UNIT_WARLORD_MODERN" : made > eras / 4 ? "ART_DEF_UNIT_WARLORD_MEDIEVAL" : "ART_DEF_UNIT_WARLORD_ANCIENT";
 						if (const CvArtInfoUnit* info = ARTFILEMGR.getUnitArtInfo(tag))
 							u.leader = modelIndex(info, info->getNIF(), info->getKFM(), info->getScale(), info->getShadowNIF(), info->getShadowAttachNode(),
 								info->getShadowScale());
