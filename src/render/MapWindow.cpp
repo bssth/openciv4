@@ -292,7 +292,6 @@ namespace oc4::render
 		bool globeView = false;
 		Vec3 globeFrom;           // (the camera's before the globe view)
 		float globeFromDistance = 0, globeFromTilt = 0;
-		double restingSince = 0; // when the mouse last moved (seconds of the window's clock)
 		double clock = 0;
 		float minimapRect[4]{}; // where the minimap was drawn (x0, y0, x1, y1)
 		Vec3 anchor;
@@ -1070,7 +1069,6 @@ namespace oc4::render
 					{
 						const auto [dx, dy] = padDigitStep(padTileFlick.digit);
 						padPlaceCursor(padPlotX + dx, padPlotY + dy);
-						restingSince = clock;
 					}
 				}
 				const auto [cx, cy] = padPinTarget();
@@ -1100,7 +1098,6 @@ namespace oc4::render
 							const auto centred = [&](float v, int d) { return (std::floor(v / plot()) + float(d) + 0.5f) * plot(); };
 							camera.target.x = centred(camera.target.x, dx), camera.target.y = centred(camera.target.y, dy);
 							keepOnMap();
-							restingSince = clock;
 						}
 				}
 			}
@@ -1132,9 +1129,6 @@ namespace oc4::render
 				const Vec3 forward{ -std::cos(camera.yaw), -std::sin(camera.yaw), 0 }, side{ -std::sin(camera.yaw), std::cos(camera.yaw), 0 };
 				camera.target = camera.target + (forward * -pan.y + side * pan.x) * (camera.distance * 0.9f * dt);
 				keepOnMap();
-				// (the map moved under a pointer that did not: what it is over is another plot)
-				if (padPointer && mouseX >= 0)
-					restingSince = clock;
 			}
 			// The triggers zoom: ZR in, ZL out.
 			if (const int zoom = int(padTriggerHeld(padAxis[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER])) - int(padTriggerHeld(padAxis[SDL_GAMEPAD_AXIS_LEFT_TRIGGER])))
@@ -1296,8 +1290,6 @@ namespace oc4::render
 
 		void onMouseMove(int x, int y)
 		{
-			if (x != mouseX || y != mouseY)
-				restingSince = clock;
 			mouseX = x;
 			mouseY = y;
 			popup.hover(x, y);
@@ -2281,7 +2273,7 @@ namespace oc4::render
 
 		bool plotHelpWanted(std::pair<int, int> plot)
 		{
-			return plotHelp && plot.first >= 0 && !panning && !orbiting && clock - restingSince >= 0.4 && !overInterface();
+			return plotHelp && plot.first >= 0 && !panning && !orbiting && !overInterface();
 		}
 
 		// The mouse over the minimap or one of the interface's panels or controls.
