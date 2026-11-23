@@ -238,7 +238,17 @@ namespace oc4::host
 		CvPlot* getMouseOverPlot() override;
 		bool updateCursorType() override { return false; }
 		bool isFocusedWidget() override { return false; }
-		bool isFocused() override { return false; }
+		// The main interface has lost the focus to a screen: the city screen, or a script's screen
+		// of its own (an advisor, the Civilopedia, a wonder's movie; screenFocus, set by the host
+		// each frame). The game core then holds back the map's controls (CvGame::canDoControl: the
+		// unit cycles, the camera, quick save and load, the globe, ending the turn), as its own
+		// note in CvDLLWidgetData::doUnitModel says ("if a screen is up"). The city screen counts:
+		// CvMainInterface.py asks "not isFocused() or isCityScreenUp()" for its own keys there,
+		// and in the original W (Cycle Units, Alt) does nothing on the city screen (seen in Wine).
+		// Popups and the diplomacy screen are not counted (the core asks isDiploOrPopupWaiting
+		// for them).
+		bool isFocused() override { return screenFocus || isCityScreenUp(); }
+		bool screenFocus = false;
 		// A battle the active player's unit fights (or one it is attacked in) has the camera's focus:
 		// CvUnit::setCombatUnit tells it so, and only then the game core looks at the battle
 		// (CvInterface::lookAt with CAMERALOOKAT_BATTLE(_ZOOM_IN)) and lets go of it at the end

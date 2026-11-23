@@ -379,11 +379,11 @@ namespace
 	// The game's code (FInputDevice::KB_..., as its hotkeys have it) of a Windows key; -1 none.
 	unsigned scriptedKey(char c)
 	{
-		// ("%1" ... "%9", "%0", "%=": F1 ... F10, F12, the advisors' keys)
+		// ("%1" ... "%9", "%0", "%-", "%=": F1 ... F12, the advisors' keys and F11 the globe)
 		if (c >= '1' && c <= '9')
 			return render::key::F1 + unsigned(c - '1');
-		if (c == '0' || c == '=')
-			return render::key::F1 + (c == '0' ? 9u : 11u);
+		if (c == '0' || c == '-' || c == '=')
+			return render::key::F1 + (c == '0' ? 9u : c == '-' ? 10u : 11u);
 		switch (c)
 		{
 		case 'u': return render::key::Up;
@@ -825,7 +825,10 @@ namespace
 				}
 			if (screens.diploKey(k.key))
 				return;
-			if (k.key == render::key::Escape)
+			// (on the city screen Return leaves it, as Esc does: seen in Wine; the core's Return
+			// actions, Cycle Units and End Turn, wait while a screen has the focus, isFocused)
+			const bool cityReturn = k.key == render::key::Return && !k.shift && !k.ctrl && !k.alt && ui.isCityScreenUp();
+			if (k.key == render::key::Escape || cityReturn)
 			{
 				if (ui.getInterfaceMode() != INTERFACEMODE_SELECTION)
 					ui.setInterfaceMode(INTERFACEMODE_SELECTION);
@@ -1602,6 +1605,8 @@ namespace
 			// The game's screens: their input, then their update (and redraw) for this frame.
 			screens.input(window);
 			screens.frame(window, int(window.width()), int(window.height()));
+			// (asked here, on this thread, once a frame: the game core asks isFocused on the worker too)
+			ui.screenFocus = ui.screenUp && ui.screenUp();
 			// The game: the orders sent (the others' turns after ours: on the worker, below).
 			// (on the worker too: the update that ends our turn does the turn's work, half a
 			// second and more in a big mod; one that takes longer than a frame leaves the window
