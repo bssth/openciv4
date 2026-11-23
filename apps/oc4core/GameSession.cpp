@@ -511,6 +511,8 @@ namespace oc4::host
 	void GameSession::activateFirstTurn()
 	{
 		CvGame& game = GC.getGame();
+		// The HUD can read the score ranks before the first game update.
+		game.updateScore(true);
 		if (game.isMPOption(MPOPTION_SIMULTANEOUS_TURNS))
 		{
 			for (int p = 0; p < maxPlayers(); ++p)
@@ -830,6 +832,12 @@ namespace oc4::host
 		void* args[] = { PyString_FromStringAndSize(save.pythonData.data(), Py_ssize_t(save.pythonData.size())) };
 		m_python.callFunction("CvAppInterface", "onLoad", m_python.MakeFunctionArgs(args, 1));
 		m_python.callFunction("CvAppInterface", "preGameStart", nullptr); // after "OnLoad", as the original engine
+
+		// Older turn-zero saves may have written the default rank table, with player 0
+		// in every position. Leave an already initialized table and score history alone.
+		const py::object scriptGame = py::module_::import("CvPythonExtensions").attr("CyGame")();
+		if (maxCivPlayers() > 1 && scriptGame.attr("getRankPlayer")(0).cast<int>() == scriptGame.attr("getRankPlayer")(1).cast<int>())
+			GC.getGame().updateScore(true);
 
 		m_utility.setGameInitializing(false);
 		m_utility.setGameActive(true);
