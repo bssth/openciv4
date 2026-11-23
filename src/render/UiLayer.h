@@ -56,6 +56,8 @@ namespace oc4::render
 		std::pair<int, int> keyChoicePlace() const;
 		// A press and its release on the same item make a click.
 		void press(int x, int y, bool right);
+		// The item pressed and not let go yet (found again when the items are made again), -1 none.
+		int pressed() const { return m_pressed; }
 		std::optional<MapWindow::UiClick> release(int x, int y, bool shift, bool ctrl, bool alt);
 
 		void setHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown);
@@ -96,6 +98,11 @@ namespace oc4::render
 		// across, and the grip, plain and under the mouse.
 		std::array<Theme::Skin, 2> m_shaft;
 		std::array<std::array<Theme::Skin, 2>, 2> m_grip;
+		// The theme's sliders (GFC_Control_StandardSlider_Style), up and down [0] and across [1]:
+		// the track, the track with its fill, plain and disabled, and the grip plain, under the
+		// mouse, pressed and disabled.
+		std::array<std::array<Theme::Skin, 2>, 2> m_sliderTrack, m_sliderFill;
+		std::array<std::array<Theme::Skin, 4>, 2> m_sliderGrip;
 		std::array<float, 5> m_sizes{ 10, 12, 14, 16, 22 }; // the markup's <font=0..4> (the theme's)
 		std::vector<Item> m_items;
 		int m_hover = -1, m_pressed = -1;

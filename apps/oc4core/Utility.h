@@ -3,6 +3,7 @@
 // CvDLLUtilityIFaceBase: the engine services the game DLL calls through gDLL.
 
 #include "Audio.h"
+#include "AutoSaves.h"
 #include "Diplomacy.h"
 #include "FAStar.h"
 #include "Interface.h"
@@ -59,6 +60,10 @@ namespace oc4::host
 				onAutoSave(bInitial);
 		}
 		std::function<void(bool initial)> onAutoSave;
+		// How it saves (AutoSaves.h; the options' OpenCiv4 tab).
+		SharedAutoSaveSettings autoSave;
+		// At most this many frames a second (the ini's SetMaxFrameRate; 0: as many as the display shows).
+		std::atomic<int> maxFrameRate = 0;
 
 		// The map's display the game's controls switch (Ctrl+R, the unit icons, Ctrl+T): the
 		// window shows them so.
@@ -246,6 +251,11 @@ namespace oc4::host
 		int uiScale() const { return m_forcedUiScale >= 0 ? m_forcedUiScale : m_uiScale; }
 		void setUiScale(int percent) { m_uiScale = percent; }
 		void forceUiScale(int percent) { m_forcedUiScale = percent; }
+		// The options screen's quality choices the window follows: the movies' (0 high .. 2 low)
+		// and the anti-aliasing's samples (0, 2, 4, 8).
+		int movieQuality() const { return m_movieQuality; }
+		int antiAliasing() const { return m_antiAliasing; }
+		void setGraphicLevels(int movieQuality, int samples) { m_movieQuality = movieQuality, m_antiAliasing = samples; }
 		// W A S D pan the map (the profile's, or --wasd-pan's for the session until the player
 		// chooses: the options' check box, or Ctrl+Shift+W to turn it off).
 		bool wasdPan() const { return m_forcedWasdPan || m_wasdPan; }
@@ -258,6 +268,12 @@ namespace oc4::host
 		void setAutoEndTurn(bool on) { m_autoEndTurn = on; }
 		void forceAutoEndTurn() { m_forcedAutoEndTurn = true; }
 		void chooseAutoEndTurn(bool on) { m_forcedAutoEndTurn = false; m_autoEndTurn = on; }
+		// The other civilizations' shown moves at about half the time (OpenCiv4's own option, off).
+		bool quickEnemyMoves() const { return m_quickEnemyMoves; }
+		void setQuickEnemyMoves(bool on) { m_quickEnemyMoves = on; }
+		// The option Mac keys (render/KeyMap.h; the options' Mac keys tab): on by default on macOS.
+		bool macKeys() const { return m_macKeys; }
+		void setMacKeys(bool on) { m_macKeys = on; }
 		// The mouse at the window's edge scrolls the map (render/EdgeScroll.h; on unless the profile
 		// says off, or --no-edge-scroll / a scripted run for the session until the player chooses).
 		bool edgeScroll() const { return m_edgeScroll.on(); }
@@ -274,9 +290,19 @@ namespace oc4::host
 				o = 0;
 		}
 		bool ChangeINIKeyValue(const char*, const char*, const char*) override { return false; } // the engine writes no INI
-		// The user profile's player options (wait at end of turn, ...): XML defaults for a
-		// new game, the active player's own after loading a save.
-		void setProfileOptionsFromPlayer(PlayerTypes ePlayer);
+		// The user profile's player options (wait at end of turn, quick combat, ...): the profile's
+		// (oc4options, profile.ini), the XML's default for one it does not have. As in the original,
+		// the game core sends them to the active player at the start of every game, new or loaded
+		// (CvGame::sendPlayerOptions; a save's own are overwritten), and a choice on the options
+		// screen (sendPlayerOption) goes into the profile too.
+		void setProfilePlayerOption(int option, bool on)
+		{
+			if (option >= 0 && size_t(option) < m_playerOptions.size())
+				m_playerOptions[size_t(option)] = on ? 2 : 1;
+		}
+		// 0 the XML's default (none chosen), 1 off, 2 on.
+		int profilePlayerOptionState(int option) const { return option >= 0 && size_t(option) < m_playerOptions.size() ? m_playerOptions[size_t(option)] : 0; }
+		void resetProfilePlayerOptions() { m_playerOptions.fill(0); }
 		void pumpMessages();
 		// Multiplayer (Net): a frame's command run, and a player who left made an AI player.
 		void runCommand(const std::vector<std::byte>& command);
@@ -436,10 +462,17 @@ namespace oc4::host
 		Xml& m_xml;
 		TextManager m_text;
 		std::vector<CvMessageData*> m_messages;
-		std::vector<char> m_profileOptions; // empty: XML defaults
+		std::array<int8_t, 64> m_playerOptions{}; // the profile's: 0 the XML's default, 1 off, 2 on
 		int m_uiScale = 0, m_forcedUiScale = -1;
+		std::atomic<int> m_movieQuality = 0, m_antiAliasing = 0;
 		bool m_wasdPan = false, m_forcedWasdPan = false;
 		bool m_autoEndTurn = false, m_forcedAutoEndTurn = false;
+		bool m_quickEnemyMoves = false;
+#ifdef __APPLE__
+		bool m_macKeys = true;
+#else
+		bool m_macKeys = false;
+#endif
 		render::EdgeScrollOption m_edgeScroll;
 		bool m_keepAttacker = false;
 		std::array<std::atomic<int8_t>, 64> m_graphicOptions{}; // 0 the XML's default, 1 off, 2 on (set by the window's thread, read by the game's)

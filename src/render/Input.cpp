@@ -1,4 +1,5 @@
 #include "render/Input.h"
+#include "render/KeyMap.h"
 
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_mouse.h>
@@ -84,10 +85,33 @@ namespace oc4::render
 		return 0;
 	}
 
+	unsigned keyOfSdl(uint32_t keycode, int scancode)
+	{
+		const bool typed = (keycode >= SDLK_A && keycode <= SDLK_Z) || (keycode >= SDLK_0 && keycode <= SDLK_9);
+		if (!typed)
+			if (const unsigned k = keyOfPlace(scancode))
+				return k;
+		return keyOfSdl(keycode);
+	}
+
+	namespace
+	{
+		bool macKeysOn =
+#ifdef __APPLE__
+			true;
+#else
+			false;
+#endif
+	}
+	void setMacKeys(bool on) { macKeysOn = on; }
+	bool macKeys() { return macKeysOn; }
+	bool cmdHeld() { return (SDL_GetModState() & SDL_KMOD_GUI) != 0; }
+
 	Modifiers heldModifiers()
 	{
 		const SDL_Keymod mod = SDL_GetModState();
-		return { (mod & SDL_KMOD_SHIFT) != 0, (mod & SDL_KMOD_CTRL) != 0, (mod & SDL_KMOD_ALT) != 0 };
+		const bool cmd = macKeysOn && (mod & SDL_KMOD_GUI) != 0;
+		return { (mod & SDL_KMOD_SHIFT) != 0, (mod & SDL_KMOD_CTRL) != 0 || cmd, (mod & SDL_KMOD_ALT) != 0 };
 	}
 
 	bool keyHeld(unsigned code)

@@ -30,6 +30,9 @@ namespace oc4::audio
 	// By its first bytes: a WAVE file or else an MP3.
 	std::optional<Pcm> decode(std::span<const std::byte> file, std::string* error = nullptr);
 
+	// The names of the system's sound devices: its microphones (recording) or its outputs.
+	std::vector<std::string> deviceNames(bool recording);
+
 	// The output device. Its calls are the thread's that made it.
 	class Device
 	{
@@ -42,6 +45,8 @@ namespace oc4::audio
 		// False without an output device (then nothing plays).
 		bool ok() const;
 		void setMasterVolume(float volume);
+		// Both sides the same (the player's speakers set to Mono).
+		void setMono(bool mono);
 
 		using Voice = uint64_t; // 0: none
 		// Plays the sound from its start: volume as a gain (0..1), pan from -1 (left) to 1, pitch as

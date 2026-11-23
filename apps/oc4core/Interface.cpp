@@ -215,7 +215,8 @@ namespace oc4::host
 				pszIcon, eFlashColor, iFlashX, iFlashY, bShowOffScreenArrows, bShowOnScreenArrows));
 		if (ePlayer != GC.getGame().getActivePlayer())
 			return;
-		show(szString.c_str(), iLength);
+		if (!noEventMessages)
+			show(szString.c_str(), iLength);
 		if (sounds && pszSound && *pszSound)
 			sounds->play(pszSound);
 	}
@@ -235,7 +236,11 @@ namespace oc4::host
 	}
 
 	// (the messages of the last turn again, when a game is loaded: CvPlayer::showMissedMessages)
-	void Interface::showMessage(CvTalkingHeadMessage& msg) { show(msg.getDescription(), msg.getLength()); }
+	void Interface::showMessage(CvTalkingHeadMessage& msg)
+	{
+		if (!noEventMessages)
+			show(msg.getDescription(), msg.getLength());
+	}
 
 	void Interface::clearEventMessages()
 	{
@@ -443,6 +448,16 @@ namespace oc4::host
 			m.plots.erase(m.plots.begin(), m.plots.end() - 32);
 	}
 
+	namespace
+	{
+		std::atomic<bool> g_quickShownMoves{ false };
+	}
+
+	void Entities::setQuickShownMoves(bool on)
+	{
+		g_quickShownMoves = on;
+	}
+
 	void Entities::ExecuteMove(CvUnitEntity* pEntity, float, bool bCombat)
 	{
 		// CvSelectionGroup::groupMove's, once the group's moves this update are done: the original
@@ -453,7 +468,8 @@ namespace oc4::host
 		if (!unit || bCombat || unit->getOwner() < 0)
 			return;
 		const CvPlayer& owner = CvPlayerAI::getPlayerNonInl(unit->getOwner()); // (exported: GET_PLAYER inlines a static the Windows DLL does not export)
-		const float seconds = owner.isHuman() && owner.isOption(PLAYEROPTION_QUICK_MOVES) ? 0.5f : 1.0f;
+		// (the others' with OpenCiv4's Quick enemy moves too: their walk ends before the next shown move)
+		const float seconds = (owner.isHuman() && owner.isOption(PLAYEROPTION_QUICK_MOVES)) || (!owner.isHuman() && g_quickShownMoves) ? 0.5f : 1.0f;
 		std::lock_guard lock(g_movementMutex);
 		if (const auto it = g_movements.find(movementKey(unit->getIDInfo())); it != g_movements.end())
 			it->second.seconds = seconds;

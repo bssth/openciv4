@@ -19,11 +19,19 @@ namespace oc4::render
 		bool shift = false, ctrl = false, alt = false;
 	};
 
+	// The modifiers held (with the option Mac keys, Cmd counts as Ctrl: KeyMap.h's macKey).
 	Modifiers heldModifiers();
+	// Cmd (the Windows key elsewhere) held.
+	bool cmdHeld();
+	// The option Mac keys (KeyMap.h), set by the window from the profile.
+	void setMacKeys(bool on);
+	bool macKeys();
 	bool keyHeld(unsigned key);
 	bool mouseHeld(bool left);
 	extern bool padHeld[2]; // (a gamepad's buttons held as the mouse's: left, right; PadMap.h)
 
-	// The key's code above of an SDL keycode; 0 none.
+	// The key's code above of an SDL keycode; 0 none. With its scancode, the punctuation keys go by
+	// their place (KeyMap.h's keyOfPlace), letters and digits by what they type.
 	unsigned keyOfSdl(uint32_t keycode);
+	unsigned keyOfSdl(uint32_t keycode, int scancode);
 }

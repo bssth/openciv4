@@ -713,16 +713,16 @@ float4 PSWater(WaterOut i) : SV_Target
 		Impl(Renderer& r, const AssetResolver& a) : renderer(r), assets(a), flagArt(a) { createPipeline(); }
 		~Impl()
 		{
-			SDL_ReleaseGPUGraphicsPipeline(renderer.device(), terrainPipeline);
+			for (const auto& [samples, g] : groundPipelines)
+				for (SDL_GPUGraphicsPipeline* p : { g.terrain, g.water, g.border })
+					SDL_ReleaseGPUGraphicsPipeline(renderer.device(), p);
 			SDL_ReleaseGPUShader(renderer.device(), terrainVS);
 			SDL_ReleaseGPUShader(renderer.device(), terrainPS);
 			SDL_ReleaseGPUSampler(renderer.device(), sampler);
 			SDL_ReleaseGPUSampler(renderer.device(), detailWrap);
-			SDL_ReleaseGPUGraphicsPipeline(renderer.device(), waterPipeline);
 			SDL_ReleaseGPUShader(renderer.device(), waterVS);
 			SDL_ReleaseGPUShader(renderer.device(), waterPS);
 			SDL_ReleaseGPUSampler(renderer.device(), waterSampler);
-			SDL_ReleaseGPUGraphicsPipeline(renderer.device(), borderPipeline);
 			SDL_ReleaseGPUShader(renderer.device(), borderVS);
 			SDL_ReleaseGPUShader(renderer.device(), borderPS);
 		}
@@ -822,7 +822,6 @@ float4 PSWater(WaterOut i) : SV_Target
 		std::shared_ptr<GpuImage> waterTex;
 		SDL_GPUShader* waterVS = nullptr;
 		SDL_GPUShader* waterPS = nullptr;
-		SDL_GPUGraphicsPipeline* waterPipeline = nullptr;
 		SDL_GPUSampler* waterSampler = nullptr;
 		std::shared_ptr<GpuImage> plotTex, cellTex, atlasTex, groundTex, decalTex, detailTex, borderTex;
 		// The culture borders: the original's tiles (borderArtTex, a slice each: no river, at sea,
@@ -842,8 +841,6 @@ float4 PSWater(WaterOut i) : SV_Target
 		std::vector<uint16_t> featureDecal; // by FeatureTypes: 1-based slice of decalTex, 0 none
 		SDL_GPUShader* terrainVS = nullptr;
 		SDL_GPUShader* terrainPS = nullptr;
-		SDL_GPUGraphicsPipeline* terrainPipeline = nullptr;
-		SDL_GPUGraphicsPipeline* borderPipeline = nullptr;
 		SDL_GPUShader* borderVS = nullptr;
 		SDL_GPUShader* borderPS = nullptr;
 		SDL_GPUSampler* sampler = nullptr;
@@ -900,6 +897,7 @@ float4 PSWater(WaterOut i) : SV_Target
 		// The ring the game puts under the selected units (Art/Units/Selection Effect): its
 		// circle turning (the default clip) and its dots over it as the head unit can move
 		// (no dots, red, yellow, green: UnitView::moves + 1).
+		static constexpr Vec3 kEnemyGlow{ 0.74f, 0.28f, 0.16f }; // (the ring's colour under an enemy: the original's red)
 		struct SelectionRing
 		{
 			bool tried = false, ok = false;
@@ -980,11 +978,13 @@ float4 PSWater(WaterOut i) : SV_Target
 				return false;
 			for (const UnitView& u : map.units)
 			{
-				// (none under a stack while it fights, as in the original)
-				if (!u.selected || u.battle >= 0)
+				// (none under a stack while it fights, as in the original; and under an enemy in the active
+				// team's land, red and without dots: the enemy glow)
+				if ((!u.selected && !u.enemy) || u.battle >= 0)
 					continue;
+				const bool glow = !u.selected;
 				// (its dots: how the head unit can move)
-				if (const int d = std::clamp(u.moves + 1, 0, 3); d != ring.shown && ring.dots[d])
+				if (const int d = glow ? 0 : std::clamp(u.moves + 1, 0, 3); d != ring.shown && ring.dots[d])
 				{
 					ring.shown = d;
 					ring.player.setLayers({ *ring.dots[d] });
@@ -1004,7 +1004,12 @@ float4 PSWater(WaterOut i) : SV_Target
 					world[k] = place * local[k];
 				std::vector<scene::Material> materials;
 				for (const auto& item : ring.model.items)
+				{
 					materials.push_back(anim::animatedMaterial(item, pose));
+					if (glow)
+						for (nif::Color3* c : { &materials.back().diffuse, &materials.back().emissive, &materials.back().ambient })
+							c->r *= kEnemyGlow.x, c->g *= kEnemyGlow.y, c->b *= kEnemyGlow.z;
+				}
 				renderer.draw(*ring.gpu, world, ring.model.visibility(pose.hidden), materials, kDefaultTeamColor, true);
 			}
 			return true;
@@ -1106,10 +1111,33 @@ float4 PSWater(WaterOut i) : SV_Target
 
 		void createPipeline()
 		{
-			SDL_GPUDevice* dev = renderer.device();
 			const std::string source = std::string(kFrameConstantsHlsl) + kTerrainHlsl;
 			terrainVS = renderer.compile(source, "terrain.hlsl", "VSTerrain", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
 			terrainPS = renderer.compile(source, "terrain.hlsl", "PSTerrain", SDL_GPU_SHADERSTAGE_FRAGMENT, 7, 0, 2);
+			const std::string waterSource = std::string(kFrameConstantsHlsl) + kWaterHlsl;
+			waterVS = renderer.compile(waterSource, "water.hlsl", "VSWater", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
+			waterPS = renderer.compile(waterSource, "water.hlsl", "PSWater", SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 0, 2);
+			borderVS = renderer.compile(source, "terrain.hlsl", "VSBorder", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
+			borderPS = renderer.compile(source, "terrain.hlsl", "PSBorder", SDL_GPU_SHADERSTAGE_FRAGMENT, 7, 0, 2);
+			groundPipelinesFor(1);
+			makeTerrainSamplers();
+		}
+
+		// The ground's pipelines (the terrain, the water, the culture borders) for a pass of so many
+		// samples (anti-aliasing), made when first needed.
+		struct GroundPipelines
+		{
+			SDL_GPUGraphicsPipeline* terrain = nullptr;
+			SDL_GPUGraphicsPipeline* water = nullptr;
+			SDL_GPUGraphicsPipeline* border = nullptr;
+		};
+		std::map<uint32_t, GroundPipelines> groundPipelines;
+		const GroundPipelines& groundPipelinesFor(uint32_t samples)
+		{
+			if (const auto it = groundPipelines.find(samples); it != groundPipelines.end())
+				return it->second;
+			SDL_GPUDevice* dev = renderer.device();
+			GroundPipelines made;
 			SDL_GPUGraphicsPipelineCreateInfo ci{};
 			ci.vertex_shader = terrainVS;
 			ci.fragment_shader = terrainPS;
@@ -1130,30 +1158,15 @@ float4 PSWater(WaterOut i) : SV_Target
 			ci.target_info.num_color_targets = 1;
 			ci.target_info.depth_stencil_format = renderer.depthFormat();
 			ci.target_info.has_depth_stencil_target = true;
-			if (!(terrainPipeline = SDL_CreateGPUGraphicsPipeline(dev, &ci)))
+			ci.multisample_state.sample_count = Renderer::sampleCount(samples);
+			if (!(made.terrain = SDL_CreateGPUGraphicsPipeline(dev, &ci)))
 				throw std::runtime_error(std::string("terrain pipeline: ") + SDL_GetError());
-
-			SDL_GPUSamplerCreateInfo sd{};
-			sd.min_filter = sd.mag_filter = SDL_GPU_FILTER_LINEAR;
-			sd.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
-			sd.address_mode_u = sd.address_mode_v = sd.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-			sd.enable_anisotropy = true;
-			sd.max_anisotropy = 8;
-			sd.max_lod = 1000;
-			sampler = SDL_CreateGPUSampler(dev, &sd);
-			sd.address_mode_u = sd.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
-			detailWrap = SDL_CreateGPUSampler(dev, &sd);
-			if (!sampler || !detailWrap)
-				throw std::runtime_error(std::string("terrain samplers: ") + SDL_GetError());
 
 			// The water: blended over the ground at its alpha, not writing depth. (Water.fx writes it,
 			// but OpenCiv4's river beds dip below the water's level at the coast: the rivers' deltas
 			// would end in a hard edge where the sea starts instead of running out into it.) Drawn
 			// after the rivers' water (Renderer::drawGroundBlended), so a delta's water out at sea is
 			// seen through the sea's.
-			const std::string waterSource = std::string(kFrameConstantsHlsl) + kWaterHlsl;
-			waterVS = renderer.compile(waterSource, "water.hlsl", "VSWater", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
-			waterPS = renderer.compile(waterSource, "water.hlsl", "PSWater", SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 0, 2);
 			ci.vertex_shader = waterVS;
 			ci.fragment_shader = waterPS;
 			const SDL_GPUVertexBufferDescription wvbd{ 0, sizeof(WaterVertex), SDL_GPU_VERTEXINPUTRATE_VERTEX, 0 };
@@ -1169,23 +1182,45 @@ float4 PSWater(WaterOut i) : SV_Target
 			target.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
 			target.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
 			ci.depth_stencil_state.enable_depth_write = false;
-			if (!(waterPipeline = SDL_CreateGPUGraphicsPipeline(dev, &ci)))
+			if (!(made.water = SDL_CreateGPUGraphicsPipeline(dev, &ci)))
 				throw std::runtime_error(std::string("water pipeline: ") + SDL_GetError());
-			// (Water.fx's sampler: linear, mipmapped, no anisotropy; the texture repeats)
-			sd.enable_anisotropy = false;
-			sd.max_anisotropy = 1;
-			if (!(waterSampler = SDL_CreateGPUSampler(dev, &sd)))
-				throw std::runtime_error(std::string("water sampler: ") + SDL_GetError());
 
 			// The culture borders: the ground's mesh again, after the water, blended over what is
 			// drawn (as the water: not writing depth).
-			borderVS = renderer.compile(source, "terrain.hlsl", "VSBorder", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
-			borderPS = renderer.compile(source, "terrain.hlsl", "PSBorder", SDL_GPU_SHADERSTAGE_FRAGMENT, 7, 0, 2);
 			ci.vertex_shader = borderVS;
 			ci.fragment_shader = borderPS;
 			ci.vertex_input_state = { &vbd, 1, attributes, 2 };
-			if (!(borderPipeline = SDL_CreateGPUGraphicsPipeline(dev, &ci)))
+			if (!(made.border = SDL_CreateGPUGraphicsPipeline(dev, &ci)))
 				throw std::runtime_error(std::string("border pipeline: ") + SDL_GetError());
+			return groundPipelines[samples] = made;
+		}
+
+		// The ground's samplers, again when the renderer's lowest level changes (low resolution textures).
+		uint32_t terrainSamplerGeneration = ~0u;
+		void makeTerrainSamplers()
+		{
+			SDL_GPUDevice* dev = renderer.device();
+			for (SDL_GPUSampler* s : { sampler, detailWrap, waterSampler })
+				if (s)
+					SDL_ReleaseGPUSampler(dev, s);
+			SDL_GPUSamplerCreateInfo sd{};
+			sd.min_filter = sd.mag_filter = SDL_GPU_FILTER_LINEAR;
+			sd.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
+			sd.address_mode_u = sd.address_mode_v = sd.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+			sd.enable_anisotropy = true;
+			sd.max_anisotropy = 8;
+			sd.min_lod = renderer.minLod(); // (low resolution textures: from the half size level)
+			sd.max_lod = 1000;
+			sampler = SDL_CreateGPUSampler(dev, &sd);
+			sd.address_mode_u = sd.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+			detailWrap = SDL_CreateGPUSampler(dev, &sd);
+			// (Water.fx's sampler: linear, mipmapped, no anisotropy; the texture repeats)
+			sd.enable_anisotropy = false;
+			sd.max_anisotropy = 1;
+			waterSampler = SDL_CreateGPUSampler(dev, &sd);
+			if (!sampler || !detailWrap || !waterSampler)
+				throw std::runtime_error(std::string("terrain samplers: ") + SDL_GetError());
+			terrainSamplerGeneration = renderer.samplerGeneration();
 		}
 
 		// ------------------------------------------------------------ art
@@ -3686,6 +3721,8 @@ float4 PSWater(WaterOut i) : SV_Target
 				const Vec3 c{ worldW() / 2 + dx, worldH() / 2, 0 };
 				return frustum.sphere(c, length(Vec3{ worldW(), worldH(), 0 }) / 2 + map.peakScale * S());
 			};
+			if (terrainSamplerGeneration != renderer.samplerGeneration())
+				makeTerrainSamplers();
 			renderer.reserveSamplers(7);
 			SDL_GPURenderPass* pass = renderer.pass();
 			renderer.bindPipeline(pipeline);
@@ -3712,7 +3749,7 @@ float4 PSWater(WaterOut i) : SV_Target
 			if (!vb || !atlasTex || !plotTex || !detailTex || !decalTex || !cellTex || !borderTex || !borderArtTex)
 				return;
 			TerrainConstants tc = terrainConstants(options);
-			drawGround(frustum, terrainPipeline, tc);
+			drawGround(frustum, groundPipelinesFor(renderer.passSamples()).terrain, tc);
 		}
 
 		// The culture borders (Options::borders): over the ground above the water's level (pass
@@ -3723,7 +3760,7 @@ float4 PSWater(WaterOut i) : SV_Target
 				return;
 			TerrainConstants tc = terrainConstants(options);
 			tc.showBorders = part;
-			drawGround(frustum, borderPipeline, tc);
+			drawGround(frustum, groundPipelinesFor(renderer.passSamples()).border, tc);
 		}
 
 		void drawWater(const Frustum& frustum, const MapView::Options& options)
@@ -3757,7 +3794,7 @@ float4 PSWater(WaterOut i) : SV_Target
 				copies = { -worldW(), 0, worldW() };
 			renderer.reserveSamplers(2);
 			SDL_GPURenderPass* pass = renderer.pass();
-			renderer.bindPipeline(waterPipeline);
+			renderer.bindPipeline(groundPipelinesFor(renderer.passSamples()).water);
 			const SDL_GPUTextureSamplerBinding textures[2] = { { waterTex->texture, waterSampler }, { plotTex->texture, sampler } };
 			SDL_BindGPUFragmentSamplers(pass, 0, textures, 2);
 			const SDL_GPUBufferBinding vbb{ waterVb->buffer, 0 }, ibb{ waterIb->buffer, 0 };
@@ -4912,7 +4949,7 @@ float4 PSWater(WaterOut i) : SV_Target
 		m->renderer.drawGroundBlended();
 		m->drawWater(frustum, options);
 		m->drawBorders(frustum, options, 2);
-		if (options.cities)
+		if (options.cities && (options.globeBuildings || !m->renderer.globe()))
 			m->drawInstances(m->cities, frustum);
 		m->drawGroundCircles(frustum);
 		m->figureHits.clear();

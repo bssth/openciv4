@@ -2,9 +2,11 @@
 
 #include <SDL3/SDL_audio.h>
 #include <SDL3/SDL_init.h>
+#include <SDL3/SDL_stdinc.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <mutex>
@@ -32,6 +34,7 @@ namespace oc4::audio
 		std::unordered_map<Voice, Playing> voices;
 		Voice next = 1;
 		std::vector<float> mix;
+		std::atomic<bool> mono{ false }; // (the player's speakers: one, both sides the same)
 
 		static void route(Playing& p, float volume, float pan)
 		{
@@ -85,9 +88,29 @@ namespace oc4::audio
 				return;
 			d.mix.resize(size_t(frames) * 2);
 			d.render(d.mix.data(), frames);
+			if (d.mono)
+				for (int f = 0; f < frames; ++f)
+					d.mix[size_t(f) * 2] = d.mix[size_t(f) * 2 + 1] = (d.mix[size_t(f) * 2] + d.mix[size_t(f) * 2 + 1]) * 0.5f;
 			SDL_PutAudioStreamData(stream, d.mix.data(), frames * int(sizeof(float) * 2));
 		}
 	};
+
+	std::vector<std::string> deviceNames(bool recording)
+	{
+		std::vector<std::string> out;
+		if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
+			return out;
+		int count = 0;
+		if (SDL_AudioDeviceID* ids = recording ? SDL_GetAudioRecordingDevices(&count) : SDL_GetAudioPlaybackDevices(&count))
+		{
+			for (int i = 0; i < count; ++i)
+				if (const char* name = SDL_GetAudioDeviceName(ids[i]))
+					out.emplace_back(name);
+			SDL_free(ids);
+		}
+		SDL_QuitSubSystem(SDL_INIT_AUDIO);
+		return out;
+	}
 
 	Device::Device() : m(std::make_unique<Impl>())
 	{
@@ -122,6 +145,8 @@ namespace oc4::audio
 		if (m->stream)
 			SDL_SetAudioStreamGain(m->stream, std::max(0.0f, volume));
 	}
+
+	void Device::setMono(bool mono) { m->mono = mono; }
 
 	Device::Voice Device::play(std::shared_ptr<const Pcm> sound, float volume, float pan, float pitch, bool loop)
 	{
