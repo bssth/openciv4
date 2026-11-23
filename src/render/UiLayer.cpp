@@ -27,6 +27,8 @@ namespace oc4::render
 		}
 
 		constexpr Color kPanel{ 0.05f, 0.06f, 0.09f }, kEdge{ 0.78f, 0.64f, 0.36f }, kText{ 0.93f, 0.93f, 0.9f }, kHot{ 1, 0.9f, 0.6f };
+		constexpr Color kSetupPanel{ 0.075f, 0.115f, 0.17f }, kSetupField{ 0.11f, 0.17f, 0.235f },
+			kSetupHover{ 0.17f, 0.24f, 0.32f }, kSetupBorder{ 0.36f, 0.43f, 0.49f }, kSetupGold{ 0.83f, 0.70f, 0.46f };
 
 		// The built-in panel styles that draw nothing (PANEL_STYLE_EMPTY, PANEL_STYLE_EXTERNAL).
 		bool emptyPanel(const std::string& style)
@@ -371,6 +373,20 @@ namespace oc4::render
 			case Kind::Panel:
 				if (w <= 0 || h <= 0)
 					break;
+				if (it.style.starts_with("__setup"))
+				{
+					const bool backdrop = it.style == "__setupBackdrop";
+					const bool frame = it.style == "__setupPanel";
+					const bool human = it.style == "__setupHuman";
+					const Color colour = backdrop ? Color{ 0.035f, 0.06f, 0.095f } : human ? kSetupHover :
+						it.style == "__setupBand" ? kSetupField : it.style == "__setupStripe" ? Color{ 0.09f, 0.14f, 0.20f } : kSetupPanel;
+					o.rect(x0, y0, x1, y1, colour, backdrop ? 0.93f : 1.0f, frame ? 4 : 0);
+					if (frame)
+						o.frame(x0, y0, x1, y1, kSetupBorder, 0.85f, 4, 1);
+					if (human)
+						o.rect(x0, y0, x0 + 2, y1, kSetupGold, 1, 0);
+					break;
+				}
 				if (it.style == "__droplist")
 				{
 					// An open pull down's list: the theme's, or a dark box with a rim.
@@ -434,6 +450,31 @@ namespace oc4::render
 			case Kind::Dropdown:
 			case Kind::Edit:
 			{
+				if (it.style == "__setupField" || it.style == "__setupPrimary")
+				{
+					const bool primary = it.style == "__setupPrimary";
+					const bool dropdown = it.kind == Kind::Dropdown;
+					const bool button = it.kind == Kind::Button;
+					const Color fill = primary ? (hot ? kHot : kSetupGold) : hot ? kSetupHover : kSetupField;
+					o.rect(x0, y0, x1, y1, fill, alpha, 3);
+					o.frame(x0, y0, x1, y1, primary || hot ? kSetupGold : kSetupBorder, alpha, 3, 1);
+					const std::wstring text = widen(it.text);
+					const float size = m_sizes[2], ty = y0 + (h - o.richHeight(text, 4096, size, false)) / 2;
+					o.clip(x0 + 4, y0, x1 - (dropdown ? 23 : 4), y1);
+					if (primary)
+						o.setShadow({}, 0);
+					o.richText(text, button ? (x0 + x1) / 2 : x0 + 8, ty, size, primary,
+						primary ? kSetupPanel : kText, alpha, button ? Overlay::Align::Center : Overlay::Align::Left);
+					o.resetShadow();
+					o.unclip();
+					if (dropdown)
+					{
+						const float mid = y0 + h / 2;
+						o.line(x1 - 17, mid - 2, x1 - 13, mid + 2, kSetupGold, alpha, 1.5f);
+						o.line(x1 - 13, mid + 2, x1 - 9, mid - 2, kSetupGold, alpha, 1.5f);
+					}
+					break;
+				}
 				const bool themed = it.kind == Kind::Button && themedButton(o, it, int(i), hot, it.state);
 				// (a pull down in the theme's look: its box, and its button at the right)
 				const bool combo = it.kind == Kind::Dropdown && !m_comboBox[0].empty() && w > 30;
@@ -478,6 +519,17 @@ namespace oc4::render
 				break;
 			}
 			case Kind::CheckBox:
+				if (it.style == "__setupCheck")
+				{
+					o.rect(x0, y0, x1, y1, it.state ? kSetupGold : hot ? kSetupHover : kSetupField, alpha, 3);
+					o.frame(x0, y0, x1, y1, hot ? kSetupGold : kSetupBorder, alpha, 3, 1);
+					if (it.state)
+					{
+						o.line(x0 + w * 0.24f, y0 + h * 0.51f, x0 + w * 0.43f, y0 + h * 0.70f, kSetupPanel, alpha, 2);
+						o.line(x0 + w * 0.43f, y0 + h * 0.70f, x0 + w * 0.77f, y0 + h * 0.32f, kSetupPanel, alpha, 2);
+					}
+					break;
+				}
 				if (icon(it.texture, x0, y0, x1, y1, alpha))
 				{
 					if (it.state && !it.texture2.empty())
