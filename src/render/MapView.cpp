@@ -3364,8 +3364,9 @@ float4 PSWater(WaterOut i) : SV_Target
 					inst.anchor = center;
 					inst.offset = { ox * c - oy * s, ox * s + oy * c, 0 };
 					inst.yaw = yaw;
-					// The game draws a lone figure larger (SINGLE_UNIT_GFX_EXTRA_SCALE).
-					inst.scale = art.scale * (n == 1 ? 1.25f : 1.0f);
+					// The game draws a lone figure larger (SINGLE_UNIT_GFX_EXTRA_SCALE); not the last one
+					// alive of a hurt formation (Wine: as large as its fellows were).
+					inst.scale = art.scale * (u.formation == 1 ? 1.25f : 1.0f);
 					inst.center = center;
 					inst.radius = lm->bounds.radius() * inst.scale * 2.5f + spacing * float(columns);
 					inst.team = teamColor(u.shownOwner);

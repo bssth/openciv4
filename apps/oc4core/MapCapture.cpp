@@ -1391,6 +1391,12 @@ namespace oc4::host
 							art.push_back(d);
 					for (int k = int(art.size()); definitions > 0 && k < figures; ++k)
 						art.push_back(k % definitions);
+					// (a hurt unit shows only the figures still alive, CvUnit::getSubUnitsAlive: the
+					// original's swordsmen 3 at full health, 2 at 90-66%, 1 at 60% and below; in a
+					// battle all of them, the battle's rounds fell those dead before it and in it)
+					u.formation = figures;
+					if (u.battle < 0 && !art.empty())
+						art.resize(size_t(std::clamp(shown->getSubUnitsAlive(), 1, int(art.size()))));
 					for (const int d : art)
 						if (const CvArtInfoUnit* info = shown->getArtInfo(d, era))
 						{
@@ -1539,6 +1545,7 @@ namespace oc4::host
 					info->getShadowScale()));
 				s.models[size_t(u.models.back())].ranged = info->getActAsRanged();
 			}
+			u.formation = int(u.models.size());
 		}
 		return s;
 	}

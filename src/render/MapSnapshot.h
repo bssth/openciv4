@@ -165,7 +165,8 @@ namespace oc4::render
 		int direction = 4; // DirectionTypes the unit faces (south)
 		std::vector<MoveStep> moveSteps; // the plots it walked through since the last snapshot, in order
 		float moveSeconds = 0; // how long the walk through them takes (0: as long as their plots make it)
-		std::vector<int> models; // one per figure of the formation, into MapSnapshot::models
+		std::vector<int> models; // one per figure of the formation still alive, into MapSnapshot::models
+		int formation = 1;       // the formation's figures at full health
 		// More figures, into MapSnapshot::models (none: -1): the great general leading it (its era's
 		// warlord: beside the formation, it strikes with it and falls with its last), and, an
 		// attacker the game core gave a siege tower (walls, a city attack bonus), the tower before it.
