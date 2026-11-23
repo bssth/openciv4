@@ -1681,6 +1681,7 @@ namespace oc4::render
 			// (beyond the map: black as the ground not seen, until the team's map is centred)
 			renderer->beginFrame(camera, view->seenBounds() ? Vec3{ 0, 0, 0 } : Vec3{ 0.05f, 0.07f, 0.10f });
 			view->options.cityScreen = cityView;
+			view->options.yields = cityView || layers.yields;
 			view->draw();
 			renderer->endFrame();
 			syncHeads();
@@ -2057,11 +2058,11 @@ namespace oc4::render
 			return float(side);
 		}
 
-		// The game's layers over the plots near the camera: the yields (as many symbols as the
-		// plot gives, a row each), the resources' bubbles, the units' icons over their stacks.
+		// The game's layers over the plots near the camera: yields grouped into stacks by type,
+		// the resources' bubbles, and the units' icons over their stacks.
 		void drawLayers()
 		{
-			if (!layers.yields && !layers.resources && !layers.units)
+			if (!cityView && !layers.yields && !layers.resources && !layers.units)
 				return;
 			const auto& map = view->map();
 			// (the yields and unit icons only near the ground; the resources' bubbles at every height)
@@ -2099,26 +2100,40 @@ namespace oc4::render
 					if (layers.resources && !cityView && p.bonus >= 0 && size_t(p.bonus) < map.bonusButtons.size())
 						if (const ButtonArt::Icon* ic = art.icon(map.bonusButtons[size_t(p.bonus)]))
 							bubbles.push_back({ sx, sy, ic, bubbleSide(size_t(x) + size_t(y) * size_t(map.width), sx) });
-					if (low && layers.yields)
+					if (low && (cityView ? p.cityWorkable : layers.yields))
 					{
-						// (a row a yield, as many of its symbol as it gives: five and more as a number)
-						const float size = 11 * zoom;
-						float ry = sy - size * 0.5f * float(int(p.yields[0] > 0) + int(p.yields[1] > 0) + int(p.yields[2] > 0)) * 1.1f;
+						// (the original's plot symbols, CvPlot::getSymbolSize and updateSymbolDisplay: on
+						// the map 0.8 of their size and 0.6 opaque, a worked plot's 1.2 and 0.8; on the
+						// city's screen, its plots' (isShowCitySymbols) 1.2 and 0.8, a worked one's 1.6
+						// and opaque. They are drawn at a size on the ground: seen in Wine at zooms 0.15 to
+						// 0.45 and on the city's screen, a commerce coin is 0.105 of the plot's width on
+						// the screen times that size, so its icon 0.26.)
+						const float symbol = cityView ? (p.worked ? 1.6f : 1.2f) : (p.worked ? 1.2f : 0.8f);
+						const float alpha = cityView ? (p.worked ? 1.0f : 0.8f) : (p.worked ? 0.8f : 0.6f);
+						// (the next plot's centre may be off the screen; toScreen still gives its point
+						// unless it is behind the eye)
+						float ex = -1e9f, ey = -1e9f;
+						toScreen((float(x) + 1.5f) * plot(), (float(y) + 0.5f) * plot(), 0, ex, ey);
+						const float across = ex > -1e8f ? std::hypot(ex - sx, ey - sy) : 64 * zoom / 0.21f;
+						const float size = 0.26f * across * symbol, step = size * 0.7f;
+						const int stackSize = std::max(map.maxYieldStack, 1);
+						int groups = 0;
+						for (int k = 0; k < 3; ++k)
+							groups += (int(p.yields[k]) + stackSize - 1) / stackSize;
+						float gx = sx - step * float(groups - 1) / 2;
 						for (int k = 0; k < 3; ++k)
 						{
-							const int n = p.yields[k];
-							if (n <= 0 || yieldSymbols[size_t(k)].empty())
-								continue;
-							std::wstring row;
-							if (n >= 5)
-								row = std::to_wstring(n) + yieldSymbols[size_t(k)];
-							else
-								for (int i = 0; i < n; ++i)
-									row += yieldSymbols[size_t(k)];
-							// (in the yields' colours: the font's stand-ins have none of their own)
-							static const Color kYield[3] = { { 0.55f, 0.95f, 0.35f }, { 0.75f, 0.8f, 0.95f }, { 1, 0.85f, 0.2f } };
-							overlay->richText(row, sx, ry, size, true, kYield[k], 1, Overlay::Align::Center);
-							ry += size * 1.1f;
+							for (int left = p.yields[k]; left > 0; left -= stackSize, gx += step)
+							{
+								const int count = std::min(left, stackSize);
+								const auto& icons = map.yieldIcons[size_t(k)];
+								const ButtonArt::Icon* ic = size_t(count) <= icons.size() ? art.icon(icons[size_t(count - 1)]) : nullptr;
+								// (the symbols themselves are drawn in the scene, MapView::drawYieldSymbols)
+								if (!ic) // a mod without stack artwork: overlap its game-font symbols instead
+									for (int i = 0; i < count; ++i)
+										overlay->richText(yieldSymbols[size_t(k)], gx + (float(i) - float(count - 1) / 2) * size * 0.12f,
+											sy - size * 0.4f + float(i) * size * 0.1f, size * 0.65f, false, { 1, 1, 1 }, alpha, Overlay::Align::Center);
+							}
 						}
 					}
 				}

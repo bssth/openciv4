@@ -143,6 +143,8 @@ namespace oc4::render
 		int16_t terrain = -1, feature = -1, owner = -1;
 		int16_t improvement = -1, bonus = -1, route = -1; // (the resource as the active team knows it)
 		uint8_t yields[3]{}; // food, production, commerce (YieldTypes) of a plot the active team has seen
+		bool cityWorkable = false; // the selected city can work this plot
+		bool worked = false; // a citizen works it, as the active team sees (CvPlot::isVisibleWorked)
 		uint8_t featureVariety = 0;
 		bool water = false, hills = false, peak = false;
 		bool revealed = true, visible = true; // to the active team
@@ -278,6 +280,8 @@ namespace oc4::render
 		std::vector<FeatureArt> features; // by FeatureTypes
 		std::vector<int> improvements, bonuses; // by ImprovementTypes / BonusTypes: into models, -1 none
 		std::vector<std::string> bonusButtons;  // by BonusTypes: their button art (the resource layer's icons)
+		std::array<std::vector<std::string>, 3> yieldIcons; // each yield's stack textures, by count minus one
+		int maxYieldStack = 5;
 		std::vector<RouteArt> routes;
 		std::vector<RiverArt> rivers;
 		std::vector<ModelArt> models;      // referenced by units, cities, improvements and bonuses

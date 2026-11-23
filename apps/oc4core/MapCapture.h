@@ -78,6 +78,7 @@ namespace oc4::host
 		std::unordered_map<int, ShownYields> m_shownYields;
 		void shownYields(const class CvPlot& plot, int index, bool everything, int activeTeam, uint8_t (&yields)[3]);
 		void loadFlagScale();
+		void loadYieldArt();
 		void loadAttachables(render::MapSnapshot& s);
 	public:
 		// The cities with the Great Wall (their plots, the map's): the wall along their owners'

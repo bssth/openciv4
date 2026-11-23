@@ -1326,6 +1326,14 @@ float4 PSOverlay(Out p) : SV_Target
 			drawMesh(*d.mesh, m_deferredMaterials[d.material], m_deferredWorlds[d.world], d.teamColor, d.onGround, d.unitLight);
 	}
 
+	void Renderer::drawBlendedNow()
+	{
+		std::ranges::stable_sort(m_deferred, std::greater<>(), &Deferred::distance);
+		for (const auto& d : m_deferred)
+			drawMesh(*d.mesh, m_deferredMaterials[d.material], m_deferredWorlds[d.world], d.teamColor, d.onGround, d.unitLight);
+		m_deferred.clear();
+	}
+
 	void Renderer::endFrame()
 	{
 		// (the particles' vertices first, in one buffer: an upload ends the pass)

@@ -235,6 +235,9 @@ float distanceFog(float3 p)
 		// Draws now the blended items laid on the ground (rivers' water, roads) queued so far, back
 		// to front, so that what is drawn next (the sea's water) goes over them.
 		void drawGroundBlended();
+		// Everything blended drawn so far, now (farthest first), instead of at endFrame: what comes
+		// after it is drawn over it.
+		void drawBlendedNow();
 		// Draws models into a target of its own (made width x height), as a camera of its own
 		// sees them: viewProj is its view * projection (DirectXMath's row vectors, p * M), at eye;
 		// no ground, no fog. endView draws its blended items and goes back to the frame's own
