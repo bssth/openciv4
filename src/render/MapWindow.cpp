@@ -306,8 +306,7 @@ namespace oc4::render
 		// against the plot it looks at, 19 zoom levels, within 0.15 degrees): level at about
 		// CAMERA_LOWER_PITCH + 1.8 (29.8) up to 1.3 x CAMERA_MIN_DISTANCE (910), then easing in
 		// quadratically with the distance to straight down at 0.86 x CAMERA_SMALLEST_MAX_DISTANCE
-		// (6020). At the start distance (2200) that is 33.6 degrees above the ground; a straight
-		// line from 28 at 700 to 90 at 7000 gave 42.8, looking down far more steeply.
+		// (6020). At the start distance (2200) that is 33.6 degrees above the ground.
 		void updatePitch()
 		{
 			if (cityView)

@@ -2779,8 +2779,7 @@ float4 PSWater(WaterOut i) : SV_Target
 				return;
 			// A river piece's triangles where they lie on the map, and for each cell of a grid
 			// over them the triangles that reach into it (in their order): a point is tested
-			// against those only. (Every triangle for every point of every tree near a river
-			// took most of a second whenever an improvement or a road changed.)
+			// against those only.
 			struct RiverCells
 			{
 				std::vector<Vec3> corners; // (placed)
@@ -4984,6 +4983,7 @@ float4 PSWater(WaterOut i) : SV_Target
 	// production bars and what is being built where the active player may see them.
 	void MapView::drawOverlay(Overlay& overlay)
 	{
+		m->cityBars.clear();
 		if (!m->hasMap || !options.banners || !options.cities || options.cityScreen || m->renderer.globe())
 			return;
 		const float* vp = m->renderer.viewProjection();
@@ -5105,7 +5105,6 @@ float4 PSWater(WaterOut i) : SV_Target
 				}
 			return &out;
 		};
-		m->cityBars.clear();
 		for (const CityView& c : m->map.cities)
 		{
 			if (options.fog && !m->map.plots[size_t(c.x) + size_t(c.y) * size_t(m->map.width)].revealed)
