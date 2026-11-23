@@ -1681,6 +1681,7 @@ namespace oc4::render
 			// (beyond the map: black as the ground not seen, until the team's map is centred)
 			renderer->beginFrame(camera, view->seenBounds() ? Vec3{ 0, 0, 0 } : Vec3{ 0.05f, 0.07f, 0.10f });
 			view->options.cityScreen = cityView;
+			view->options.battleZoom = battleView;
 			view->draw();
 			renderer->endFrame();
 			syncHeads();

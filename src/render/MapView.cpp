@@ -4923,9 +4923,9 @@ float4 PSWater(WaterOut i) : SV_Target
 			// (the selection rings under the units: the figures on them cover them)
 			m->ringsDrawn = m->drawRings();
 			m->drawInstances(m->units, frustum, true);
-			if (options.flags)
+			if (options.flags && !options.battleZoom)
 				m->drawFlags(frustum);
-			if (options.flags && options.healthBars && m->renderer.camera().distance > m->map.cameraMinDistance + 0.5f &&
+			if (options.flags && !options.battleZoom && options.healthBars && m->renderer.camera().distance > m->map.cameraMinDistance + 0.5f &&
 				m->renderer.camera().distance < 22 * m->S())
 				m->drawHealthBars(frustum);
 		}
@@ -4999,7 +4999,8 @@ float4 PSWater(WaterOut i) : SV_Target
 			return x > -50 && x < W + 50 && y > -50 && y < H + 50;
 		};
 		// The units' flags: the visible owner's decal and colours, health, and stack count.
-		if (options.flags && options.units && distance < 22 && m->renderer.camera().distance > m->map.cameraMinDistance + 0.5f)
+		// (none while the camera is in close over a battle: Combat Zoom, as drawFlags)
+		if (options.flags && !options.battleZoom && options.units && distance < 22 && m->renderer.camera().distance > m->map.cameraMinDistance + 0.5f)
 			for (const UnitView& u : m->map.units)
 			{
 				const int plot = u.x + u.y * m->map.width;

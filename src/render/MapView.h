@@ -34,6 +34,10 @@ namespace oc4::render
 			// A city's screen is up: as the original, no units (nor their flags and health) and no
 			// city bars on the map; the cities, signs and plots stay.
 			bool cityScreen = false;
+			// The camera is in close over a battle (Combat Zoom): as the original, no unit's flag nor
+			// health bar anywhere on the map until it backs out (seen in Wine; without Combat Zoom
+			// only the fighters' plots lose theirs).
+			bool battleZoom = false;
 		};
 
 		MapView(Renderer& renderer, const AssetResolver& assets);
