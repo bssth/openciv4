@@ -61,6 +61,9 @@ namespace oc4::render
 		int m_cameraNode = -1;
 		float m_frustum[6]{ -0.5f, 0.5f, 0.5f, -0.5f, 1, 1000 }; // left, right, top, bottom, near, far
 		ViewLight m_light;
+		// The leader's own lights, for its parts drawn without its shader (fixed function).
+		std::vector<PointLight> m_fixedLights;
+		Vec3 m_fixedAmbient{};
 		bool m_logged = false;
 	};
 }

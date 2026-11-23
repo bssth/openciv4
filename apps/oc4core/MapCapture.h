@@ -9,6 +9,9 @@
 #include "render/MapWindow.h"
 #include "Interface.h"
 
+#include <array>
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -17,6 +20,18 @@
 
 namespace oc4::host
 {
+	// A player's flag as the engine draws it, on the map and by the minimap: the flag model of
+	// the player's era (ART_UNITGROUP_FLAG_ANCIENT, _MEDIEVAL from the medieval era, _MODERN
+	// from the industrial), the civilization's decal, the player's colours.
+	struct FlagArt
+	{
+		const class CvArtInfoMisc* model = nullptr;
+		std::string decal;
+		render::Color primary, secondary;
+		bool white = false; // a full-colour decal, its alpha no colour mask
+	};
+	FlagArt flagArt(int player);
+
 	class MapCapture
 	{
 	public:
@@ -46,6 +61,23 @@ namespace oc4::host
 		int modelIndex(const void* art, const char* nif, const char* kfm, float scale, const char* shadow = nullptr, const char* shadowNode = nullptr,
 			float shadowScale = 1);
 		void loadCityLSystem();
+		void loadPlotLSystem();
+		// improvement, worked: the ones shown there; owner: the plot's as the player knows it
+		int plotLayout(const class CvPlot& plot, int bonus, int improvement, bool worked, int owner);
+		// Whether an improvement gives its plot's resource to the trade network (it is drawn with the
+		// resource then, CvImprovementInfo::isImprovementBonusTrade, read once through Python).
+		bool improvementTradesBonus(int improvement, int bonus);
+		std::vector<int8_t> m_bonusTrade; // improvement x bonus; empty: not read yet
+		// A plot's yields as the player sees them (CvPlot::calculateYield's display form, through
+		// Python), by plot index: asked again when what they come from changes.
+		struct ShownYields
+		{
+			std::array<int, 8> from{};
+			std::array<uint8_t, 3> yields{};
+		};
+		std::unordered_map<int, ShownYields> m_shownYields;
+		void shownYields(const class CvPlot& plot, int index, bool everything, int activeTeam, uint8_t (&yields)[3]);
+		void loadFlagScale();
 		void loadAttachables(render::MapSnapshot& s);
 	public:
 		// The cities with the Great Wall (their plots, the map's): the wall along their owners'
@@ -68,6 +100,36 @@ namespace oc4::host
 		std::map<std::string, std::pair<std::string, std::string>> m_wallBuilders;
 		// Buildings of the LSystem's water and coast layouts, by LSystem name: their scale.
 		std::map<std::string, float> m_shoreBuildings;
+
+		// CIV4PlotLSystem.xml, as far as farms take from it: its nodes' art and its productions.
+		// Attributes ("Era", "Bonus", "Improvement") are lists; scalars ("NIF:...") name: value.
+		struct LAttributes
+		{
+			std::map<std::string, std::vector<std::string>> lists;
+			std::vector<std::pair<std::string, std::string>> scalars;
+			bool allows(const std::string& cls, const std::string& value, const char* all, const char* none) const;
+			std::string scalar(const std::string& name) const;
+		};
+		struct LArtRef : LAttributes
+		{
+			std::string name, nif, node, kfm;
+			float scale = 1, rotate = 0; // (degrees)
+		};
+		struct LProduction : LAttributes
+		{
+			std::string from, name;
+			struct To
+			{
+				std::string node;
+				float x = 0, y = 0, rotate = 0;
+			};
+			std::vector<To> to;
+		};
+		void layOutImprovement(const std::string& name, int improvement, std::vector<render::PlotPiece>& pieces,
+			const std::function<bool(const LAttributes&)>& fits, const std::function<uint32_t()>& next, bool worked);
+		std::map<std::string, std::vector<LArtRef>> m_plotNodes; // by LNode name: its art
+		std::vector<LProduction> m_plotProductions;
+		std::map<uint64_t, int> m_plotLayouts; // into the snapshot's plotLayouts
 
 		const AssetResolver& m_assets;
 		std::vector<LSystemHouse> m_lsystemHouses;

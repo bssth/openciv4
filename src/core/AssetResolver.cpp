@@ -199,4 +199,11 @@ namespace oc4
 			out.push_back(std::move(v));
 		return out;
 	}
+
+	std::vector<AssetLocation> AssetResolver::listByLayer(std::string_view extension) const
+	{
+		std::vector<AssetLocation> out = list(extension);
+		std::ranges::stable_sort(out, [](const AssetLocation& a, const AssetLocation& b) { return a.layer > b.layer; });
+		return out;
+	}
 }

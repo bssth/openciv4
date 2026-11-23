@@ -119,6 +119,18 @@ def _fresh(kind):
 	return _ctrls[kind]
 
 
+def reset():
+	"""The WorldBuilder opened or closed: its palettes, edit panel and flyout as new, their widgets
+	gone, so each opening starts as the first (the script's interfaceScreen adds the map
+	palette's tabs again each time it opens, which the executable's new control takes)."""
+	global _flyout
+	_clear(_screen())
+	for kind in ('player', 'map', 'advanced'):
+		_fresh(kind)
+	_fresh('edit').dead = True
+	_flyout = None
+
+
 # ---------------------------------------------------------------- the functions the script calls
 
 def initWBToolPlayerControl(): _fresh('player')
@@ -183,6 +195,14 @@ _flyout = None
 
 # ---------------------------------------------------------------- what a palette holds
 
+def _art(tag):
+	"""An interface art's file (CIV4ArtDefines_Interface), or '' (the item shows its name)."""
+	try:
+		return str(_cpe.CyArtFileMgr().getInterfaceArtInfo(tag).getPath())
+	except Exception:
+		return ''
+
+
 def _items(ctrl):
 	"""The active section's items: (list, index, button art, label, selected)."""
 	gc = _gc
@@ -198,8 +218,15 @@ def _items(ctrl):
 			for i in range(gc.getNumUnitInfos()):
 				out.append((0, i, gc.getUnitInfo(i).getButton(), gc.getUnitInfo(i).getDescription(), i == current))
 		elif tab == 1:
+			# (as the original's list: a city first, then the buildings, one on: the script
+			# places a city for 0 and building i - 1 for i)
+			try:
+				found = gc.getMissionInfo(_cpe.MissionTypes.MISSION_FOUND).getButton()
+			except Exception:
+				found = ''
+			out.append((0, 0, found, u'City', current == 0))
 			for i in range(gc.getNumBuildingInfos()):
-				out.append((0, i, gc.getBuildingInfo(i).getButton(), gc.getBuildingInfo(i).getDescription(), i == current))
+				out.append((0, i + 1, gc.getBuildingInfo(i).getButton(), gc.getBuildingInfo(i).getDescription(), i + 1 == current))
 		elif tab == 2:
 			try:
 				team = gc.getTeam(gc.getPlayer(wb.m_iCurrentPlayer).getTeam())
@@ -214,16 +241,24 @@ def _items(ctrl):
 			current, currentList = -1, -1
 		sel = lambda l, i: l == currentList and i == current
 		if tab == 0:
+			# (as the original's list: without the graphical only ones, which the script skips
+			# when it counts its way to the improvement placed)
+			k = 0
 			for i in range(gc.getNumImprovementInfos()):
-				out.append((0, i, gc.getImprovementInfo(i).getButton(), gc.getImprovementInfo(i).getDescription(), sel(0, i)))
+				info = gc.getImprovementInfo(i)
+				if not info.isGraphicalOnly():
+					out.append((0, k, info.getButton(), info.getDescription(), sel(0, k)))
+					k += 1
 		elif tab == 1:
 			for i in range(gc.getNumBonusInfos()):
 				out.append((0, i, gc.getBonusInfo(i).getButton(), gc.getBonusInfo(i).getDescription(), sel(0, i)))
 		elif tab == 2:
 			for i in range(gc.getNumTerrainInfos()):
 				out.append((0, i, gc.getTerrainInfo(i).getButton(), gc.getTerrainInfo(i).getDescription(), sel(0, i)))
-			for i, name in enumerate((u'Peak', u'Hills', u'Flat', u'Water')):
-				out.append((1, i, '', name, sel(1, i)))
+			# (the plot types and the river with the original's own buttons)
+			for i, (name, art) in enumerate(((u'Peak', 'WORLDBUILDER_PLOT_TYPE_MOUNTAIN'), (u'Hills', 'WORLDBUILDER_PLOT_TYPE_HILL'),
+					(u'Flat', 'WORLDBUILDER_PLOT_TYPE_PLAINS'), (u'Water', 'WORLDBUILDER_PLOT_TYPE_OCEAN'))):
+				out.append((1, i, _art(art), name, sel(1, i)))
 			k = 0
 			for i in range(gc.getNumFeatureInfos()):
 				info = gc.getFeatureInfo(i)
@@ -232,7 +267,7 @@ def _items(ctrl):
 					k += 1
 			for i in range(gc.getNumRouteInfos()):
 				out.append((3, i, gc.getRouteInfo(i).getButton(), gc.getRouteInfo(i).getDescription(), sel(3, i)))
-			out.append((3, gc.getNumRouteInfos(), '', u'River', sel(3, gc.getNumRouteInfos())))
+			out.append((3, gc.getNumRouteInfos(), _art('WORLDBUILDER_RIVER_PLACEMENT'), u'River', sel(3, gc.getNumRouteInfos())))
 		elif tab == 3:
 			for i in range(gc.getMAX_CIV_PLAYERS()):
 				p = gc.getPlayer(i)

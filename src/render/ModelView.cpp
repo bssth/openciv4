@@ -24,7 +24,7 @@ namespace oc4::render
 	}
 
 	ModelView::ModelView(Renderer& renderer, const AssetResolver& assets, const std::string& nif, const std::string& kfm, float xRotation,
-		float zRotation, float scale, bool animate, const std::string& layers)
+		float zRotation, float scale, bool animate, const std::string& layers, const GpuImage* decal)
 		: m_renderer(renderer), m_xRotation(xRotation), m_zRotation(zRotation), m_scale(scale > 0 ? scale : 1), m_animate(animate)
 	{
 		try
@@ -127,7 +127,7 @@ namespace oc4::render
 							break;
 						}
 			m_particles = Particles(m_model, 7);
-			m_gpu = renderer.upload(m_model, assets, *at);
+			m_gpu = renderer.upload(m_model, assets, *at, decal);
 		}
 		catch (const std::exception&)
 		{
@@ -238,6 +238,32 @@ namespace oc4::render
 			return m_renderer.targetImage(m_target);
 		}
 		const Bounds& b = m_frame;
+		if (m_flag && !b.empty())
+		{
+			// (the original's banner, measured in Wine at 1600x900: the cloth's top 32 px below
+			// the 250 px picture's top, the cloth 78 px high, the pole in the middle; the pole
+			// stands 160 units, so 1.06 of the model's height fills the picture, centred 0.53 of it up)
+			const float tall = std::max(b.max.z - b.min.z, 1.0f), span = tall * 1.06f;
+			const float fov = 0.5f, aspect = float(width) / float(height);
+			const Vec3 centre{ 0, (b.min.y + b.max.y) * 0.5f, b.min.z + tall * 0.53f };
+			const float distance = span * 0.5f / std::tan(fov / 2);
+			const Vec3 eye = centre + Vec3{ 0, -distance, 0 };
+			const float depth = std::max({ b.max.y - b.min.y, b.max.x - b.min.x, tall });
+			const XMMATRIX view = XMMatrixLookAtRH(XMVectorSet(eye.x, eye.y, eye.z, 1), XMVectorSet(centre.x, centre.y, centre.z, 1), XMVectorSet(0, 0, 1, 0));
+			const XMMATRIX proj = XMMatrixPerspectiveFovRH(fov, aspect, std::max(distance - depth, distance * 0.01f), distance + depth);
+			XMFLOAT4X4 m;
+			XMStoreFloat4x4(&m, view * proj);
+			ViewLight light;
+			light.direction = normalize(Vec3{ 0.35f, 1.2f, -0.6f });
+			m_renderer.beginView(m_target, width, height, std::span<const float, 16>(&m._11, 16), eye, light, { 0, 0, 0 }, 0.0f, true);
+			std::vector<scene::Material> materials;
+			materials.reserve(m_model.items.size());
+			for (const auto& item : m_model.items)
+				materials.push_back(anim::animatedMaterial(item, pose));
+			m_renderer.draw(*m_gpu, world, m_model.visibility(pose.hidden), materials);
+			m_renderer.endView();
+			return m_renderer.targetImage(m_target);
+		}
 		const Vec3 centre = b.empty() ? Vec3{} : (b.min + b.max) * 0.5f;
 		const float radius = b.empty() ? 50.0f : std::max(length(b.max - b.min) * 0.5f, 1.0f);
 		const float fov = 0.5f, aspect = float(width) / float(height);

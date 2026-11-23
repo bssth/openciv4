@@ -164,14 +164,69 @@ for _i, _name in enumerate(['ESCAPE'] + [str(d) for d in range(10)] + ['MINUS'] 
 for _name in ['CyAudioGame', 'CyCamera', 'CyEngine', 'CyGFlyoutMenu', 'CyGInterfaceScreen', 'CyGTabCtrl', 'CyGlobeLayerManager',
 		'CyInterface', 'CyInterfaceScreen', 'CyPopup', 'CyPopupInfo', 'CyUnitEntity']:
 	globals()[_name] = type(_name, (_Stub,), {'_silent': True})
-for _name in ['CyDiplomacy', 'CyMessageControl', 'CyPitboss', 'CyStatistics', 'CyUserProfile', 'CyVariableSystem', 'CyGet']:
+for _name in ['CyDiplomacy', 'CyMessageControl', 'CyPitboss', 'CyUserProfile', 'CyVariableSystem', 'CyGet']:
 	globals()[_name] = type(_name, (_Stub,), {})
+
+
+class CyStatistics(object):
+	"""A player's game statistics as the game core records them from its events (CvStatistics, saved
+	with the game): units built, killed and lost by type, buildings built, cities built and razed,
+	religions founded, golden ages. Players never alive have none (asking would make a record)."""
+
+	def _get(self, iPlayer, index):
+		"""Value number index of the game core's report (oc4host.player_statistics): 0 victory, 1 time
+		played, 2 leader, 3 cities built, 4 razed, 5 golden ages, then built, killed, lost for each
+		unit, built for each building, founded for each religion."""
+		gc = _cpe.CyGlobalContext()
+		iPlayer = int(iPlayer)
+		if index < 0 or iPlayer < 0 or iPlayer >= gc.getMAX_PLAYERS() or not gc.getPlayer(iPlayer).isEverAlive():
+			return 0
+		values = oc4host.player_statistics(iPlayer)
+		if len(values) != 6 + 3 * gc.getNumUnitInfos() + gc.getNumBuildingInfos() + gc.getNumReligionInfos():
+			return 0
+		return values[index] if index < len(values) else 0
+
+	def _unit(self, iUnit, offset):
+		return 6 + 3 * int(iUnit) + offset if 0 <= int(iUnit) < _cpe.CyGlobalContext().getNumUnitInfos() else -1
+
+	def getPlayerNumUnitsBuilt(self, iPlayer, iUnit):
+		return self._get(iPlayer, self._unit(iUnit, 0))
+
+	def getPlayerNumUnitsKilled(self, iPlayer, iUnit):
+		return self._get(iPlayer, self._unit(iUnit, 1))
+
+	def getPlayerNumUnitsLost(self, iPlayer, iUnit):
+		return self._get(iPlayer, self._unit(iUnit, 2))
+
+	def getPlayerNumBuildingsBuilt(self, iPlayer, iBuilding):
+		gc = _cpe.CyGlobalContext()
+		if not 0 <= int(iBuilding) < gc.getNumBuildingInfos():
+			return 0
+		return self._get(iPlayer, 6 + 3 * gc.getNumUnitInfos() + int(iBuilding))
+
+	def getPlayerNumCitiesBuilt(self, iPlayer):
+		return self._get(iPlayer, 3)
+
+	def getPlayerNumCitiesRazed(self, iPlayer):
+		return self._get(iPlayer, 4)
+
+	def getPlayerNumGoldenAges(self, iPlayer):
+		return self._get(iPlayer, 5)
+
+	def getPlayerReligionFounded(self, iPlayer, iReligion):
+		gc = _cpe.CyGlobalContext()
+		if not 0 <= int(iReligion) < gc.getNumReligionInfos():
+			return False
+		return self._get(iPlayer, 6 + 3 * gc.getNumUnitInfos() + gc.getNumBuildingInfos() + int(iReligion)) != 0
+
+	def getPlayerTimePlayed(self, iPlayer):
+		return self._get(iPlayer, 1)
 
 # No tech splash popups without a screen.
 CyInterface.noTechSplash = lambda self: True
 
 
-for _name in ['true', 'false', 'NiTextOut', 'CyPythonMgr', 'CyTranslator', 'NotifyCode', 'MouseFlags', 'InputTypes'] +[n for n, v in globals().items() if isinstance(v, type) and issubclass(v, _Stub) and v is not _Stub]:
+for _name in ['true', 'false', 'NiTextOut', 'CyPythonMgr', 'CyStatistics', 'CyTranslator', 'NotifyCode', 'MouseFlags', 'InputTypes'] +[n for n, v in globals().items() if isinstance(v, type) and issubclass(v, _Stub) and v is not _Stub]:
 	if not hasattr(_cpe, _name):
 		setattr(_cpe, _name, globals()[_name])
 

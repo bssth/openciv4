@@ -40,6 +40,7 @@ namespace oc4::host
 		{
 			m_selection.clear();
 			selectionChanged();
+			leaveInterfaceMode();
 		}
 		void insertIntoSelectionList(CvUnit* pUnit, bool bClear, bool bToggle, bool bGroup, bool bSound, bool bMinimalChange) override;
 		CLLNode<IDInfo>* deleteSelectionListNode(CLLNode<IDInfo>* pNode) override { return m_selection.deleteNode(pNode); }
@@ -69,6 +70,16 @@ namespace oc4::host
 		// Where the DLL asked the camera to go (lookAtSelectionPlot, lookAtCityOffset), for the
 		// window; -1 none.
 		int lookAtX = -1, lookAtY = -1;
+		// The same for a point between plots (lookAt with a point of the map: a battle's, half way
+		// from the attacker's plot to the defender's), in plots (10.5 the middle of the plot 10).
+		float lookAtPointX = -1, lookAtPointY = -1;
+		// ... and with the original's Combat Zoom (CAMERALOOKAT_BATTLE_ZOOM_IN: the active player's attack,
+		// No Combat Zoom off): close in, turned towards the attack (its east-west share); then let go
+		// at the battle's end (releaseLockedCamera).
+		bool lookAtBattleZoom = false;
+		float lookAtBattleDirX = 0;
+		bool releaseCamera = false;
+		void releaseLockedCamera() override { releaseCamera = true; }
 		bool isSelected(const CvUnit* pUnit) const { return selected(pUnit); }
 		void lookAtCityOffset(int iCity) override;
 
@@ -77,8 +88,21 @@ namespace oc4::host
 		// to, air strike, ...: the host takes the click).
 		bool canHandleAction(int iAction, CvPlot* pPlot, bool bTestVisible) override;
 		bool canDoInterfaceMode(InterfaceModeTypes eInterfaceMode, CvSelectionGroup* pSelectionGroup) override;
-		void setInterfaceMode(InterfaceModeTypes eNewValue) override { m_interfaceMode = eNewValue; }
+		// (the action buttons again: the main interface shows none in a mode that picks a plot, Route To, Go To, ...)
+		void setInterfaceMode(InterfaceModeTypes eNewValue) override
+		{
+			if (std::exchange(m_interfaceMode, eNewValue) != eNewValue)
+				m_dirty[SelectionButtons_DIRTY_BIT] = true;
+		}
 		InterfaceModeTypes getInterfaceMode() override { return m_interfaceMode; }
+		// The selection changed (a unit selected, even the same one again, one let go, the list
+		// cleared, a city selected): out of the interface mode, as the original's Go To, Route To,
+		// Ping, ... end when W selects the next unit or the unit bar another.
+		void leaveInterfaceMode()
+		{
+			if (m_interfaceMode != INTERFACEMODE_SELECTION)
+				setInterfaceMode(INTERFACEMODE_SELECTION);
+		}
 
 		// Popups as the original's interface runs them: the DLL queues them (addPopup, or the
 		// player's own list the host pulls with CvPlayer::popFrontPopup); the next one is launched
@@ -215,6 +239,14 @@ namespace oc4::host
 		bool updateCursorType() override { return false; }
 		bool isFocusedWidget() override { return false; }
 		bool isFocused() override { return false; }
+		// A battle the active player's unit fights (or one it is attacked in) has the camera's focus:
+		// CvUnit::setCombatUnit tells it so, and only then the game core looks at the battle
+		// (CvInterface::lookAt with CAMERALOOKAT_BATTLE(_ZOOM_IN)) and lets go of it at the end
+		// (releaseLockedCamera).
+		bool isCombatFocus() override { return m_combatFocus; }
+		void setCombatFocus(bool bNewValue) override;
+		// The active player's unit that attacked last (it had the focus: quick combat too), once.
+		std::optional<IDInfo> takeFocusAttacker() { return std::exchange(m_focusAttacker, std::nullopt); }
 		bool isScoresVisible() override { return false; }
 		// The tech splash (the scripts' CvTechSplashScreen, with the tech's quote): only with the
 		// game's screens up (Screens::start); without them the game core plays the short sound instead.
@@ -337,6 +369,8 @@ namespace oc4::host
 		CvUnit* m_lastSelected = nullptr;
 		bool m_endTurnMessage = false, m_hasMovedUnit = false, m_forcePopup = false;
 		int m_endTurnCounter = 0, m_cycleSelectionCounter = 0;
+		bool m_combatFocus = false;
+		std::optional<IDInfo> m_focusAttacker;
 
 		Popup* popupOf(CvPopup* pPopup) { return reinterpret_cast<Popup*>(pPopup); }
 		void closePopup();
@@ -373,9 +407,28 @@ namespace oc4::host
 		void createUnitEntity(CvUnit* pUnit) override;
 		void destroyEntity(CvEntity*& pEntity, bool) override;
 		bool IsSelected(const CvEntity* pEntity) const override;
+		// The plots a unit walked through, as the original engine is told them: the DLL moves a
+		// unit plot by plot (CvUnit::setXY, which tells its entity each new plot: updateEnemyGlow
+		// here, QueueMove with graphics up) and ends the order's moves with ExecuteMove. A whole
+		// Go To this turn happens in one game update, so the snapshots alone see only its end.
+		struct Movement
+		{
+			IDInfo unit;
+			std::vector<std::pair<int, int>> plots; // those since it was last shown, in order
+			float seconds = 0; // how long the original takes to walk them (0: not told)
+		};
+		void updateEnemyGlow(CvUnitEntity* pEntity) override;
+		void ExecuteMove(CvUnitEntity* pEntity, float fTimeToExecute, bool bCombat) override;
+		// (taken: the plots of the unit's walk the snapshot has not shown yet; x, y where it is)
+		static std::optional<Movement> movement(const IDInfo& unit, int x, int y);
 		// The mission a unit's entity is told it does (fortify, sleep, ..., idle): how the
 		// original engine knows which animation the unit plays.
 		void NotifyEntity(CvUnitEntity* pEntity, MissionTypes eMission) override;
+		// The siege tower an attacker on a city with walls shows while it fights (CvUnit::setCombatUnit);
+		// planBattle gives a battle with one longer.
+		void SetSiegeTower(CvUnitEntity* pEntity, bool show) override;
+		bool GetSiegeTower(CvUnitEntity* pEntity) override;
+		static bool siegeTower(const CvUnit& unit); // (any thread)
 
 		// Whether a unit rests (fortified, asleep, on sentry, healing): told so last and
 		// still waiting; one never told (in a loaded game) when it is waiting.
@@ -395,8 +448,12 @@ namespace oc4::host
 				int killed[2]{}, alive[2]{};
 			};
 			std::vector<Round> rounds;
+			int firstStrikes[2]{}; // attacker, defender: the first strikes it had (CvBattleDefinition; ranged units only)
 			int slices = 0; // the game updates it lasts (CvUnit::planBattle's turns)
 			int collateral = 0; // the other units on the defender's plot the attacker's collateral damage hit
+			// A unit that cannot defend gives itself up (MISSION_SURRENDER: a worker or a settler alone,
+			// captured or killed): no rounds; the attacker steps up, it surrenders and fades out.
+			bool surrender = false;
 			std::chrono::steady_clock::time_point start;
 		};
 		static std::vector<Battle> battles(); // those still on (any thread)

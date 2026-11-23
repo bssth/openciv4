@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <map>
 #include <mutex>
+#include <set>
 
 #include <pybind11/pybind11.h>
 namespace py = pybind11;
@@ -295,13 +296,21 @@ namespace oc4::host
 	{
 		if (bSound && (bClear || m_selection.getLength() == 0)) // (once for a group, inserted unit by unit)
 			unitSound(pUnit, false);
+		bool changed = bClear && m_selection.getLength() > 0;
 		if (bClear)
 			m_selection.clear();
 		if (!pUnit)
+		{
+			if (changed)
+				leaveInterfaceMode();
 			return;
+		}
 		const auto insert = [&](CvUnit* u) {
 			if (!selected(u))
+			{
 				m_selection.insertAtEnd(u->getIDInfo());
+				changed = true;
+			}
 			else if (bToggle)
 				removeFromSelectionList(u);
 		};
@@ -316,6 +325,8 @@ namespace oc4::host
 			insert(pUnit);
 		m_lastSelected = pUnit;
 		selectionChanged();
+		if (changed)
+			leaveInterfaceMode();
 	}
 
 	// The game decides: a unit of another group brings its whole group, alt and ctrl the units on the plot that can still move.
@@ -333,6 +344,8 @@ namespace oc4::host
 
 	void Interface::selectAll(CvPlot* pPlot)
 	{
+		if (m_selection.getLength() > 0)
+			leaveInterfaceMode();
 		m_selection.clear();
 		for (int i = 0; pPlot && i < pPlot->getNumUnits(); ++i)
 			if (CvUnit* u = pPlot->getUnitByIndex(i); u && u->getOwner() == GC.getGame().getActivePlayer())
@@ -346,6 +359,7 @@ namespace oc4::host
 			{
 				m_selection.deleteNode(n);
 				selectionChanged();
+				leaveInterfaceMode();
 				return true;
 			}
 		return false;
@@ -388,10 +402,82 @@ namespace oc4::host
 
 	std::unordered_map<const void*, MissionTypes> Entities::s_missions;
 
+	namespace
+	{
+		std::mutex g_movementMutex;
+		std::unordered_map<uint64_t, Entities::Movement> g_movements;
+
+		uint64_t movementKey(const IDInfo& unit)
+		{
+			return uint64_t(uint32_t(unit.eOwner)) << 32 | uint32_t(unit.iID);
+		}
+	}
+
 	void Entities::destroyEntity(CvEntity*& pEntity, bool)
 	{
 		s_missions.erase(pEntity);
+		{
+			std::lock_guard lock(g_movementMutex);
+			if (const auto* unit = reinterpret_cast<const CvUnit*>(pEntity))
+				g_movements.erase(movementKey(unit->getIDInfo()));
+		}
 		pEntity = nullptr;
+	}
+
+	void Entities::updateEnemyGlow(CvUnitEntity* pEntity)
+	{
+		// (CvUnit::setXY's, once the unit is on its new plot; the game's and the player's own,
+		// for every unit when a war starts or ends: no new plot then)
+		const auto* unit = reinterpret_cast<const CvUnit*>(pEntity);
+		if (!unit || unit->getOwner() < 0 || unit->getID() < 0 || unit->getX() < 0)
+			return;
+		const std::pair at{ unit->getX(), unit->getY() };
+		std::lock_guard lock(g_movementMutex);
+		Movement& m = g_movements[movementKey(unit->getIDInfo())];
+		if (m.unit.eOwner < 0)
+			m.unit = unit->getIDInfo();
+		if (m.plots.empty() || m.plots.back() != at)
+			m.plots.push_back(at);
+		// (only the last few: a unit no snapshot shows, in a stack or out of sight, keeps no more)
+		if (m.plots.size() > 32)
+			m.plots.erase(m.plots.begin(), m.plots.end() - 32);
+	}
+
+	void Entities::ExecuteMove(CvUnitEntity* pEntity, float, bool bCombat)
+	{
+		// CvSelectionGroup::groupMove's, once the group's moves this update are done: the original
+		// engine walks the plots queued since in a second (the DLL asks for MISSION_MOVE_TO's 4
+		// turn slices), half that for a human player's units with Quick Moves (Wine film,
+		// testgames/shots/walk).
+		const auto* unit = reinterpret_cast<const CvUnit*>(pEntity);
+		if (!unit || bCombat || unit->getOwner() < 0)
+			return;
+		const CvPlayer& owner = CvPlayerAI::getPlayerNonInl(unit->getOwner()); // (exported: GET_PLAYER inlines a static the Windows DLL does not export)
+		const float seconds = owner.isHuman() && owner.isOption(PLAYEROPTION_QUICK_MOVES) ? 0.5f : 1.0f;
+		std::lock_guard lock(g_movementMutex);
+		if (const auto it = g_movements.find(movementKey(unit->getIDInfo())); it != g_movements.end())
+			it->second.seconds = seconds;
+	}
+
+	std::optional<Entities::Movement> Entities::movement(const IDInfo& unit, int x, int y)
+	{
+		std::lock_guard lock(g_movementMutex);
+		const auto it = g_movements.find(movementKey(unit));
+		if (it == g_movements.end())
+			return std::nullopt;
+		// The walk up to the plot it is shown on (all of it, but for a plot it came back to).
+		const auto reached = std::ranges::find(it->second.plots.rbegin(), it->second.plots.rend(), std::pair{ x, y });
+		if (reached == it->second.plots.rend())
+		{
+			it->second.plots.clear();
+			return std::nullopt;
+		}
+		Movement out = it->second;
+		out.plots.resize(size_t(std::distance(reached, it->second.plots.rend())));
+		it->second.plots.erase(it->second.plots.begin(), it->second.plots.begin() + std::ptrdiff_t(out.plots.size()) - 1);
+		it->second.seconds = 0;
+		// (the plot it is on stays: where the next walk starts)
+		return out;
 	}
 
 	namespace
@@ -422,7 +508,13 @@ namespace oc4::host
 		m_dirty.set();
 		try
 		{
+			// (the tool palettes start afresh each time, as the executable makes them anew)
+			auto wb = py::module_::import("oc4wb");
+			if (bTurnOn)
+				wb.attr("reset")();
 			py::module_::import("CvScreensInterface").attr(bTurnOn ? "showWorldBuilderScreen" : "hideWorldBuilderScreen")();
+			if (!bTurnOn)
+				wb.attr("reset")();
 		}
 		catch (py::error_already_set& e)
 		{
@@ -431,6 +523,35 @@ namespace oc4::host
 	}
 
 	CvPlot* Interface::getMouseOverPlot() { return mouseX >= 0 ? GC.getMap().plot(mouseX, mouseY) : nullptr; }
+
+	namespace
+	{
+		std::mutex g_siegeMutex;
+		std::set<std::pair<int, int>> g_siegeTowers; // owner, unit id
+	}
+
+	void Entities::SetSiegeTower(CvUnitEntity* pEntity, bool show)
+	{
+		if (!pEntity)
+			return;
+		const CvUnit& unit = *reinterpret_cast<const CvUnit*>(pEntity);
+		std::lock_guard lock(g_siegeMutex);
+		if (show)
+			g_siegeTowers.insert({ unit.getOwner(), unit.getID() });
+		else
+			g_siegeTowers.erase({ unit.getOwner(), unit.getID() });
+	}
+
+	bool Entities::GetSiegeTower(CvUnitEntity* pEntity)
+	{
+		return pEntity && siegeTower(*reinterpret_cast<const CvUnit*>(pEntity));
+	}
+
+	bool Entities::siegeTower(const CvUnit& unit)
+	{
+		std::lock_guard lock(g_siegeMutex);
+		return g_siegeTowers.contains({ unit.getOwner(), unit.getID() });
+	}
 
 	void Entities::NotifyEntity(CvUnitEntity* pEntity, MissionTypes eMission)
 	{
@@ -504,6 +625,27 @@ namespace oc4::host
 	{
 		if (!pDefinition)
 			return;
+		if (pDefinition->getMissionType() == MISSION_SURRENDER)
+		{
+			// (CvUnit::updateCombat: its mission time is the combat timer before the surrender's is set,
+			// so the length is the mission's own, MISSION_SURRENDER's iTime: 10 updates, 2.5 s in Wine)
+			const CvUnit* attacker = pDefinition->getUnit(BATTLE_UNIT_ATTACKER);
+			const CvUnit* defender = pDefinition->getUnit(BATTLE_UNIT_DEFENDER);
+			if (!attacker || !defender)
+				return;
+			Battle b;
+			b.attacker = attacker->getIDInfo(), b.defender = defender->getIDInfo();
+			b.attackerX = attacker->getX(), b.attackerY = attacker->getY(), b.defenderX = defender->getX(), b.defenderY = defender->getY();
+			b.surrender = true;
+			b.slices = std::max(1, GC.getMissionInfo(MISSION_SURRENDER).getTime());
+			b.start = std::chrono::steady_clock::now();
+			std::lock_guard lock(g_battleMutex);
+			b.serial = ++g_battleSerial;
+			g_battles.push_back(std::move(b));
+			if (std::getenv("OC4_PLAY_LOG"))
+				std::printf("  surrender %llu: %d slices\n", static_cast<unsigned long long>(g_battleSerial), g_battles.back().slices);
+			return;
+		}
 		if (const MissionTypes m = pDefinition->getMissionType(); m != MISSION_BEGIN_COMBAT)
 		{
 			// (the missions the units act out)
@@ -528,7 +670,21 @@ namespace oc4::host
 			a.start = std::chrono::steady_clock::now();
 			if (std::getenv("OC4_PLAY_LOG"))
 				std::printf("  action %d of unit %d: %.2fs at %d,%d%s%s\n", a.mission, a.unit.iID, a.seconds, a.targetX, a.targetY, a.effect.empty() ? "" : ", ", a.effect.c_str());
+			// (a plane intercepted: the interceptor shoots at it over the plot it flies to, a SAM its
+			// missile; a plane flies there as to a strike)
+			const CvUnit* interceptor = (m == MISSION_AIRSTRIKE || m == MISSION_PARADROP) ? pDefinition->getUnit(BATTLE_UNIT_DEFENDER) : nullptr;
 			std::lock_guard lock(g_actionMutex);
+			if (interceptor && interceptor != unit)
+			{
+				a.mission = 5; // (it is shot at on its way: it strikes nothing)
+				Action i = a;
+				i.unit = interceptor->getIDInfo();
+				i.mission = interceptor->getDomainType() == DOMAIN_AIR ? 6 : 4;
+				i.effect.clear();
+				if (std::getenv("OC4_PLAY_LOG"))
+					std::printf("  intercepted by unit %d (%s)\n", i.unit.iID, i.mission == 4 ? "from the ground" : "in the air");
+				g_actions.push_back(std::move(i));
+			}
 			g_actions.push_back(std::move(a));
 			return;
 		}
@@ -562,6 +718,8 @@ namespace oc4::host
 				round.alive[side] = r.getNumAlive(BattleUnitTypes(side));
 			}
 		}
+		for (int side = 0; side < BATTLE_UNIT_COUNT; ++side)
+			b.firstStrikes[side] = def.getFirstStrikes(BattleUnitTypes(side));
 		// (its length in the DLL's updates: the combat timer it set, as the mission time says at
 		// Utility::getSecsPerTurn's 1 second a turn)
 		b.slices = std::max(1, int(std::lround(def.getMissionTime() / 1.0f)));
@@ -570,8 +728,8 @@ namespace oc4::host
 		b.serial = ++g_battleSerial;
 		g_battles.push_back(std::move(b));
 		if (std::getenv("OC4_PLAY_LOG"))
-			std::printf("  battle %llu: %zu rounds, %d slices\n", static_cast<unsigned long long>(g_battleSerial), g_battles.back().rounds.size(),
-				g_battles.back().slices);
+			std::printf("  battle %llu: %zu rounds (%d ranged), %d slices, first strikes %d/%d\n", static_cast<unsigned long long>(g_battleSerial),
+				g_battles.back().rounds.size(), def.getNumRangedRounds(), g_battles.back().slices, g_battles.back().firstStrikes[0], g_battles.back().firstStrikes[1]);
 	}
 
 	std::vector<Entities::Battle> Entities::battles()
@@ -633,8 +791,11 @@ namespace oc4::host
 					c->updateSelectedCity(true);
 			m_citiesShown.clear();
 		}
+		// (the coloured plots too: the city's worked plots are circled only while its screen is up,
+		// and the city may have been selected already, by the first click of a double click on its
+		// bar, so the selection alone does not say they changed)
 		if (isCityScreenUp() != wasUp)
-			for (const InterfaceDirtyBits bit : { PercentButtons_DIRTY_BIT, ResearchButtons_DIRTY_BIT, GameData_DIRTY_BIT, Score_DIRTY_BIT })
+			for (const InterfaceDirtyBits bit : { PercentButtons_DIRTY_BIT, ResearchButtons_DIRTY_BIT, GameData_DIRTY_BIT, Score_DIRTY_BIT, ColoredPlots_DIRTY_BIT })
 				m_dirty[bit] = true;
 	}
 
@@ -646,6 +807,7 @@ namespace oc4::host
 		m_cities.clear();
 		if (pNewValue)
 		{
+			leaveInterfaceMode(); // (as the original's: a city selected ends Go To)
 			m_cities.insertAtEnd(pNewValue->getIDInfo());
 			m_cityScreen = true;
 			lookAtX = pNewValue->getX();
@@ -1071,16 +1233,37 @@ namespace oc4::host
 		return (rows - used) * perRow;
 	}
 
-	void Interface::lookAt(NiPoint3 pt3Target, CameraLookAtTypes, NiPoint3)
+	void Interface::setCombatFocus(bool bNewValue)
 	{
-		// (a point of the map, as CvPlot::getPoint gives it: the plot under it)
+		m_combatFocus = bNewValue;
+		// (CvUnit::setCombatUnit gives the focus to the active player's attacker, whether the battle
+		// is shown or not: the selected unit then attacks)
+		if (const CvUnit* head = getHeadSelectedUnit(); bNewValue && head && head->getOwner() == GC.getGame().getActivePlayer() && head->isAttacking())
+			m_focusAttacker = head->getIDInfo();
+	}
+
+	void Interface::lookAt(NiPoint3 pt3Target, CameraLookAtTypes eType, NiPoint3 attackDirection)
+	{
+		// (a point of the map, as CvPlot::getPoint gives it: the map's centre at 0)
 		CvMap& map = GC.getMap();
-		const int x = map.pointXToPlotX(pt3Target.x), y = map.pointYToPlotY(pt3Target.y);
-		if (x >= 0 && y >= 0 && x < map.getGridWidth() && y < map.getGridHeight())
+		const float size = float(GC.getPLOT_SIZE());
+		if (size <= 0)
+			return;
+		const float x = pt3Target.x / size + float(map.getGridWidth()) / 2, y = pt3Target.y / size + float(map.getGridHeight()) / 2;
+		if (x < 0 || y < 0 || x >= float(map.getGridWidth()) || y >= float(map.getGridHeight()))
+			return;
+		// A battle (CvUnit::updateCombat, the camera's focus on it): the camera glides over the point
+		// half way from the attacker to the defender, as the original's: at the distance it has
+		// (CAMERALOOKAT_BATTLE: the AI's attacks, or No Combat Zoom on), or close in and turned towards
+		// the attack (CAMERALOOKAT_BATTLE_ZOOM_IN: MapWindow::enterBattleView).
+		if (eType == CAMERALOOKAT_BATTLE || eType == CAMERALOOKAT_BATTLE_ZOOM_IN)
 		{
-			lookAtX = x;
-			lookAtY = y;
+			lookAtPointX = x, lookAtPointY = y;
+			lookAtBattleZoom = eType == CAMERALOOKAT_BATTLE_ZOOM_IN;
+			lookAtBattleDirX = attackDirection.x;
+			return;
 		}
+		lookAtX = int(x), lookAtY = int(y);
 	}
 
 	void Interface::lookAtSelectionPlot(bool /*bRelease*/)

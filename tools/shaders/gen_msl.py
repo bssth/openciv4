@@ -33,6 +33,7 @@ SOURCES = {
     "model.hlsl": FRAME + literal("src/render/Renderer.cpp", "kShaderBody"),
     "overlay.hlsl": literal("src/render/Renderer.cpp", "kOverlayHlsl"),
     "terrain.hlsl": FRAME + literal("src/render/MapView.cpp", "kTerrainHlsl"),
+    "water.hlsl": FRAME + literal("src/render/MapView.cpp", "kWaterHlsl"),
 }
 # (file, entry point, stage, uniform buffers: storage buffers come after them)
 ENTRIES = [
@@ -42,6 +43,10 @@ ENTRIES = [
     ("overlay.hlsl", "PSOverlay", "frag", 2),
     ("terrain.hlsl", "VSTerrain", "vert", 2),
     ("terrain.hlsl", "PSTerrain", "frag", 2),
+    ("terrain.hlsl", "VSBorder", "vert", 2),
+    ("terrain.hlsl", "PSBorder", "frag", 2),
+    ("water.hlsl", "VSWater", "vert", 2),
+    ("water.hlsl", "PSWater", "frag", 2),
 ]
 
 

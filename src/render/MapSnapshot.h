@@ -73,6 +73,8 @@ namespace oc4::render
 		int connections = 0;
 		Delta delta = Delta::None;
 		std::vector<int> rotations;
+		// The culture borders' tiles at this piece's corner (BorderFile): the line along its banks.
+		std::string border;
 	};
 
 	// A model with its animations (CvArtInfoAsset and its scalable subclasses).
@@ -84,7 +86,20 @@ namespace oc4::render
 		std::string shadow, shadowNode;
 		float shadowScale = 1;
 		bool ranged = false; // units: CvArtInfoUnit::getActAsRanged (their fortify is the ranged one)
+		float battleDistance = 0.35f; // units: CvArtInfoUnit::getBattleDistance (how far back it shoots from)
 		bool operator==(const ModelArt&) const = default;
+	};
+
+	// A piece the plot LSystem (CIV4PlotLSystem.xml) lays out on a plot: a model (into
+	// MapSnapshot::models), or one node of it laid on the ground (a farm's crops), at an
+	// offset from the plot's centre (plots), turned (radians, counterclockwise).
+	struct PlotPiece
+	{
+		int model = -1;
+		std::string node; // empty: the whole model, standing
+		float x = 0, y = 0, yaw = 0, scale = 1;
+		bool standing = false; // (a node: stands on the ground as a house, not laid on it as crops)
+		float cut = 0; // trees within this many plots of it go (bCutTrees, fCenterCut); 0: none
 	};
 
 	// A generic house of the city LSystem (CIV4CityLSystem.xml): one node of a NIF that
@@ -114,6 +129,9 @@ namespace oc4::render
 	struct PlayerView
 	{
 		Color primary, secondary;
+		std::string flagDecal;
+		bool whiteFlag = false; // a full-colour flag instead of a two-colour alpha mask
+		int flagModel = -1; // era's flag model and animation, into MapSnapshot::models
 		bool alive = false;
 		std::string name, civilization;
 		int score = 0, cities = 0;
@@ -129,20 +147,35 @@ namespace oc4::render
 		bool water = false, hills = false, peak = false;
 		bool revealed = true, visible = true; // to the active team
 		bool riverSouth = false, riverEast = false; // a river along the plot's south / east edge
+		uint8_t bonusState = 0; // the resource's look (CvPlot::getVisibleBonusState): 1 not improved, 2 improved, 3 improved and worked
+		uint8_t improvementState = 0; // the improvement's (CvPlot::getVisibleImprovementState): 2 not worked, 3 worked (its KFM's NotWorked / On)
+		int16_t layout = -1; // what the plot LSystem lays out on it instead of the improvement's art: into MapSnapshot::plotLayouts
 	};
 
 	struct UnitView
 	{
+		struct MoveStep
+		{
+			int x = 0, y = 0;
+		};
 		int id = -1; // the owner's unit id: the view follows a unit from plot to plot
 		int x = 0, y = 0;
 		int owner = -1;
 		int shownOwner = -1; // whose it looks to the active team (getVisualOwner: a hidden nationality's, the barbarians')
 		int direction = 4; // DirectionTypes the unit faces (south)
+		std::vector<MoveStep> moveSteps; // the plots it walked through since the last snapshot, in order
+		float moveSeconds = 0; // how long the walk through them takes (0: as long as their plots make it)
 		std::vector<int> models; // one per figure of the formation, into MapSnapshot::models
+		// More figures, into MapSnapshot::models (none: -1): the great general leading it (its era's
+		// warlord: beside the formation, it strikes with it and falls with its last), and, an
+		// attacker the game core gave a siege tower (walls, a city attack bonus), the tower before it.
+		int leader = -1, siegeTower = -1;
 		int count = 1;           // units on the plot
 		float health = 1;
+		float healthBar = 0; // its health bar's length in the original's units (its strength now)
 		std::string button; // the shown unit's button art (the unit layer's icons)
 		bool selected = false;   // the player has selected units there
+		bool promotionReady = false; // enough experience and at least one promotion it can take
 		// ... and how the head of them can move (the selection ring's dots): 2 it has not moved
 		// yet, 1 it has but can go on, 0 it cannot; -1 another player's.
 		int moves = -1;
@@ -158,20 +191,31 @@ namespace oc4::render
 		float founded = -1;
 		// An action it shows (a mission's animation): how it acts (1 pillaging: its melee
 		// strikes; 2 a ranged or an air strike, bombarding: its ranged strike; 3 captured: it
-		// heals), seconds since it began, as captured, how long it lasts, the plot it aims at
+		// heals; 5 a plane intercepted on its way: it flies there and back, hit, and strikes nothing;
+		// 6 a plane intercepting another: it flies out to meet it and back, dropping nothing;
+		// 4 intercepting a plane from the ground: its anti-air strike, at the plane over the
+		// plot it aims at), seconds since it began, as captured, how long it lasts, the plot it aims at
 		// and the effect there (a CIV4EffectInfos type; none: empty).
 		int action = -1;
 		float actionSince = 0, actionLength = 0;
 		int actionX = -1, actionY = -1;
 		std::string actionEffect;
 		bool air = false; // a plane: its missions are flown to their plot and back
+		// The flag's medallions: one a unit seen on the plot (up to 7), its state as
+		// Medallions.kfm's (1 can move, 2 cannot, 3 white: not selected, 4 moved, can go on).
+		std::vector<uint8_t> medallions;
 	};
 
 	// A battle the game shows (its CvBattleDefinition): the game holds it for `slices` of its
 	// updates, kBattleSliceSeconds each while it is on: setup (the attacker steps up), six a
-	// round (both sides strike; those killed in it die), then its end.
-	constexpr float kBattleSliceSeconds = 0.15f;
+	// round (both sides strike; those killed in it die), then its end. A slice is one of the
+	// original's game updates, 4 a second (measured in Wine: 0.255 s; an axeman's two-round battle
+	// of 20 slices lasts 5.1 s there).
+	constexpr float kBattleSliceSeconds = 0.25f;
 	constexpr int kBattleSetupSlices = 4, kBattleRoundSlices = 6;
+	// The attackers run up while the battle is set up (its first slices), to fight hand to hand this
+	// far across (in plots: a little short of the defenders' places, as the original's stop).
+	constexpr float kBattleRunUp = float(kBattleSetupSlices) * kBattleSliceSeconds, kBattleCloseIn = 0.7f;
 	struct BattleRoundView
 	{
 		bool ranged = false;
@@ -184,7 +228,11 @@ namespace oc4::render
 		int slices = 0;
 		int attackerX = 0, attackerY = 0, defenderX = 0, defenderY = 0;
 		std::vector<BattleRoundView> rounds;
+		// attacker, defender: its first strikes that hit (the game core counts a ranged unit's
+		// only); the battle's first rounds are the one with more's alone.
+		int firstStrikes[2]{};
 		int collateral = 0; // the defender's plot's other units hit too (collateral damage): blasts there
+		bool surrender = false; // the defender gives itself up (it cannot defend): no rounds, it surrenders and fades out
 	};
 
 	struct CityView
@@ -195,6 +243,9 @@ namespace oc4::render
 		bool capital = false;
 		std::string name;       // as the game's city bar shows it (with turns to grow)
 		std::string production; // what it builds (turns), if the active player may see it: markup
+		std::string productionArt; // the production symbol (getCityBillboardProductionIcon); the active team's cities only
+		std::string icons;      // the line of icons over the bar (buildCityBillboardIconString): markup
+		bool ownTeam = false;   // the active team's: the bar shows what it builds
 		float foodStored = -1, foodRate = 0, productionStored = -1, productionRate = 0; // bar fractions, -1: not shown
 		// The game's colours of the population's circle and number (getCityBillboardSizeIconColors) and of the bars.
 		Color sizeDot, sizeText, foodBar{ 0.35f, 0.85f, 0.25f }, productionBar{ 0.35f, 0.55f, 0.95f };
@@ -210,6 +261,18 @@ namespace oc4::render
 	{
 		// Content (art); `artGeneration` changes when it does.
 		uint64_t artGeneration = 0;
+		int flagGlow = -1; // selected unit's flag highlight, into models
+		// The medallions over a flag (Art/Units/Flag/Medallions.nif): one a unit on the plot, up to
+		// 7, white, or for the selected units how they can move; into models.
+		int flagMedallions = -1;
+		struct { float x = -0.667f, y = 0; } flagOffset; // GlobalDefines, relative to half a plot
+		// CIV4DetailManager's FLAG_SCALE: camera distance, model scale multiplier.
+		std::vector<std::pair<float, float>> flagScale{ { 700, 0.6f }, { 1500, 0.7f }, { 3000, 0.9f }, { 5000, 1.2f } };
+		// A unit's health bar (CIV4DetailManager's UNIT_HEALTH_BILLBOARD_* by camera distance): its
+		// scale (how thick it is), its height over the ground, and how far from the plot's middle
+		// towards the camera it stands (less: behind it).
+		std::vector<std::pair<float, float>> healthScale{ { 700, 3 }, { 2500, 2 } }, healthZ{ { 700, 80 }, { 5000, 70 } },
+			healthRadius{ { 700, 0 }, { 2000, -60 }, { 5000, -80 } };
 		std::vector<TerrainArt> terrains;  // by TerrainTypes
 		int hillTerrain = -1, peakTerrain = -1; // graphical terrains drawn over hills and peaks
 		std::vector<FeatureArt> features; // by FeatureTypes
@@ -224,6 +287,10 @@ namespace oc4::render
 		{
 			std::string type, nif;
 			float scale = 1;
+			// (effects: one that flies, bIsProjectile, a KFM of its own: from where a clip sets it off
+			// to what it aims at, fSpeed world units a second (a plot is 180), then its explosion)
+			bool projectile = false;
+			float speed = 0;
 		};
 		std::vector<Attachable> attachables;
 		// The Great Wall (a building that is an area border obstacle): along the edges of the
@@ -236,12 +303,18 @@ namespace oc4::render
 		};
 		std::vector<WallEdge> greatWall;
 		Attachable greatWallSegment, greatWallPost;
+		// Bridges where a route crosses a river between two plots (ROUTE_BRIDGE; RAILROAD_BRIDGE
+		// where both have railroads, route type railroadRoute).
+		Attachable routeBridge, railroadBridge;
+		int railroadRoute = -1;
 		// The effects (CIV4EffectInfos) the figures' animations set off by type ("Effect:<node>:<type>").
 		std::vector<Attachable> effects;
 		// The city layout: generic houses, the sets of them per era and art style (indices into
 		// cityHouses), the layout's size in plots and its turn (CIV4DetailManager).
 		std::vector<CityHouseArt> cityHouses;
 		std::vector<std::vector<int>> houseSets;
+		// What the plot LSystem lays out on plots (PlotView::layout): farms.
+		std::vector<std::vector<PlotPiece>> plotLayouts;
 		float cityLayoutSize = 0.72f, cityTwist = -0.7853982f;
 
 		// The map. World units as the game's (PLOT_SIZE per plot); heights of hills and peaks
@@ -253,11 +326,19 @@ namespace oc4::render
 		// how big the world is nor where in it the team is.
 		bool minimapCentered = true;
 		float plotSize = 120, hillScale = 0.13f, peakScale = 0.44f;
+		// The water plane (CIV4WaterPlaneInfos): its texture, the texture's scale (texture units a
+		// world unit) and scroll rates (texture units a frame, at 30 a second), its alpha over the sea floor.
+		struct WaterPlane
+		{
+			std::string texture;
+			float scale = 0.0020822511f, rateU = 0.000150003f, rateV = 0.000029169f, alpha = 0.5f;
+		} water;
 		// The camera (GlobalDefines, CAMERA_*): its field of view across the screen (FIELD_OF_VIEW,
 		// which BUG's slider sets), its distances from the ground it looks at, and the pitches it
 		// tilts between, in degrees below the horizon: the lower one at the closest zoom, the upper
 		// one (straight down) from the smallest of the farthest zooms out.
 		float cameraFov = 42, cameraMinDistance = 700, cameraStartDistance = 2200, cameraTopDistance = 7000, cameraCityDistance = 3500;
+		float cameraTravelDistance = 3000; // (CAMERA_MAX_TRAVEL_DISTANCE: farther, the camera jumps instead of gliding)
 		float cameraLowerPitch = 28, cameraUpperPitch = 90;
 		std::vector<PlotView> plots; // x + y * width
 		std::vector<PlayerView> players;

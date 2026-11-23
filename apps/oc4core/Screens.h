@@ -47,6 +47,7 @@ namespace oc4::host
 	{
 		std::vector<int> terrain, feature, improvement;
 		std::vector<std::vector<int>> city;
+		std::vector<std::vector<int>> leaderPeaceMusic; // [leader][era]: a 2D script, -1: none
 	};
 	SoundscapePlaces soundscapePlaces(Utility& utility);
 
@@ -118,7 +119,6 @@ namespace oc4::host
 			int widget = -1, data1 = -1, data2 = -1;
 			bool option = false;
 			bool checkbox = false;
-			bool editable = false; // shown, enabled, and accepting pointer input
 			std::string movie; // (a movie's file)
 		};
 		void rebuild(render::MapWindow& window);
@@ -135,14 +135,13 @@ namespace oc4::host
 		std::pair<int, int> m_laidOut{ -1, -1 }, m_seenSize{ -1, -1 }; // the size the screens were made for; the window's
 		std::chrono::steady_clock::time_point m_sizeChanged;
 		std::vector<Item> m_items;
-		std::optional<Item> m_edit;
-		bool m_editSelectAll = false;
 		int m_hovered = -1;
 		std::pair<int, int> m_mouse{ -1, -1 }; // where the mouse was at the clicks taken
 		unsigned m_diploVersion = 0;           // the talk the diplomacy screen shows
 		std::vector<std::pair<int, std::wstring>> m_talkAnswers; // the player's answers in it, last frame
 		long long m_minimapVersion = 0;        // the screen minimap the window has
 		std::chrono::steady_clock::time_point m_lastUpdate; // when the screens were last updated
+		std::chrono::steady_clock::time_point m_nextMainUpdate; // when the main interface's next update is due
 		bool m_diploActive = false;
 	};
 }

@@ -74,6 +74,7 @@ namespace oc4::host
 			AudioScripts::Table table = AudioScripts::Script2D;
 			int script = -1;
 			std::optional<Place> place;
+			float heard = -1; // (a soundscape's sound: this far from the listener, world units)
 		};
 		std::mutex mutex; // (the requests and the talk's music, from any thread)
 		std::vector<Request> queue;
@@ -140,6 +141,20 @@ namespace oc4::host
 		int wantScape = -1;
 		Clock::time_point wantSince{};
 
+		// The leaders' music over their land, each looping as loud as its share of the view
+		// (kept playing unheard a while: back over that land, it goes on where it was).
+		struct Territory
+		{
+			int script = -1;
+			std::string file, tag;
+			float gain = 0, share = 0, level = 0;
+			audio::Device::Voice voice = 0;
+			Clock::time_point heard{};
+		};
+		std::vector<Territory> territory;
+		std::optional<std::vector<std::pair<int, float>>> territoryChange;
+		float eraShare = 1; // how loud the era's soundtrack plays beside them
+
 		Impl(const AssetResolver& a, AudioScripts& s) : assets(a), scripts(s) {}
 
 		Clock::time_point after(int minMs, int maxMs, Clock::time_point now)
@@ -174,10 +189,12 @@ namespace oc4::host
 
 		void updateScapes(const Listener& l, Clock::time_point now, float dt)
 		{
+			// (louder from close by, as the original's: full at the closest zoom, a quarter from far up)
+			const float zoom = 0.25f + 0.75f * std::clamp(l.closeness, 0.0f, 1.0f);
 			const auto setVolumes = [&](Scape& s) {
 				for (auto& b : s.beds)
 					if (b.voice)
-						device->setVolume(b.voice, b.gain * s.fade * userGain(Kind::Ambience));
+						device->setVolume(b.voice, b.gain * s.fade * zoom * userGain(Kind::Ambience));
 			};
 			// The last ones fade out.
 			for (Scape& s : fadingScapes)
@@ -214,6 +231,7 @@ namespace oc4::host
 					const float d = pick(e->minListenerDistance, e->maxListenerDistance) / kPlotSize;
 					const float a = std::uniform_real_distribution<float>(0, 6.2831853f)(rng);
 					r.place = Place{ l.x + d * std::cos(a), l.y + d * std::sin(a) };
+					r.heard = d * kPlotSize;
 				}
 				request(r, l, now);
 			}
@@ -302,12 +320,18 @@ namespace oc4::host
 			float gain = pick(s.minVolume, s.maxVolume) / 100 * kindGain(s.kind) * userGain(s.kind), pan = 0;
 			if (r.place)
 			{
-				const float dx = r.place->x - l.x, dy = r.place->y - l.y, d = std::hypot(dx, dy) * kPlotSize;
+				// As the original's 3D sounds (the Miles sound system's): heard from the camera, at
+				// full volume within the script's iMinDistanceForMaxVolume, then falling as that
+				// distance over the distance, not at all past its cutoff. A unit's sound at the
+				// middle of the screen is as far as the camera is (2200 at the start's zoom): a
+				// worker's hoe (full within 50-100) is a whisper there, a settler's founding (500)
+				// still clear.
+				const float dx = r.place->x - l.x;
+				const float d = r.heard >= 0 ? r.heard : std::hypot(r.place->x - l.eyeX, r.place->y - l.eyeY, l.eyeZ) * kPlotSize;
 				if (s.cutoffDistance > 0 && d > float(s.cutoffDistance))
 					return;
 				if (s.fullVolumeDistance > 0 && d > float(s.fullVolumeDistance))
 					gain *= float(s.fullVolumeDistance) / d;
-				gain *= std::clamp(9.0f / std::max(l.distance, 1.0f), 0.35f, 1.0f);
 				pan = std::clamp(dx / 8, -1.0f, 1.0f) * 0.8f;
 			}
 			if (gain < 0.01f)
@@ -319,7 +343,7 @@ namespace oc4::host
 			if (const auto v = device->play(pcm, gain, pan, pitch, false))
 				effects.push_back(v);
 			if (playLog())
-				std::printf("  sound: %s%s\n", s.id.c_str(), r.place ? " (on the map)" : "");
+				std::printf("  sound: %s%s gain %.3f\n", s.id.c_str(), r.place ? " (on the map)" : "", gain);
 		}
 
 		void request(const Request& r, const Listener& l, Clock::time_point now)
@@ -331,11 +355,17 @@ namespace oc4::host
 				return; // (music is the soundtrack's and the talks')
 			if (s->notPlayPercent > 0 && std::uniform_int_distribution<int>(0, 99)(rng) < s->notPlayPercent)
 				return;
-			// The same sound asked for again at once (a stack of units moving) plays once.
-			auto& last = recent[{ int(r.table), r.script }];
-			if (now - last < std::chrono::milliseconds(80))
-				return;
-			last = now;
+			// The same sound on the map asked for again at once (a stack of units moving) plays once.
+			// The messages' sounds (2D) all play, on top of each other, as the original's: a Stack
+			// Attack's fights each end with their victory or defeat sound in the same update (three
+			// fights: the jingle about 10 dB louder in Wine, three copies).
+			if (r.table != AudioScripts::Script2D)
+			{
+				auto& last = recent[{ int(r.table), r.script }];
+				if (now - last < std::chrono::milliseconds(80))
+					return;
+				last = now;
+			}
 			const std::string file = fileOf(*s);
 			if (file.empty())
 			{
@@ -350,6 +380,64 @@ namespace oc4::host
 			}
 			else
 				waiting.push_back({ r, file, now });
+		}
+
+		// The leaders' music: each toward its share (none while talking or a movie plays), the
+		// era's soundtrack the rest.
+		void updateTerritory(Clock::time_point now, float dt, bool silent, const std::optional<std::vector<std::pair<int, float>>>& change)
+		{
+			if (change)
+			{
+				for (Territory& t : territory)
+					t.share = 0;
+				for (const auto& [script, share] : *change)
+				{
+					auto it = std::find_if(territory.begin(), territory.end(), [&](const Territory& t) { return t.script == script; });
+					if (it == territory.end())
+					{
+						const AudioScripts::Script* s = scripts.script(AudioScripts::Script2D, script);
+						if (!s)
+							continue;
+						std::string file = fileOf(*s);
+						if (file.empty())
+							continue;
+						territory.push_back({ script, std::move(file), s->id, pick(s->minVolume, s->maxVolume) / 100 * kindGain(Kind::Music) });
+						it = territory.end() - 1;
+					}
+					it->share = std::clamp(share, 0.0f, 1.0f);
+				}
+			}
+			float heard = 0;
+			for (Territory& t : territory)
+			{
+				const float target = silent ? 0 : t.share;
+				const float step = dt / 1.5f;
+				t.level = t.level < target ? std::min(target, t.level + step) : std::max(target, t.level - step);
+				if (t.level > 0 || target > 0)
+					t.heard = now;
+				if (!t.voice && target > 0)
+					if (const auto pcm = sound(t.file))
+						if (*pcm) // (one that cannot be read stays unheard: the soundtrack plays)
+						{
+							cache.erase(t.file); // (held by its voice)
+							t.voice = device->play(*pcm, 0, 0, 1, true);
+							if (playLog())
+								std::printf("  territory music: %s\n", t.tag.c_str());
+						}
+				if (t.voice)
+					device->setVolume(t.voice, t.gain * t.level * userGain(Kind::Music));
+				// (a voice still decoding is not heard: the soundtrack goes on meanwhile)
+				if (t.voice)
+					heard += t.level;
+			}
+			std::erase_if(territory, [&](Territory& t) {
+				if (now - t.heard < std::chrono::seconds(60))
+					return false;
+				if (t.voice)
+					device->stop(t.voice);
+				return true;
+			});
+			eraShare = 1 - std::min(1.0f, heard);
 		}
 
 		// The next music: the talk's intro, its loop, or one of the era's soundtracks.
@@ -414,10 +502,10 @@ namespace oc4::host
 					music = 0, fadingOut = false;
 				}
 				else
-					device->setVolume(music, musicGain * fade * userGain(Kind::Music));
+					device->setVolume(music, musicGain * fade * (musicIsEra ? eraShare : 1) * userGain(Kind::Music));
 			}
-			else if (music)
-				device->setVolume(music, musicGain * userGain(Kind::Music)); // (its slider may have moved)
+			else if (music) // (its slider may have moved; the era's under the leaders')
+				device->setVolume(music, musicGain * (musicIsEra ? eraShare : 1) * userGain(Kind::Music));
 			if (music)
 				return;
 			if (!pending)
@@ -430,7 +518,7 @@ namespace oc4::host
 			cache.erase(pending->file);
 			if (*pcm)
 			{
-				music = device->play(*pcm, pending->gain * userGain(Kind::Music), 0, 1, pending->loop);
+				music = device->play(*pcm, pending->gain * (pending->era ? eraShare : 1) * userGain(Kind::Music), 0, 1, pending->loop);
 				musicGain = pending->gain, fade = 1;
 				musicIsEra = pending->era, musicIsIntro = pending->intro;
 				if (playLog())
@@ -512,6 +600,14 @@ namespace oc4::host
 		m->scapeChange = soundscape;
 	}
 
+	void Sounds::setTerritoryMusic(std::vector<std::pair<int, float>> music)
+	{
+		if (!m->started)
+			return;
+		std::lock_guard lock(m->mutex);
+		m->territoryChange = std::move(music);
+	}
+
 	void Sounds::setVolumes(const float volumes[6])
 	{
 		for (int i = 0; i < 6; ++i)
@@ -533,11 +629,14 @@ namespace oc4::host
 		std::vector<Impl::Request> queue;
 		std::optional<std::pair<int, int>> talkChange;
 		std::optional<int> scapeChange;
+		std::optional<std::vector<std::pair<int, float>>> territoryChange;
 		{
 			std::lock_guard lock(m->mutex);
 			queue.swap(m->queue);
 			talkChange = std::exchange(m->talkChange, std::nullopt);
 			scapeChange = std::exchange(m->scapeChange, std::nullopt);
+			if (m->territoryChange)
+				m->territoryChange.swap(territoryChange);
 		}
 		// (one the camera stays over a moment: passing over a plot does not start its)
 		if (scapeChange && *scapeChange != m->wantScape)
@@ -561,6 +660,7 @@ namespace oc4::host
 					m->nextTrack = now + std::chrono::seconds(1);
 			}
 		}
+		m->updateTerritory(now, dt, m->talk.has_value() || (m->movie && m->device->playing(m->movie)), territoryChange);
 		m->updateMusic(eraType, now, dt);
 		// The effects decoded since they were asked for (late ones are dropped).
 		std::erase_if(m->waiting, [&](const Impl::Waiting& w) {

@@ -13,9 +13,12 @@
 #include <bit>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <deque>
 #include <format>
 #include <functional>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <queue>
@@ -32,9 +35,12 @@ namespace oc4::render
 		constexpr uint32_t kSlots = 32;  // atlas slots per terrain
 		constexpr int kSub = 8;          // terrain quads per plot side
 		constexpr size_t kMaxPlayers = 256;
+		constexpr std::array<float, 4> kDefaultGridLine = { 0, 0.5f, 1.0f / 128, 0 }; // a terrain without grid art: as BtS's land
+		constexpr size_t kGridTerrains = 64; // terrains with their own grid line (gridLines in the shader); more take the 64th's
 		constexpr uint16_t kNoOverlay = 0xFFFF;
-		constexpr int kBorderRes = 16;       // culture border texels per plot side
-		constexpr float kBorderReach = 0.75f; // plots: the border texture's distances go this far
+		// The culture borders' tiles (art/terrain/routes/rivers/noriverborder.dds and the rest):
+		// 512 texels a side, cells of a plot (128) in four columns and three rows.
+		constexpr int kBorderArtSize = 512;
 
 		// DirectionTypes bits, as in the game's connection masks.
 		constexpr int kNorthEast = 1 << 1, kSouthEast = 1 << 3, kSouthWest = 1 << 5, kNorthWest = 1 << 7;
@@ -54,6 +60,10 @@ cbuffer Terrain : register(b1, UNIFORMS)
 	uint showFog;
 	uint3 terrainPad;
 	float4 playerColors[256];
+	// By terrain, its grid line as the original paints it into the terrain's grid texture
+	// (<Grid> in CIV4ArtDefines_Terrain.xml): the ground under the line goes towards grey x by
+	// y (land: black by half; coast and ocean: white), z the line's width in plots.
+	float4 gridLines[64];
 };
 
 Texture2D plots : register(t0, space2);          // 16-bit unorm: terrain, overlay terrain (hills, peaks), owner + 1, flags
@@ -61,8 +71,10 @@ Texture2DArray atlas : register(t1, space2);     // 32 tiles per terrain
 Texture2DArray decals : register(t2, space2);    // features painted on the ground (flood plains)
 Texture2DArray details : register(t3, space2);   // the terrains' detail textures (grey around one half)
 Texture2D cells : register(t4, space2);          // 16-bit unorm, two texels a tile: its layers lowest first (atlas slice | rotation << 14), 0xFFFF none
-Texture2D borders : register(t5, space2);        // 16-bit unorm, kBorderRes texels a plot side: owner + 1, distance to another owner's ground / kBorderReach
+Texture2D borders : register(t5, space2);        // the culture borders' tiles, four texels a plot corner: owner + 1, cell, slice of borderArt, quarter turns (clockwise)
+Texture2DArray borderArt : register(t6, space2); // the original's border tiles (noriverborder.dds, the rivers' BorderFiles...): their alpha
 SamplerState atlasSampler : register(s1, space2);
+SamplerState borderArtSampler : register(s6, space2);
 SamplerState decalSampler : register(s2, space2);
 SamplerState detailSampler : register(s3, space2);
 
@@ -77,14 +89,18 @@ struct PSIn
 	float4 pos : SV_Position;
 	float3 world : TEXCOORD0;
 	float3 nrm : NORMAL;
+	float3 drawn : TEXCOORD1; // where it is drawn (the copy, bent round the globe): the distance fog's
+	float under : TEXCOORD2;  // the culture borders' pass: 1 where the ground is under the water's level
 };
 
 PSIn VSTerrain(VSIn i)
 {
 	PSIn o;
-	o.pos = mul(float4(globeBend(i.pos + worldOffset), 1), viewProj);
+	o.drawn = globeBend(i.pos + worldOffset);
+	o.pos = mul(float4(o.drawn, 1), viewProj);
 	o.world = i.pos;
 	o.nrm = i.nrm;
+	o.under = 0;
 	return o;
 }
 
@@ -99,15 +115,6 @@ int2 wrapPlot(int2 p)
 }
 
 uint4 plotAt(int2 p) { return uint4(round(plots.Load(int3(wrapPlot(p), 0)) * 65535.0)); }
-
-uint4 borderAt(int2 t, int2 size)
-{
-	float2 fs = float2(size);
-	int2 w = t - int2(fs * floor((float2(t) + 0.5) / fs));
-	t.x = wrapX ? w.x : clamp(t.x, 0, size.x - 1);
-	t.y = wrapY ? w.y : clamp(t.y, 0, size.y - 1);
-	return uint4(round(borders.Load(int3(t, 0)) * 65535.0));
-}
 
 // An atlas slice turned by quarter turns clockwise.
 float4 tile(uint slice, uint rotation, float2 uv, float2 dx, float2 dy)
@@ -157,7 +164,70 @@ float valueNoise(float2 p, float scale)
 	return lerp(lerp(v[0], v[1], f.x), lerp(v[2], v[3], f.x), f.y);
 }
 
+// The ground's light, as measured in the original: the sun from the south-east (slopes facing the
+// camera lit, the far side of a ridge dark), flat land a little lighter and bluer than its tiles,
+// and how much a slope's light changes with its angle to the sun.
+static const float3 kGroundSun = float3(-0.39, 0.59, -0.70);
+static const float3 kGroundLight = float3(0.012, 0.024, 0.07);
+static const float kSlopeLight = 0.6;
+
 static const int2 kCorner[4] = { int2(0, 1), int2(1, 1), int2(1, 0), int2(0, 0) }; // top left, top right, bottom right, bottom left
+
+// The culture borders, as the original draws them (CultureBorderShader.fx): the tiles of the plot
+// corner nearest p, each an owner's, from a cell of its file (a plot square centred on the
+// corner, north up unturned), turned back as its river piece is; of them the most opaque, in its
+// owner's colour. As colour and alpha to lay over the ground.
+float4 cultureBorder(float2 p)
+{
+	float2 v = floor(p + 0.5);
+	float2 l = p - v; // from the corner, in plots: x east, y north
+	int2 c = int2(v);
+	int2 corners = mapSize + int2(wrapX ? 0 : 1, wrapY ? 0 : 1);
+	int2 w = c - int2(float2(corners) * floor((float2(c) + 0.5) / float2(corners)));
+	c.x = wrapX ? w.x : clamp(c.x, 0, corners.x - 1);
+	c.y = wrapY ? w.y : clamp(c.y, 0, corners.y - 1);
+	float best = 0;
+	uint owner = 0;
+	[unroll] for (int s = 0; s < 4; ++s)
+	{
+		uint4 t = uint4(round(borders.Load(int3(c.x * 4 + s, c.y, 0)) * 255.0));
+		float2 q = l;
+		// (the piece turned t.a quarter turns clockwise: the point as many counter-clockwise)
+		[unroll] for (uint k = 0; k < 3; ++k)
+			q = k < t.a ? float2(-q.y, q.x) : q;
+		q = clamp(q + 0.5, 0.5 / 128, 1 - 0.5 / 128);
+		float2 uv = (float2(t.g % 4, t.g / 4) + float2(q.x, 1 - q.y)) * 0.25;
+		float a = t.r == 0 ? 0 : borderArt.SampleLevel(borderArtSampler, float3(uv, t.b), 0).r;
+		if (a > best)
+		{
+			best = a;
+			owner = t.r;
+		}
+	}
+	if (owner == 0)
+		return 0;
+	float3 oc = playerColors[min(owner - 1, 255)].rgb;
+	// (the line, the tiles' opaque middle, a shade darker, as measured before)
+	float stroke = smoothstep(0.6, 0.95, best);
+	return float4(oc * lerp(1, 0.85, stroke), best * lerp(1, 0.95, stroke));
+}
+
+// What the active team knows of the ground at p, blended between plot centres: 0 where it has
+// not been, 0.55 where it does not see now, 1 where it does.
+float fogAt(float2 p)
+{
+	float2 c = p - 0.5;
+	int2 cell = int2(floor(c));
+	float2 w = smoothstep(0, 1, c - cell);
+	float2 known[4];
+	[unroll] for (int k = 0; k < 4; ++k)
+	{
+		uint a = plotAt(cell + kCorner[k]).a;
+		known[k] = float2((a & 4) ? 1 : 0, (a & 8) ? 1 : 0);
+	}
+	float2 k = lerp(lerp(known[3], known[2], w.x), lerp(known[0], known[1], w.x), w.y);
+	return k.x * lerp(0.55, 1, k.y);
+}
 
 float4 PSTerrain(PSIn i) : SV_Target
 {
@@ -191,8 +261,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 	uint4 hi = uint4(round(cells.Load(int3(at + int2(1, 0), 0)) * 65535.0));
 	uint entry[6] = { lo.r, lo.g, lo.b, lo.a, hi.r, hi.g };
 	float3 color = 0;
+	float3 lineColor = 0; // the ground as the grid texture has it under a grid line
+	float lineWidth = 0;
 	float3 detail = 0.5; // blended as the colours are
-	float2 dp = p * 3.0; // detail repeats
+	float2 dp = p * 0.5; // detail repeats every 2 plots (the landscape's 4 plots a cell, texture scale 2)
 	[loop] for (int step = 0; step < 6; ++step)
 	{
 		uint e = entry[step];
@@ -203,10 +275,41 @@ float4 PSTerrain(PSIn i) : SV_Target
 		float3 ds = details.Sample(detailSampler, float3(dp, slice >> 5)).rgb;
 		color = step == 0 ? s.rgb : lerp(color, s.rgb, s.a);
 		detail = step == 0 ? ds : lerp(detail, ds, s.a);
+		float4 gl = gridLines[min(slice >> 5, 63u)];
+		float3 lc = lerp(s.rgb, gl.xxx, gl.y);
+		lineColor = step == 0 ? lc : lerp(lineColor, lc, s.a);
+		lineWidth = step == 0 ? gl.z : lerp(lineWidth, gl.z, s.a);
 	}
 
-	// The detail textures sharpen the ground up close (their mips fade to grey far away).
-	color *= detail * 2;
+	// The grid, as the original draws it: each terrain's blend atlas swapped for its grid twin,
+	// the same tiles with a line along the plot edges (through the middle of each tile). So it
+	// lies in the ground itself: over hills and down to the sea floor, under the water, rivers,
+	// forests and improvements, lit and fogged as the ground is. The grid textures' mips are
+	// drawn by hand: down to 16 texels a plot each draws the line again, as many texels wide
+	// and as dark as the full texture does (so it stays a pixel or two wide, not fainter), and
+	// the smaller ones have none. Sampled as they are: trilinear (isotropic), bilinear texels.
+	if (showGrid)
+	{
+		float2 edge = abs(p - round(p)); // plots to the nearest edge
+		float footprint = max(length(float2(dcx.x, dcy.x)), length(float2(dcx.y, dcy.y))); // plots a pixel
+		float lod = max(log2(footprint * 128), 0); // the mip, 128 texels a plot at the top
+		float level = floor(lod);
+		float2 cover = 0;
+		[unroll] for (int m = 0; m < 2; ++m)
+		{
+			float l = level + m;
+			float texel = exp2(l) / 128;
+			float width = lineWidth * exp2(l); // (as many texels as at the top)
+			// a line of `width` filtered over a texel; none from 8 texels a plot down
+			float2 c = clamp((width + texel) * 0.5 - edge, 0, min(width, texel)) / texel;
+			cover += (l <= 3 ? c : 0) * (m == 0 ? 1 - (lod - level) : lod - level);
+		}
+		color = lerp(color, lineColor, saturate(cover.x + cover.y - cover.x * cover.y));
+	}
+
+	// The detail textures sharpen the ground up close (their mips fade to grey far away). Added
+	// round their grey, as the original adds them: the ground keeps its tiles' colour.
+	color += detail - 0.5;
 
 	// Features painted on the ground (flood plains: grass on the plot's own ground): blended
 	// between the plot centres that have them, in patches that grow together towards the
@@ -234,60 +337,17 @@ float4 PSTerrain(PSIn i) : SV_Target
 		float4 tex = decals.Sample(decalSampler, float3(p * 2, d - 1)); // (tiled: wrapping)
 		float patches = 0.5 * valueNoise(p, 3) + 0.3 * valueNoise(p, 7) + 0.2 * valueNoise(p, 17);
 		float cover = amount * lerp(0.3, 1.0, nearRiver);
-		color = lerp(color, tex.rgb * detail * 2, smoothstep(0.45, 0.65, cover * (0.35 + 0.95 * patches)));
+		color = lerp(color, tex.rgb + detail - 0.5, smoothstep(0.45, 0.65, cover * (0.35 + 0.95 * patches)));
 	}
 
 	float3 n = normalize(i.nrm);
-	float ndl = saturate(dot(n, -lightDir));
-	color *= ambientLight * 1.25 + lightColor * ndl * 0.7;
+	// Lit as the original lights the ground: its light is added, not multiplied, so flat land
+	// keeps its tiles' own colour (grassland as bright as GrassBlend.dds) and slopes are lighter
+	// or darker by how much more or less they face the sun than flat land does.
+	float ndl = saturate(dot(n, -kGroundSun));
+	color = saturate(color + kGroundLight + (ndl - saturate(-kGroundSun.z)) * kSlopeLight);
 
-	// Water by its depth over the ground, so that shores have no edge: tint and sun glint.
-	float depth = saturate((waterZ - i.world.z) / (0.04 * plotSize));
-	if (depth > 0)
-	{
-		float3 v = normalize(eyePos - (i.world + worldOffset));
-		float glint = pow(saturate(dot(reflect(lightDir, float3(0, 0, 1)), v)), 160);
-		color = lerp(color, float3(0.08, 0.20, 0.28), depth * 0.35) + glint * 0.18 * depth;
-	}
-
-	int2 plot = int2(floor(p));
-	float2 g = p - plot;
 	float2 pw = fwidth(p);
-	if (showBorders)
-	{
-		// The owner's colour along the edge of its ground, a line with a glow towards the
-		// inside, as the game's borders: from the distance to another owner's ground, signed
-		// for the owner of the texel the pixel is in and blended between texels.
-		const float res = 16;      // kBorderRes
-		const float reach = 0.75;  // kBorderReach
-		int2 tsize = mapSize * int(res);
-		float2 t = p * res - 0.5;
-		int2 t0 = int2(floor(t));
-		float2 ft = t - t0;
-		uint owner = borderAt(int2(floor(p * res)), tsize).r;
-		if (owner != 0)
-		{
-			float v[4];
-			[unroll] for (int k = 0; k < 4; ++k)
-			{
-				uint2 b = borderAt(t0 + int2(k & 1, k >> 1), tsize).rg;
-				float dist = b.y / 65535.0 * reach;
-				v[k] = b.x == owner ? dist : -dist;
-			}
-			float dist = max(lerp(lerp(v[0], v[1], ft.x), lerp(v[2], v[3], ft.x), ft.y), 0); // plots
-			float3 oc = playerColors[min(owner - 1, 255)].rgb;
-			float aa = max(max(pw.x, pw.y), 1e-5);
-			float glow = 1 - saturate(dist / 0.45);
-			float stroke = 1 - smoothstep(0.022 - aa * 0.5, 0.022 + aa * 0.5, dist);
-			color = lerp(color, oc, glow * sqrt(glow) * 0.6);
-			color = lerp(color, oc * 0.85, stroke * 0.95);
-		}
-	}
-	if (showGrid)
-	{
-		float2 e = min(g, 1 - g) / max(pw, 1e-5);
-		color *= 1 - 0.35 * (1 - saturate(min(e.x, e.y) - 0.5));
-	}
 	if (showFog)
 	{
 		// What the active team knows, blended between plot centres: black where it has not
@@ -296,7 +356,42 @@ float4 PSTerrain(PSIn i) : SV_Target
 		float2 k = lerp(lerp(known[3], known[2], w.x), lerp(known[0], known[1], w.x), w.y);
 		color *= k.x * lerp(0.55, 1, k.y);
 	}
-	return float4(color, 1);
+	return float4(color * distanceFog(i.drawn), 1);
+}
+
+// The culture borders as their own layer, as the original's (CultureBorderShader.fx): not lit,
+// darkened by the fog of war. In two passes (showBorders): 1, the ground above the water's level,
+// right after the terrain, so that what stands on it blends over the border as over the ground
+// (the original: the soft dirt under resources and improvements tinted, the rocks on it not);
+// 2, at the water's level where the ground is under it, after the water, over it at full
+// strength (the water does not dim them).
+PSIn VSBorder(VSIn i)
+{
+	PSIn o;
+	// (a little above the ground and towards the eye, so that it is never behind it nor behind the
+	// pieces laid on it, drawn before it: rivers 0.8, roads 0.6, a farm's crops from 0.5 up, a plot
+	// 180 world units; the model shader moves those 6 towards the eye. What is drawn after it
+	// covers it whatever its depth: it writes none.)
+	float3 pos = float3(i.pos.xy, max(i.pos.z, waterZ) + 0.012 * plotSize);
+	o.drawn = globeBend(pos + worldOffset);
+	float3 toEye = eyePos - o.drawn;
+	o.pos = mul(float4(dot(toEye, toEye) > 100 ? o.drawn + normalize(toEye) * 8 : o.drawn, 1), viewProj);
+	o.world = pos;
+	o.nrm = i.nrm;
+	o.under = i.pos.z < waterZ ? 1 : 0;
+	return o;
+}
+
+float4 PSBorder(PSIn i) : SV_Target
+{
+	// (each pass its part: they meet where the ground crosses the water's level)
+	clip(showBorders == 2 ? i.under - 0.5 : 0.5 - i.under);
+	float2 p = i.world.xy / plotSize;
+	float4 b = cultureBorder(p);
+	clip(b.a - 1.0 / 255);
+	if (showFog)
+		b.rgb *= fogAt(p);
+	return float4(b.rgb * distanceFog(i.drawn), b.a);
 }
 )hlsl";
 
@@ -315,6 +410,151 @@ float4 PSTerrain(PSIn i) : SV_Target
 			float waterZ;
 			uint32_t showFog, pad[3];
 			float playerColors[kMaxPlayers][4];
+			float gridLines[kGridTerrains][4];
+		};
+
+		// The water plane, as the original's Water.fx draws it: over the ground (the sea floor is
+		// the coast and ocean terrains' own tiles), one texture (CIV4WaterPlaneInfos: Water.dds)
+		// twice, scrolling, half and half; their alphas multiplied are added as sparkles; the whole
+		// laid over the floor at the plane's material alpha, faded in from the shore. Unlit: no
+		// reflections, no sun glint. Darkened by the fog of war as the ground is.
+		constexpr char kWaterHlsl[] = R"hlsl(
+cbuffer Water : register(b1, UNIFORMS)
+{
+	float4 waterUv1;   // u = dot(world.xy, xy), v = dot(world.xy, zw), world units
+	float4 waterUv2;
+	float4 waterScroll; // texture offsets: xy the first, zw the second
+	float3 waterOffset; // the copy of the map drawn (wrapping)
+	float waterAlpha;   // the plane's material alpha
+	int2 waterMapSize;
+	int waterWrapX;
+	int waterWrapY;
+	float waterPlotSize;
+	uint waterShowFog;
+	float waterShore;   // world units: how deep the ground is where the water's shore is
+	float waterShoreWidth; // world units of depth over which it fades in there
+};
+
+static const float kWaterRedOffset = 14.0 / 255;
+
+Texture2D waterTex : register(t0, space2);   // the water plane's base texture
+Texture2D waterPlots : register(t1, space2); // as the terrain's plots: flags in alpha (4 revealed, 8 visible)
+SamplerState waterSampler : register(s0, space2);
+
+struct WaterIn
+{
+	float3 pos : TEXCOORD0;   // world, at the water's level
+	float depth : TEXCOORD1;  // of the land/water levels under it, world units
+	float bed : TEXCOORD2;    // how far a river's bed is carved below those levels there, world units
+};
+
+struct WaterOut
+{
+	float4 pos : SV_Position;
+	float2 uv1 : TEXCOORD0;
+	float2 uv2 : TEXCOORD1;
+	float2 plot : TEXCOORD2;
+	float depth : TEXCOORD3;
+	float bed : TEXCOORD4;
+	float3 drawn : TEXCOORD5; // (the distance fog's)
+};
+
+WaterOut VSWater(WaterIn i)
+{
+	WaterOut o;
+	o.drawn = globeBend(i.pos + waterOffset);
+	o.pos = mul(float4(o.drawn, 1), viewProj);
+	o.uv1 = float2(dot(i.pos.xy, waterUv1.xy), dot(i.pos.xy, waterUv1.zw)) + waterScroll.xy;
+	o.uv2 = float2(dot(i.pos.xy, waterUv2.xy), dot(i.pos.xy, waterUv2.zw)) + waterScroll.zw;
+	o.plot = i.pos.xy / waterPlotSize;
+	o.depth = i.depth;
+	o.bed = i.bed;
+	return o;
+}
+
+int2 waterWrap(int2 p)
+{
+	float2 size = float2(waterMapSize);
+	int2 w = p - int2(size * floor((float2(p) + 0.5) / size));
+	p.x = waterWrapX ? w.x : clamp(p.x, 0, waterMapSize.x - 1);
+	p.y = waterWrapY ? w.y : clamp(p.y, 0, waterMapSize.y - 1);
+	return p;
+}
+
+float2 waterKnown(int2 p)
+{
+	uint a = uint(round(waterPlots.Load(int3(waterWrap(p), 0)).a * 65535.0));
+	return float2((a & 4) ? 1 : 0, (a & 8) ? 1 : 0);
+}
+
+// Smooth noise in [0, 1], `scale` cells a plot, without a seam where the map wraps.
+float waterNoise(float2 p, float scale)
+{
+	float2 q = p * scale;
+	float2 c = floor(q), f = q - c;
+	f = f * f * (3 - 2 * f);
+	float2 period = float2(waterMapSize) * scale;
+	float v[4];
+	[unroll] for (int k = 0; k < 4; ++k)
+	{
+		float2 at = c + float2(k & 1, k >> 1);
+		if (waterWrapX)
+			at.x -= period.x * floor(at.x / period.x);
+		if (waterWrapY)
+			at.y -= period.y * floor(at.y / period.y);
+		uint h = uint(at.x) * 0x9E3779B1u ^ uint(at.y) * 0x85EBCA77u;
+		h ^= h >> 15;
+		h *= 0x2C1B3C6Du;
+		h ^= h >> 12;
+		v[k] = float(h & 0xFFFF) / 65535.0;
+	}
+	return lerp(lerp(v[0], v[1], f.x), lerp(v[2], v[3], f.x), f.y);
+}
+
+float4 PSWater(WaterOut i) : SV_Target
+{
+	// The shore: where the ground is that deep, a little in or out along it (the original's coast
+	// fade is a ragged edge), the water ending over a short way.
+	float wobble = 0.65 * waterNoise(i.plot, 1.5) + 0.35 * waterNoise(i.plot, 4) - 0.5;
+	// (in a river's mouth the sea comes in gradually, over the river's own water)
+	float mouth = saturate(i.bed / (0.25 * waterShore)) * waterShore;
+	float coast = saturate((i.depth - waterShore * (1 + 0.2 * wobble) + mouth) / (waterShoreWidth + mouth));
+	clip(coast - 1.0 / 255);
+	float4 a = waterTex.Sample(waterSampler, i.uv1);
+	float4 b = waterTex.Sample(waterSampler, i.uv2);
+	// (less red than Water.dds gives: measured in the original over open sea, coast and lakes, the
+	// water 14/255 less red at its 0.5 alpha, its sparkles as white as here; cause not found)
+	float3 color = lerp(a.rgb, b.rgb, 0.5) - float3(kWaterRedOffset, 0, 0) + a.a * b.a * coast;
+	if (waterShowFog)
+	{
+		// (as the terrain: blended between plot centres, black where never seen, dimmed where not seen now)
+		float2 c = i.plot - 0.5;
+		int2 cell = int2(floor(c));
+		float2 w = smoothstep(0, 1, c - cell);
+		float2 k = lerp(lerp(waterKnown(cell), waterKnown(cell + int2(1, 0)), w.x),
+			lerp(waterKnown(cell + int2(0, 1)), waterKnown(cell + int2(1, 1)), w.x), w.y);
+		color *= k.x * lerp(0.55, 1, k.y);
+	}
+	// (D3D fogs a pixel before blending it: the water darkens over a floor darkened as much)
+	return float4(saturate(color) * distanceFog(i.drawn), waterAlpha * coast);
+}
+)hlsl";
+
+		struct WaterVertex
+		{
+			Vec3 position;
+			float depth, bed;
+		};
+
+		struct WaterConstants
+		{
+			float uv1[4], uv2[4], scroll[4];
+			float offset[3];
+			float alpha;
+			int32_t mapW, mapH, wrapX, wrapY;
+			float plotSize;
+			uint32_t showFog;
+			float shore, shoreWidth;
 		};
 
 		uint32_t mix(uint32_t h)
@@ -395,8 +635,15 @@ float4 PSTerrain(PSIn i) : SV_Target
 	{
 		bool ok = false;
 		scene::Model model;
+		std::shared_ptr<GpuImage> flagDecal; // runtime colours; outlives the GPU model's texture references
 		std::unique_ptr<GpuModel> gpu;
 		std::optional<anim::Sequence> idle, run; // event codes 1000, 1010
+		// A flag's medallions (Medallions.kfm): medallion n (1..7) in state s (0 off, 1 can move,
+		// 2 cannot move, 3 "fortify": white, 4 has moved but can go on) at event code 10 n + s.
+		std::map<uint32_t, anim::Sequence> medallions;
+		// A resource's look by its state (event codes 1, 2, 3: CvPlot::getVisibleBonusState):
+		// not improved, improved, improved and worked; each shows its own nodes.
+		std::optional<anim::Sequence> states[3];
 		// Fortifying, then fortified: melee (1020, 1021) and ranged (1030, 1031), as the
 		// animation categories ANIMCAT_*_FORTIFY and *_FORTIFIED of the first set.
 		std::optional<anim::Sequence> fortify[2], fortified[2];
@@ -406,6 +653,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 		// Hurt in a round it survives (ANIMCAT_MELEE_HURT 23, by set; the ranged have none of
 		// their own); healing (ANIMCAT_HEAL 4).
 		std::optional<anim::Sequence> hurt[3][2], heal;
+		// Giving itself up (ANIMCAT_SURRENDER: event code 1002, a worker's or a settler's), and a
+		// unit's fading out (its XFadeOut, code 1: the material's alpha to 0).
+		std::optional<anim::Sequence> surrender, fadeOut;
+		std::optional<anim::Sequence> antiAir; // event code 1042: a SAM's anti-air strike (its missile)
 		// Working, by work (irrigate, build, mine, chop, shovel, railroad: categories 50 + 3 a
 		// work): its beginning, the work, a pause in it; founding a city (ANIMCAT_FOUND 40).
 		std::optional<anim::Sequence> work[6][3], found;
@@ -417,6 +668,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 		bool embeddedMoves = false;              // ... which move or hide nodes, not only materials
 		std::vector<Affine> bindLocals, bindWorld;
 		std::vector<uint8_t> bindVisible;
+		// Its nodes laid on the terrain (scene::DrawItem::contour), if any: 1 per such node.
+		std::vector<uint8_t> contourNodes;
 		// The node the pieces hang below; per node the piece it belongs to (itself above).
 		int spread = -1;
 		// Its nodes' attachables ("ATTACH:<node>:<type>"), and those loaded.
@@ -457,7 +710,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 
 	struct MapView::Impl
 	{
-		Impl(Renderer& r, const AssetResolver& a) : renderer(r), assets(a) { createPipeline(); }
+		Impl(Renderer& r, const AssetResolver& a) : renderer(r), assets(a), flagArt(a) { createPipeline(); }
 		~Impl()
 		{
 			SDL_ReleaseGPUGraphicsPipeline(renderer.device(), terrainPipeline);
@@ -465,6 +718,13 @@ float4 PSTerrain(PSIn i) : SV_Target
 			SDL_ReleaseGPUShader(renderer.device(), terrainPS);
 			SDL_ReleaseGPUSampler(renderer.device(), sampler);
 			SDL_ReleaseGPUSampler(renderer.device(), detailWrap);
+			SDL_ReleaseGPUGraphicsPipeline(renderer.device(), waterPipeline);
+			SDL_ReleaseGPUShader(renderer.device(), waterVS);
+			SDL_ReleaseGPUShader(renderer.device(), waterPS);
+			SDL_ReleaseGPUSampler(renderer.device(), waterSampler);
+			SDL_ReleaseGPUGraphicsPipeline(renderer.device(), borderPipeline);
+			SDL_ReleaseGPUShader(renderer.device(), borderVS);
+			SDL_ReleaseGPUShader(renderer.device(), borderPS);
 		}
 
 		struct Instance
@@ -484,14 +744,18 @@ float4 PSTerrain(PSIn i) : SV_Target
 			Vec3 anchor, offset;
 			float yaw = 0, scale = 1;
 			bool onGround = false; // heights over the terrain (roads)
+			bool route = false;    // a road or railroad piece: trees beside it go (cutTrees)
+			bool laid = false;     // a piece laid on the terrain (rivers, roads, a farm's crops): drawn before the culture borders
 			int plot = -1;         // the plot it belongs to (fog of war)
 			uint64_t unit = 0;     // a unit's figure: owner and id
+			const anim::Sequence* sequence = nullptr; // animated: what it plays (none: its idle)
 			bool resting = false, ranged = false; // fortified (and so on); its art's fortify is the ranged one
 			// In a battle (into map.battles): its side, its place in the formation (the last
 			// ones die first), and (the attacker) the step it takes towards the defender.
 			int battle = -1;
 			bool attacking = false;
 			int figureIndex = 0;
+			int role = 0; // 0 a figure of the formation, 1 its great general, 2 its siege tower
 			Vec3 step;
 			Vec3 soundAt; // where its sounds come from (plot units)
 			int work = -1;       // at work: UnitView::work
@@ -508,6 +772,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 
 		Renderer& renderer;
 		const AssetResolver& assets;
+		ButtonArt flagArt;
+		std::unordered_map<std::string, std::vector<std::string>> routeVariants; // routeFiles: by the XML's file
 		MapSnapshot map;
 		bool hasMap = false;
 		uint64_t artGeneration = ~0ull;
@@ -528,6 +794,12 @@ float4 PSTerrain(PSIn i) : SV_Target
 			Affine place;
 			float start = 0, until = 0, last = 0;
 			Particles particles;
+			// A projectile (an arrow, a rock, a bomb, a missile): it flies from `from` to `to` for
+			// `flight` seconds (its run clip, if any), then plays its explosion (event code 1022),
+			// whose text keys set off its effects and sounds.
+			bool projectile = false;
+			Vec3 from, to;
+			float flight = 0, scale = 1, keysLast = -1;
 		};
 		std::vector<Burst> bursts;
 		std::vector<std::function<void()>> pendingBursts; // (set off before the map came)
@@ -544,19 +816,36 @@ float4 PSTerrain(PSIn i) : SV_Target
 		std::vector<uint64_t> decorKey;  // per plot: improvement, bonus, route
 		std::shared_ptr<GpuBuffer> vb, ib;
 		uint32_t indexCount = 0;
+		// The water plane: over the tiles with water at a corner, at the water's level.
+		std::shared_ptr<GpuBuffer> waterVb, waterIb;
+		uint32_t waterIndexCount = 0;
+		std::shared_ptr<GpuImage> waterTex;
+		SDL_GPUShader* waterVS = nullptr;
+		SDL_GPUShader* waterPS = nullptr;
+		SDL_GPUGraphicsPipeline* waterPipeline = nullptr;
+		SDL_GPUSampler* waterSampler = nullptr;
 		std::shared_ptr<GpuImage> plotTex, cellTex, atlasTex, groundTex, decalTex, detailTex, borderTex;
-		// The culture borders: where the rivers' water is, kBorderRes texels a plot side, and the
-		// owners the border texture was last worked out for.
-		std::vector<uint8_t> riverMask;
-		bool riverMaskChanged = true;
+		// The culture borders: the original's tiles (borderArtTex, a slice each: no river, at sea,
+		// then the river pieces' BorderFiles, by riverBorderSlice), the river piece at each plot
+		// corner (cornerRiver: index into map.rivers and its turn in degrees; -1 none), and the
+		// owners and water the corners' tiles (borderTex) were last worked out for.
+		std::shared_ptr<GpuImage> borderArtTex;
+		std::vector<int> riverBorderSlice;
+		std::vector<std::pair<int16_t, int16_t>> cornerRiver;
+		bool cornerRiverChanged = true;
 		std::vector<int16_t> borderOwners;
+		std::vector<uint8_t> borderWater;
 		std::vector<uint32_t> terrainColors; // BGRA: the average of each terrain's plain tile
+		std::vector<std::array<float, 4>> gridLines; // by terrain: grey, amount, width in plots (gridLines in the shader)
 		std::vector<uint8_t> minimapPixels;
 		uint64_t minimapVersion = 0;
 		std::vector<uint16_t> featureDecal; // by FeatureTypes: 1-based slice of decalTex, 0 none
 		SDL_GPUShader* terrainVS = nullptr;
 		SDL_GPUShader* terrainPS = nullptr;
 		SDL_GPUGraphicsPipeline* terrainPipeline = nullptr;
+		SDL_GPUGraphicsPipeline* borderPipeline = nullptr;
+		SDL_GPUShader* borderVS = nullptr;
+		SDL_GPUShader* borderPS = nullptr;
 		SDL_GPUSampler* sampler = nullptr;
 		SDL_GPUSampler* detailWrap = nullptr;
 
@@ -570,6 +859,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 		std::unordered_map<std::string, WaterAlpha> waterAlpha; // by texture
 		std::map<std::string, std::shared_ptr<const nif::File>> kfCache;
 		std::vector<Instance> features, decor, cities, units;
+		std::vector<std::pair<Vec3, float>> layoutCuts; // laid-out pieces' clearings: where, radius (world units)
 		// Each city's pieces by its plot, kept while what it shows stays the same (cleared with the terrain or the art).
 		struct CityLayout
 		{
@@ -578,13 +868,16 @@ float4 PSTerrain(PSIn i) : SV_Target
 		};
 		std::unordered_map<int, CityLayout> cityLayouts;
 
-		// Units walking from plot to plot between two states of the game.
+		// Units walking through the plots of their accepted move order.
 		struct Motion
 		{
 			Vec3 from, to;
 			float start = 0, duration = 0;
+			float spread = 0; // the last figure arrives that much later (the original's run one by one)
+			float orderStart = 0, orderSeconds = 0; // the whole order's walk this leg is part of
 		};
-		std::unordered_map<uint64_t, Vec3> unitPositions; // where each unit was last shown
+		std::unordered_map<uint64_t, std::deque<Motion>> motions;
+		std::unordered_map<uint64_t, Vec3> unitPositions; // the plot where each unit was last shown
 		// Where each unit's figure was drawn last (round its middle), for clicks on them.
 		struct FigureHit
 		{
@@ -594,6 +887,15 @@ float4 PSTerrain(PSIn i) : SV_Target
 		};
 		std::vector<FigureHit> figureHits;
 		bool ringsDrawn = false; // the selection rings are the game's (not the overlay's own)
+		// The city bars' production symbols: a button cut round by the bar's mask, by its art.
+		std::map<std::string, ButtonArt::Icon> cityBarSymbols;
+		// Where the city bars were drawn last (in the overlay's units) and their cities' plots, in drawing order.
+		struct CityBarPlace
+		{
+			float x0, y0, x1, y1;
+			int x, y;
+		};
+		std::vector<CityBarPlace> cityBars;
 
 		// The ring the game puts under the selected units (Art/Units/Selection Effect): its
 		// circle turning (the default clip) and its dots over it as the head unit can move
@@ -620,6 +922,21 @@ float4 PSTerrain(PSIn i) : SV_Target
 					throw std::runtime_error("not found");
 				ring.file = std::make_shared<const nif::File>(nif::parseFile(assets.read(*loc)));
 				ring.model = scene::buildModel(*ring.file);
+				// (drawn where it is drawn, before the units, as its alpha property's "no sorter" has
+				// it: it tests no depth, and the figures standing on it cover it, as in the original)
+				// It tests depth and writes it where it shows (alpha test), a little above the
+				// ground: the rivers' and roads' pieces, laid lower and drawn with the blended things
+				// after it, cannot cover it then, as in the original, and what stands in front of it
+				// (a hut, blended too) still covers it.
+				for (auto& item : ring.model.items)
+				{
+					item.material.blendUnsorted = true;
+					item.material.zTest = true;
+					item.material.zWrite = true;
+					item.material.alphaTest = true;
+					item.material.alphaFunc = scene::Compare::Greater;
+					item.material.alphaRef = 8;
+				}
 				ring.gpu = renderer.upload(ring.model, assets, *loc);
 				std::vector<anim::Clip> clips;
 				std::optional<nif::KfmFile> kfm;
@@ -663,7 +980,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 				return false;
 			for (const UnitView& u : map.units)
 			{
-				if (!u.selected)
+				// (none under a stack while it fights, as in the original)
+				if (!u.selected || u.battle >= 0)
 					continue;
 				// (its dots: how the head unit can move)
 				if (const int d = std::clamp(u.moves + 1, 0, 3); d != ring.shown && ring.dots[d])
@@ -672,14 +990,15 @@ float4 PSTerrain(PSIn i) : SV_Target
 					ring.player.setLayers({ *ring.dots[d] });
 				}
 				Vec3 at{ (float(u.x) + 0.5f) * S(), (float(u.y) + 0.5f) * S(), 0 };
+				// (none while its units walk there: the original's comes once they are in)
 				const uint64_t key = uint64_t(uint32_t(u.owner)) << 32 | uint32_t(u.id);
-				if (const auto it = motions.find(key); it != motions.end() && time < it->second.start + it->second.duration)
-					at = motionPoint(it->second);
+				if (activeMotion(key))
+					continue;
 				at.x += wrapOffset(at.x);
 				const anim::Pose pose = ring.player.evaluate(ring.model);
 				const auto local = ring.model.worldTransforms(pose.locals);
 				// (a little narrower than a plot: its circle is 154 across)
-				const Affine place = placement({ at.x, at.y, 0 }, 0, S() / 154.0f * 0.95f);
+				const Affine place = placement({ at.x, at.y, 1.5f }, 0, S() / 154.0f * 0.95f);
 				std::vector<Affine> world(local.size());
 				for (size_t k = 0; k < local.size(); ++k)
 					world[k] = place * local[k];
@@ -690,7 +1009,83 @@ float4 PSTerrain(PSIn i) : SV_Target
 			}
 			return true;
 		}
-		std::unordered_map<uint64_t, Motion> motions;
+
+		// The plots the game colours in the circle style (PLOT_STYLE_CIRCLE: a worker's or a
+		// settler's recommended plots, a rally point): as the original's, the circle cell of
+		// Art/Terrain/PlotTextures/plottexture.dds (128 texels a plot; its ring 4 texels wide, 2 in
+		// from the plot's edges) laid on the ground in the plot's colour, under what stands on it:
+		// tested against the scene's depth and not writing it, so a figure on the plot hides it.
+		std::vector<MapView::GroundCircle> groundCircles;
+		scene::Model circleModel;
+		std::unique_ptr<GpuModel> circleGpu;
+		bool circleTried = false;
+
+		void drawGroundCircles(const Frustum& frustum)
+		{
+			if (groundCircles.empty())
+				return;
+			if (!circleTried)
+			{
+				circleTried = true;
+				circleModel.nodes.push_back({ "PlotCircle" });
+				scene::DrawItem quad;
+				quad.node = 0;
+				// (the plot, on the terrain's own grid and triangles (kSub a side), so that it lies
+				// exactly on the ground between its points too; the cell's picture across it)
+				constexpr int n = kSub;
+				constexpr float u0 = 640.0f / 1024, v0 = 256.0f / 512, du = 128.0f / 1024, dv = 128.0f / 512;
+				for (int j = 0; j <= n; ++j)
+					for (int i = 0; i <= n; ++i)
+					{
+						const float a = float(i) / n, b = float(j) / n;
+						quad.vertices.push_back({ { a, b, 0 }, { 0, 0, 1 }, { u0 + a * du, v0 + (1 - b) * dv } });
+					}
+				for (int j = 0; j < n; ++j)
+					for (int i = 0; i < n; ++i)
+					{
+						const uint32_t k = uint32_t(j * (n + 1) + i);
+						quad.indices.insert(quad.indices.end(), { k, k + 1, k + n + 2, k, k + n + 2, k + n + 1 });
+					}
+				scene::Material& mat = quad.material;
+				mat.baseTexture = "art/terrain/plottextures/plottexture.dds";
+				mat.baseClamp = scene::TexClamp::ClampClamp;
+				mat.lightingMode = 0;
+				mat.alphaBlend = true;
+				mat.zTest = true;
+				// (its depth where it shows: the pieces laid lower on the ground, rivers and roads,
+				// blended and drawn after it or before, cannot cover it; what stands on it can)
+				mat.zWrite = true;
+				mat.alphaTest = true;
+				mat.alphaFunc = scene::Compare::Greater;
+				mat.alphaRef = 8;
+				mat.cull = scene::Cull::None;
+				circleModel.items.push_back(std::move(quad));
+				circleGpu = renderer.upload(circleModel, assets, AssetLocation{});
+				if (!circleGpu)
+					problem("art/terrain/plottextures/plottexture.dds: the plot circle");
+			}
+			if (!circleGpu)
+				return;
+			std::vector<scene::Material> material(1, circleModel.items[0].material);
+			const uint8_t visible[] = { 1 };
+			for (const auto& c : groundCircles)
+			{
+				if (c.x < 0 || c.y < 0 || c.x >= map.width || c.y >= map.height)
+					continue;
+				Vec3 middle{ (float(c.x) + 0.5f) * S(), (float(c.y) + 0.5f) * S(), 0 };
+				middle.z = ground(middle.x, middle.y);
+				const float dx = wrapOffset(middle.x);
+				if (!frustum.sphere(middle + Vec3{ dx, 0, 0 }, S()))
+					continue;
+				// (above the pieces laid on the ground, rivers at 0.8 and roads at 0.6: the original
+				// draws the circle over their water and banks)
+				const Vec3 at{ float(c.x) * S() + dx, float(c.y) * S(), 1.5f };
+				material[0].emissive = { c.color.r, c.color.g, c.color.b };
+				material[0].alpha = std::clamp(c.alpha, 0.0f, 1.0f);
+				const Affine world[] = { placement(at, 0, S()) };
+				renderer.draw(*circleGpu, world, visible, material, kDefaultTeamColor, true);
+			}
+		}
 		std::unordered_map<uint64_t, float> restingSince; // when each resting unit began to fortify
 		std::unordered_map<uint64_t, float> battleStarts; // by BattleView::serial
 		std::unordered_map<uint64_t, std::pair<int, float>> workSince; // each working unit's work, since when
@@ -714,7 +1109,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			SDL_GPUDevice* dev = renderer.device();
 			const std::string source = std::string(kFrameConstantsHlsl) + kTerrainHlsl;
 			terrainVS = renderer.compile(source, "terrain.hlsl", "VSTerrain", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
-			terrainPS = renderer.compile(source, "terrain.hlsl", "PSTerrain", SDL_GPU_SHADERSTAGE_FRAGMENT, 6, 0, 2);
+			terrainPS = renderer.compile(source, "terrain.hlsl", "PSTerrain", SDL_GPU_SHADERSTAGE_FRAGMENT, 7, 0, 2);
 			SDL_GPUGraphicsPipelineCreateInfo ci{};
 			ci.vertex_shader = terrainVS;
 			ci.fragment_shader = terrainPS;
@@ -750,9 +1145,110 @@ float4 PSTerrain(PSIn i) : SV_Target
 			detailWrap = SDL_CreateGPUSampler(dev, &sd);
 			if (!sampler || !detailWrap)
 				throw std::runtime_error(std::string("terrain samplers: ") + SDL_GetError());
+
+			// The water: blended over the ground at its alpha, not writing depth. (Water.fx writes it,
+			// but OpenCiv4's river beds dip below the water's level at the coast: the rivers' deltas
+			// would end in a hard edge where the sea starts instead of running out into it.) Drawn
+			// after the rivers' water (Renderer::drawGroundBlended), so a delta's water out at sea is
+			// seen through the sea's.
+			const std::string waterSource = std::string(kFrameConstantsHlsl) + kWaterHlsl;
+			waterVS = renderer.compile(waterSource, "water.hlsl", "VSWater", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
+			waterPS = renderer.compile(waterSource, "water.hlsl", "PSWater", SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 0, 2);
+			ci.vertex_shader = waterVS;
+			ci.fragment_shader = waterPS;
+			const SDL_GPUVertexBufferDescription wvbd{ 0, sizeof(WaterVertex), SDL_GPU_VERTEXINPUTRATE_VERTEX, 0 };
+			const SDL_GPUVertexAttribute wattributes[] = { { 0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(WaterVertex, position) },
+				{ 1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, offsetof(WaterVertex, depth) },
+				{ 2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, offsetof(WaterVertex, bed) } };
+			ci.vertex_input_state = { &wvbd, 1, wattributes, 3 };
+			target.blend_state.enable_blend = true;
+			target.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+			target.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+			target.blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+			target.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+			target.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+			target.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+			ci.depth_stencil_state.enable_depth_write = false;
+			if (!(waterPipeline = SDL_CreateGPUGraphicsPipeline(dev, &ci)))
+				throw std::runtime_error(std::string("water pipeline: ") + SDL_GetError());
+			// (Water.fx's sampler: linear, mipmapped, no anisotropy; the texture repeats)
+			sd.enable_anisotropy = false;
+			sd.max_anisotropy = 1;
+			if (!(waterSampler = SDL_CreateGPUSampler(dev, &sd)))
+				throw std::runtime_error(std::string("water sampler: ") + SDL_GetError());
+
+			// The culture borders: the ground's mesh again, after the water, blended over what is
+			// drawn (as the water: not writing depth).
+			borderVS = renderer.compile(source, "terrain.hlsl", "VSBorder", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
+			borderPS = renderer.compile(source, "terrain.hlsl", "PSBorder", SDL_GPU_SHADERSTAGE_FRAGMENT, 7, 0, 2);
+			ci.vertex_shader = borderVS;
+			ci.fragment_shader = borderPS;
+			ci.vertex_input_state = { &vbd, 1, attributes, 2 };
+			if (!(borderPipeline = SDL_CreateGPUGraphicsPipeline(dev, &ci)))
+				throw std::runtime_error(std::string("border pipeline: ") + SDL_GetError());
 		}
 
 		// ------------------------------------------------------------ art
+
+		// The original draws the grid by swapping each terrain's blend atlas for its grid texture:
+		// the same tiles with a line painted through their middles, which is where the plot edges
+		// run. Measured from the two (grey, amount, width in plots), so the shader draws that line:
+		// the ground under it towards black or white (BtS: land half way to black, 1/128 of a plot
+		// wide; coast half way and ocean 30% to white, 2/128 wide).
+		std::array<float, 4> measureGridLine(const std::vector<uint8_t>& blend, uint32_t width, uint32_t height, const std::string& path)
+		{
+			try
+			{
+				const auto loc = assets.locate(makeAssetKey(path));
+				if (!loc)
+					throw std::runtime_error("not found");
+				const gfx::Image image = gfx::loadDds(assets.read(*loc));
+				if (image.width != width || image.height != height)
+					throw std::runtime_error("not the size of the terrain's blend texture");
+				const std::vector<uint8_t> grid = gfx::decodeBgra(image);
+				// The tile columns that differ (summed over the whole texture), then the line's
+				// colour against the ground's in them.
+				const uint32_t tileSize = width / 4;
+				if (tileSize == 0)
+					return kDefaultGridLine;
+				std::vector<double> diff(tileSize);
+				for (uint32_t y = 0; y < height; ++y)
+					for (uint32_t x = 0; x < width; ++x)
+					{
+						const size_t i = (size_t(y) * width + x) * 4;
+						for (int c = 0; c < 3; ++c)
+							diff[x % tileSize] += std::abs(int(grid[i + c]) - int(blend[i + c]));
+					}
+				const double perTexel = 3.0 * height * 4;
+				double under = 0, line = 0;
+				int columns = 0;
+				for (uint32_t col = 0; col < tileSize; ++col)
+				{
+					if (diff[col] / perTexel < 8) // (DXT noise is ~1)
+						continue;
+					++columns;
+					for (uint32_t y = 0; y < height; ++y)
+						for (uint32_t x = col; x < width; x += tileSize)
+						{
+							const size_t i = (size_t(y) * width + x) * 4;
+							for (int c = 0; c < 3; ++c)
+								under += blend[i + c], line += grid[i + c];
+						}
+				}
+				if (columns == 0 || under <= 0)
+					return { 0, 0, 0, 0 }; // no line: the grid texture is the blend texture
+				const float n = float(columns) * height * 4 * 3;
+				const float u = float(under) / n / 255, l = float(line) / n / 255;
+				const float grey = l < u ? 0.0f : 1.0f;
+				const float amount = std::clamp(grey == 0 ? 1 - l / u : (l - u) / std::max(1 - u, 1e-3f), 0.0f, 1.0f);
+				return { grey, amount, float(columns) / float(tileSize), 0 };
+			}
+			catch (const std::exception& e)
+			{
+				problem(std::format("terrain grid texture {}: {}", path, e.what()));
+				return kDefaultGridLine;
+			}
+		}
 
 		// Every terrain's blend atlas as 32 tiles of kTile pixels in one texture array, so that
 		// tiles filter and mip without bleeding into each other.
@@ -763,6 +1259,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			if (count == 0)
 				return;
 			std::vector<std::vector<uint8_t>> levels(count * kSlots * kTileMips);
+			gridLines.assign(count, kDefaultGridLine);
 			for (size_t t = 0; t < count; ++t)
 			{
 				std::vector<uint8_t> pixels;
@@ -783,6 +1280,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 					if (!path.empty())
 						problem(std::format("terrain texture {}: {}", path, e.what()));
 				}
+				if (!pixels.empty() && !map.terrains[t].grid.empty())
+					gridLines[t] = measureGridLine(pixels, width, height, map.terrains[t].grid);
 				const uint32_t tileSize = width / 4;
 				const uint32_t tiles = tileSize ? 4 * (height / tileSize) : 0;
 				for (uint32_t s = 0; s < kSlots; ++s)
@@ -847,6 +1346,50 @@ float4 PSTerrain(PSIn i) : SV_Target
 		}
 
 		// The terrains' detail textures, one array slice of 256 pixels each (grey without one).
+		// The water plane's texture (CIV4WaterPlaneInfos), with its mips: far away the sparkles in
+		// its alpha average out, as the original's do.
+		void buildWaterArt()
+		{
+			waterTex.reset();
+			const auto loc = map.water.texture.empty() ? std::nullopt : assets.locate(makeAssetKey(map.water.texture));
+			if (!loc)
+			{
+				if (!map.water.texture.empty())
+					problem(std::format("{}: not found", map.water.texture));
+				return;
+			}
+			try
+			{
+				const gfx::Image image = gfx::loadDds(assets.read(*loc));
+				uint32_t w = image.width, h = image.height;
+				std::vector<std::vector<uint8_t>> levels{ gfx::decodeBgra(image) };
+				while (w > 1 || h > 1)
+				{
+					const uint32_t nw = std::max(w / 2, 1u), nh = std::max(h / 2, 1u);
+					const auto& up = levels.back();
+					std::vector<uint8_t> down(size_t(nw) * nh * 4);
+					for (uint32_t y = 0; y < nh; ++y)
+						for (uint32_t x = 0; x < nw; ++x)
+							for (int c = 0; c < 4; ++c)
+							{
+								const uint32_t x0 = std::min(x * 2, w - 1), x1 = std::min(x * 2 + 1, w - 1);
+								const uint32_t y0 = std::min(y * 2, h - 1), y1 = std::min(y * 2 + 1, h - 1);
+								down[(size_t(y) * nw + x) * 4 + c] = uint8_t((up[(size_t(y0) * w + x0) * 4 + c] + up[(size_t(y0) * w + x1) * 4 + c] +
+									up[(size_t(y1) * w + x0) * 4 + c] + up[(size_t(y1) * w + x1) * 4 + c] + 2) / 4);
+							}
+					levels.push_back(std::move(down));
+					w = nw;
+					h = nh;
+				}
+				const std::vector<std::span<const uint8_t>> subresources(levels.begin(), levels.end());
+				waterTex = renderer.createTexture(image.width, image.height, 1, uint32_t(levels.size()), TextureFormat::BGRA8, subresources);
+			}
+			catch (const std::exception& e)
+			{
+				problem(std::format("{}: {}", map.water.texture, e.what()));
+			}
+		}
+
 		void buildDetails()
 		{
 			detailTex.reset();
@@ -1017,12 +1560,12 @@ float4 PSTerrain(PSIn i) : SV_Target
 			lm.water = std::move(w);
 		}
 
-		LoadedModel* model(const std::string& nif, const std::string& kfm)
+		LoadedModel* model(const std::string& nif, const std::string& kfm, const ButtonArt::Icon* flag = nullptr, bool medallions = false)
 		{
 			if (nif.empty())
 				return nullptr;
 			const std::string key = makeAssetKey(nif);
-			auto& slot = models[key + '|' + makeAssetKey(kfm)];
+			auto& slot = models[key + '|' + makeAssetKey(kfm) + (flag ? '|' + std::to_string(flag->key) : "") + (medallions ? "|m" : "")];
 			if (slot)
 				return slot->ok ? slot.get() : nullptr;
 			slot = std::make_unique<LoadedModel>();
@@ -1068,12 +1611,22 @@ float4 PSTerrain(PSIn i) : SV_Target
 						node.hidden = true;
 				}
 				findWater(*file, lm, *loc);
-				lm.gpu = renderer.upload(lm.model, assets, *loc);
+				if (flag)
+				{
+					lm.flagDecal = renderer.createMipmapped(flag->width, flag->height, flag->bgra);
+				}
+				lm.gpu = renderer.upload(lm.model, assets, *loc, lm.flagDecal.get());
 				for (const auto& missing : lm.gpu->stats().missing)
 					problem(std::format("{}: texture {}", nif, missing));
 				lm.bindLocals = lm.model.bindLocals();
 				lm.bindWorld = lm.model.worldTransforms(lm.bindLocals);
 				lm.bindVisible = lm.model.visibility(lm.model.bindHidden());
+				for (const auto& item : lm.model.items)
+					if (item.contour && item.node >= 0)
+					{
+						lm.contourNodes.resize(lm.model.nodes.size(), 0);
+						lm.contourNodes[size_t(item.node)] = 1;
+					}
 				lm.bounds = lm.model.bounds;
 				for (size_t i = 0; i < lm.model.nodes.size(); ++i)
 				{
@@ -1112,7 +1665,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 					const int parent = nodes[i].parent;
 					lm.top[i] = parent < 0 || int(i) <= spread || parent == spread ? int(i) : lm.top[size_t(parent)];
 				}
-				loadIdle(lm, *loc, kfm);
+				loadIdle(lm, *loc, kfm, flag ? 3276800u : 1000u, medallions);
 				lm.ok = true;
 			}
 			catch (const std::exception& e)
@@ -1123,7 +1676,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 		}
 
 		// The idle animation (event 1000) from the art's KFM, or the one next to the model.
-		void loadIdle(LoadedModel& lm, const AssetLocation& nifLocation, const std::string& kfm)
+		void loadIdle(LoadedModel& lm, const AssetLocation& nifLocation, const std::string& kfm, uint32_t idleCode = 1000u, bool medallions = false)
 		{
 			std::string kfmKey = makeAssetKey(kfm);
 			if (kfmKey.empty())
@@ -1134,7 +1687,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 			try
 			{
 				const nif::KfmFile file = nif::parseKfm(assets.read(*loc));
-				std::vector<std::pair<uint32_t, std::optional<anim::Sequence>*>> wanted{ { 1000u, &lm.idle }, { 1010u, &lm.run }, { 1020u, &lm.fortify[0] },
+				std::vector<std::pair<uint32_t, std::optional<anim::Sequence>*>> wanted{ { idleCode, &lm.idle }, { 1010u, &lm.run }, { 1020u, &lm.fortify[0] },
 					{ 1021u, &lm.fortified[0] }, { 1030u, &lm.fortify[1] }, { 1031u, &lm.fortified[1] } };
 				for (uint32_t set = 0; set < 3; ++set)
 					for (uint32_t kind = 0; kind < 2; ++kind)
@@ -1150,7 +1703,16 @@ float4 PSTerrain(PSIn i) : SV_Target
 					for (uint32_t step = 0; step < 3; ++step)
 						wanted.emplace_back(1050 + 3 * w + step, &lm.work[w][step]);
 				wanted.emplace_back(1040u, &lm.found);
+				for (uint32_t state = 0; state < 3; ++state)
+					wanted.emplace_back(state + 1, &lm.states[state]);
 				wanted.emplace_back(1004u, &lm.heal);
+				std::vector<std::optional<anim::Sequence>> medallionStates(medallions ? 70 : 0);
+				for (uint32_t code = 10; code < 10 + medallionStates.size(); ++code)
+					if (code % 10 < 5)
+						wanted.emplace_back(code, &medallionStates[code - 10]);
+				wanted.emplace_back(1002u, &lm.surrender);
+				wanted.emplace_back(1u, &lm.fadeOut);
+				wanted.emplace_back(1042u, &lm.antiAir);
 				std::vector<std::optional<anim::Sequence>> damaged(16);
 				for (uint32_t state = 0; state < 4; ++state)
 					for (uint32_t part = 0; part < 4; ++part)
@@ -1182,6 +1744,9 @@ float4 PSTerrain(PSIn i) : SV_Target
 				for (size_t k = 0; k < damaged.size(); ++k)
 					if (damaged[k])
 						lm.damage[k / 4].push_back(std::move(*damaged[k]));
+				for (size_t k = 0; k < medallionStates.size(); ++k)
+					if (medallionStates[k])
+						lm.medallions.emplace(uint32_t(k + 10), std::move(*medallionStates[k]));
 			}
 			catch (const std::exception& e)
 			{
@@ -1271,44 +1836,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 						if (q->riverEast)
 							segment(qx + 1, qy, qx + 1, qy + 1);
 					}
-			// Flat land is not flat: gentle relief, so that the light varies over it as in the
-			// original (the same blend tiles under an even light look like one tile repeated).
-			// Faded out towards water and river beds, so that shores and rivers keep their levels.
-			const auto land = [&](int x, int y) {
-				const PlotView* p = map.plot(x, y);
-				return p && !p->water ? 1.0f : 0.0f;
-			};
-			const float l0 = land(ix, iy) + (land(ix + 1, iy) - land(ix, iy)) * fx;
-			const float l1 = land(ix, iy + 1) + (land(ix + 1, iy + 1) - land(ix, iy + 1)) * fx;
-			const float onLand = smoother((l0 + (l1 - l0) * fy - 0.5f) * 2);
-			if (onLand > 0)
-				h += relief(px, py) * kRelief * S() * onLand * (1 - bed);
 			return h - bed * 0.025f * S();
-		}
-
-		static constexpr float kRelief = 0.12f; // of a plot, either way
-
-		// Smooth noise in [-1, 1] over the map in plots, a few octaves of value noise whose
-		// lattices have whole cells a plot, so that a wrapping map has no seam.
-		float relief(float px, float py) const
-		{
-			const auto octave = [&](int cells, int salt) {
-				const float qx = px * float(cells), qy = py * float(cells);
-				const int x0 = int(std::floor(qx)), y0 = int(std::floor(qy));
-				const float fx = smoother(qx - float(x0)), fy = smoother(qy - float(y0));
-				const int periodX = map.width * cells, periodY = map.height * cells;
-				const auto at = [&](int x, int y) {
-					if (map.wrapX)
-						x = (x % periodX + periodX) % periodX;
-					if (map.wrapY)
-						y = (y % periodY + periodY) % periodY;
-					return unitFloat(hash(x, y, salt)) * 2 - 1;
-				};
-				const float a = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * fx;
-				const float b = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * fx;
-				return a + (b - a) * fy;
-			};
-			return 0.6f * octave(1, 101) + 0.3f * octave(2, 102) + 0.1f * octave(4, 103);
 		}
 
 		void buildTerrain()
@@ -1354,6 +1882,68 @@ float4 PSTerrain(PSIn i) : SV_Target
 			renderer.setGround(groundTex.get(), step, uint32_t(gridW), uint32_t(gridH), map.wrapX ? worldW() : 0);
 			vb = renderer.createBuffer(SDL_GPU_BUFFERUSAGE_VERTEX, vertices.data(), uint32_t(vertices.size() * sizeof(TerrainVertex)));
 			ib = renderer.createBuffer(SDL_GPU_BUFFERUSAGE_INDEX, indices.data(), uint32_t(indices.size() * 4));
+		}
+
+		// The water plane: a flat grid at the water's level over every tile (between four plot
+		// centres) with water at a corner, kSub quads a plot side as the ground (the globe view
+		// bends it); each vertex knows how deep the ground under it is, for the fade at the shore.
+		void buildWater()
+		{
+			waterVb.reset();
+			waterIb.reset();
+			waterIndexCount = 0;
+			const int W = map.width, H = map.height;
+			const float step = S() / kSub;
+			const auto water = [&](int x, int y) {
+				const PlotView* p = map.plot(x, y);
+				return p && p->water;
+			};
+			std::vector<WaterVertex> vertices;
+			std::vector<uint32_t> indices;
+			// (tiles from the south-west corner's plot centre: -1 .. W-1, the map's edge included)
+			for (int ty = -1; ty < H; ++ty)
+				for (int tx = -1; tx < W; ++tx)
+				{
+					if (!(water(tx, ty) || water(tx + 1, ty) || water(tx, ty + 1) || water(tx + 1, ty + 1)))
+						continue;
+					const float x0 = std::max((float(tx) + 0.5f) * S(), 0.0f), x1 = std::min((float(tx) + 1.5f) * S(), worldW());
+					const float y0 = std::max((float(ty) + 0.5f) * S(), 0.0f), y1 = std::min((float(ty) + 1.5f) * S(), worldH());
+					const int nx = std::max(1, int(std::lround((x1 - x0) / step))), ny = std::max(1, int(std::lround((y1 - y0) / step)));
+					const uint32_t first = uint32_t(vertices.size());
+					for (int j = 0; j <= ny; ++j)
+						for (int i = 0; i <= nx; ++i)
+						{
+							const float x = x0 + (x1 - x0) * float(i) / float(nx), y = y0 + (y1 - y0) * float(j) / float(ny);
+							const float level = levelHeight(x, y);
+							vertices.push_back({ { x, y, kWaterLevel }, kWaterLevel - level, std::max(level - terrainHeight(x, y), 0.0f) });
+						}
+					for (int j = 0; j < ny; ++j)
+						for (int i = 0; i < nx; ++i)
+						{
+							const uint32_t a = first + uint32_t(j * (nx + 1) + i), b = a + 1, c = b + uint32_t(nx + 1), d = a + uint32_t(nx + 1);
+							indices.insert(indices.end(), { a, b, c, a, c, d });
+						}
+				}
+			if (indices.empty())
+				return;
+			waterIndexCount = uint32_t(indices.size());
+			waterVb = renderer.createBuffer(SDL_GPU_BUFFERUSAGE_VERTEX, vertices.data(), uint32_t(vertices.size() * sizeof(WaterVertex)));
+			waterIb = renderer.createBuffer(SDL_GPU_BUFFERUSAGE_INDEX, indices.data(), uint32_t(indices.size() * 4));
+		}
+
+		static constexpr float kWaterLevel = 0; // world units: the ground's level between land (above) and water plots
+
+		// The land and water levels alone, blended between plot centres as the ground's are: how
+		// deep the sea is from the shore out (hills, river beds and the like left out: the ground
+		// there hides the water or is not sea).
+		float levelHeight(float wx, float wy) const
+		{
+			const float cx = wx / S() - 0.5f, cy = wy / S() - 0.5f;
+			const int ix = int(std::floor(cx)), iy = int(std::floor(cy));
+			const float fx = smoother(cx - float(ix)), fy = smoother(cy - float(iy));
+			const float b0 = baseLevel(ix, iy) + (baseLevel(ix + 1, iy) - baseLevel(ix, iy)) * fx;
+			const float b1 = baseLevel(ix, iy + 1) + (baseLevel(ix + 1, iy + 1) - baseLevel(ix, iy + 1)) * fx;
+			return b0 + (b1 - b0) * fy;
 		}
 
 		// How far the minimap is moved: by none once the team's map is centred, or with the fog of
@@ -1506,102 +2096,77 @@ float4 PSTerrain(PSIn i) : SV_Target
 			updateCells(data);
 		}
 
-		// Where the rivers are drawn, water and bed (their pieces' "RiverBase" grids by the
-		// texture's alpha), kBorderRes texels a plot side: the culture borders keep to the river
-		// banks, outside the bed the rivers draw over them.
-		void buildRiverMask()
+		// The culture borders' tiles, the original's (CIV4RiverModelInfos' BorderFile and the two
+		// without a river), a slice each of borderArtTex: their alpha (they are white).
+		void buildBorderArt()
 		{
-			const int R = kBorderRes, TW = map.width * R, TH = map.height * R;
-			riverMask.assign(size_t(TW) * size_t(TH), 0);
-			riverMaskChanged = true;
-			const float toTexel = float(R) / S();
-			for (const Instance& d : decor)
+			std::vector<std::string> files{ "Art/Terrain/Routes/Rivers/NoRiverBorder.dds", "Art/Terrain/Routes/Rivers/NoRiverCurvedBorder.dds" };
+			riverBorderSlice.assign(map.rivers.size(), -1);
+			for (size_t r = 0; r < map.rivers.size(); ++r)
 			{
-				if (!d.model->water)
+				if (map.rivers[r].border.empty())
 					continue;
-				const LoadedModel::Water& w = *d.model->water;
-				for (size_t t = 0; t + 2 < w.corners.size(); t += 3)
+				const std::string key = makeAssetKey(map.rivers[r].border);
+				auto it = std::ranges::find_if(files, [&](const std::string& f) { return makeAssetKey(f) == key; });
+				if (it == files.end())
 				{
-					const Vec3 a = d.place.point(w.corners[t]) * toTexel, b = d.place.point(w.corners[t + 1]) * toTexel,
-							   c = d.place.point(w.corners[t + 2]) * toTexel;
-					const float den = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
-					if (std::abs(den) < 1e-9f)
-						continue;
-					const int x0 = int(std::floor(std::min({ a.x, b.x, c.x }))), x1 = int(std::ceil(std::max({ a.x, b.x, c.x })));
-					const int y0 = int(std::floor(std::min({ a.y, b.y, c.y }))), y1 = int(std::ceil(std::max({ a.y, b.y, c.y })));
-					for (int ty = y0; ty <= y1; ++ty)
-					{
-						int wy = ty;
-						if (map.wrapY)
-							wy = (wy % TH + TH) % TH;
-						else if (wy < 0 || wy >= TH)
-							continue;
-						for (int tx = x0; tx <= x1; ++tx)
-						{
-							int wx = tx;
-							if (map.wrapX)
-								wx = (wx % TW + TW) % TW;
-							else if (wx < 0 || wx >= TW)
-								continue;
-							// (four samples a texel: the water is narrow, a texel or two)
-							for (int k = 0; k < 4; ++k)
-							{
-								const float px = float(tx) + 0.25f + 0.5f * float(k & 1), py = float(ty) + 0.25f + 0.5f * float(k >> 1);
-								const float l0 = ((b.y - c.y) * (px - c.x) + (c.x - b.x) * (py - c.y)) / den;
-								const float l1 = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / den;
-								const float l2 = 1 - l0 - l1;
-								if (l0 < -1e-4f || l1 < -1e-4f || l2 < -1e-4f)
-									continue;
-								float u = l0 * w.uvs[t][0] + l1 * w.uvs[t + 1][0] + l2 * w.uvs[t + 2][0];
-								float v = l0 * w.uvs[t][1] + l1 * w.uvs[t + 1][1] + l2 * w.uvs[t + 2][1];
-								u -= std::floor(u), v -= std::floor(v);
-								const uint32_t ax = std::min(uint32_t(u * float(w.width)), w.width - 1), ay = std::min(uint32_t(v * float(w.height)), w.height - 1);
-								if ((*w.alpha)[size_t(ay) * w.width + ax])
-								{
-									riverMask[size_t(wy) * size_t(TW) + size_t(wx)] = 1;
-									break;
-								}
-							}
-						}
-					}
+					files.push_back(map.rivers[r].border);
+					it = files.end() - 1;
 				}
+				riverBorderSlice[r] = int(it - files.begin());
 			}
-			// Gaps of a texel closed (where water is on both sides), that an owner's ground could
-			// reach through.
-			const auto water = [&](int tx, int ty) {
-				if (map.wrapX)
-					tx = (tx % TW + TW) % TW;
-				if (map.wrapY)
-					ty = (ty % TH + TH) % TH;
-				return tx >= 0 && ty >= 0 && tx < TW && ty < TH && riverMask[size_t(ty) * TW + tx] != 0;
-			};
-			std::vector<uint8_t> closed = riverMask;
-			for (int ty = 0; ty < TH; ++ty)
-				for (int tx = 0; tx < TW; ++tx)
-					if (!riverMask[size_t(ty) * TW + tx] &&
-						((water(tx - 1, ty) && water(tx + 1, ty)) || (water(tx, ty - 1) && water(tx, ty + 1)) ||
-							(water(tx - 1, ty - 1) && water(tx + 1, ty + 1)) || (water(tx - 1, ty + 1) && water(tx + 1, ty - 1))))
-						closed[size_t(ty) * TW + tx] = 1;
-			riverMask = std::move(closed);
+			std::vector<std::vector<uint8_t>> slices;
+			for (const std::string& f : files)
+			{
+				std::vector<uint8_t> alpha(size_t(kBorderArtSize) * kBorderArtSize, 0);
+				if (const auto loc = assets.locate(makeAssetKey(f)))
+					try
+					{
+						const gfx::Image image = gfx::loadTexture(assets.read(*loc));
+						const auto pixels = gfx::decodeBgra(image);
+						if (image.width != uint32_t(kBorderArtSize) || image.height != uint32_t(kBorderArtSize))
+							problem(std::format("{}: {}x{}, not {} square", f, image.width, image.height, kBorderArtSize));
+						else
+							for (size_t i = 0; i < alpha.size(); ++i)
+								alpha[i] = pixels[i * 4 + 3];
+					}
+					catch (const std::exception& e)
+					{
+						problem(std::format("{}: {}", f, e.what()));
+					}
+				else
+					problem(std::format("{}: not found", f));
+				slices.push_back(std::move(alpha));
+			}
+			const std::vector<std::span<const uint8_t>> subresources(slices.begin(), slices.end());
+			borderArtTex = renderer.createTexture(kBorderArtSize, kBorderArtSize, uint32_t(slices.size()), 1, TextureFormat::R8, subresources);
 		}
 
-		// The culture borders, kBorderRes texels a plot side: whose ground each texel is, and how
-		// far it is from another owner's (in kBorderReach). Along a river between plots of
-		// different owners the ground is the plots' up to their banks, as the river bends: the
-		// plots on either side reach for it from their centres, around the water (an unowned plot
-		// goes over it: the water is outside the owner's border).
+		// The culture borders, as the original draws them: at every plot corner, for each owner
+		// of the four plots around it, the tile for which of them are its. The tiles are the
+		// cells of a 512-texel file, a plot square centred on the corner: no river,
+		// noriverborder.dds (the outer corners notched), where the owner's plots there are water
+		// norivercurvedborder.dds, and where a river piece lies at the corner the piece's
+		// BorderFile, turned as the piece is, whose line keeps to that piece's banks (the river's
+		// water and any island in it nobody's). borderTex holds them, four texels a corner (BGRA:
+		// owner + 1, cell, slice of borderArtTex, quarter turns clockwise); the border shader
+		// draws, of a corner's tiles, the most opaque, as CultureBorderShader.fx does.
 		void updateBorders()
 		{
-			const int W = map.width, H = map.height, R = kBorderRes, TW = W * R, TH = H * R;
+			const int W = map.width, H = map.height;
+			const int CW = map.wrapX ? W : W + 1, CH = map.wrapY ? H : H + 1;
 			std::vector<int16_t> owners(map.plots.size());
+			std::vector<uint8_t> water(map.plots.size());
 			for (size_t i = 0; i < owners.size(); ++i)
-				owners[i] = map.plots[i].owner;
-			if (!riverMaskChanged && borderTex && borderTex->width == uint32_t(TW) && borderTex->height == uint32_t(TH) && owners == borderOwners)
+				owners[i] = map.plots[i].owner, water[i] = map.plots[i].water;
+			if (!borderArtTex)
+				buildBorderArt();
+			if (!cornerRiverChanged && borderTex && borderTex->width == uint32_t(CW * 4) && borderTex->height == uint32_t(CH) && owners == borderOwners &&
+				water == borderWater)
 				return;
-			if (riverMask.size() != size_t(TW) * size_t(TH))
-				riverMask.assign(size_t(TW) * size_t(TH), 0);
-			riverMaskChanged = false;
+			cornerRiverChanged = false;
 			borderOwners = owners;
+			borderWater = water;
 
 			const auto plotIndex = [&](int px, int py) -> int {
 				if (map.wrapX)
@@ -1610,188 +2175,60 @@ float4 PSTerrain(PSIn i) : SV_Target
 					py = (py % H + H) % H;
 				return px < 0 || py < 0 || px >= W || py >= H ? -1 : px + py * W;
 			};
-			// A river along the edge between plot (px, py) and its neighbour (dx, dy) (one step).
-			const auto riverBetween = [&](int px, int py, int dx, int dy) {
-				const PlotView* q = dx > 0 || dy < 0 ? map.plot(px, py) : map.plot(px + dx, py + dy);
-				return q && (dx != 0 ? q->riverEast : q->riverSouth);
-			};
-			static const int kStep[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
-
-			std::vector<int32_t> label(size_t(TW) * size_t(TH)); // the plot whose ground the texel is
-			for (int ty = 0; ty < TH; ++ty)
-				for (int tx = 0; tx < TW; ++tx)
-					label[size_t(ty) * TW + tx] = tx / R + (ty / R) * W;
-
-			// The plots along rivers between different owners compete for the ground around them.
-			std::vector<uint8_t> zone(map.plots.size(), 0);
-			bool anyZone = false;
-			for (int py = 0; py < H; ++py)
-				for (int px = 0; px < W; ++px)
-					for (const auto& s : kStep)
-					{
-						const int n = plotIndex(px + s[0], py + s[1]);
-						if (n >= 0 && owners[size_t(n)] != owners[size_t(px + py * W)] && riverBetween(px, py, s[0], s[1]))
-							zone[size_t(px + py * W)] = 1, anyZone = true;
-					}
-			if (anyZone)
-			{
-				constexpr uint32_t kFar = 0xFFFFFFFFu;
-				std::vector<uint32_t> dist(label.size(), kFar);
-				using Item = std::pair<uint32_t, uint32_t>;
-				std::priority_queue<Item, std::vector<Item>, std::greater<>> open;
-				for (int py = 0; py < H; ++py)
-					for (int px = 0; px < W; ++px)
-						if (zone[size_t(px + py * W)])
-						{
-							const uint32_t t = uint32_t((py * R + R / 2) * TW + px * R + R / 2);
-							dist[t] = 0;
-							label[t] = px + py * W;
-							open.push({ 0, t });
-						}
-				while (!open.empty())
+			// The cells (row * 4 + column) by which of the four plots round the corner are the
+			// owner's, as the tiles have them unturned, north up: bits north-west 1, north-east 2,
+			// south-east 4, south-west 8. Measured from where each cell's wash is. None for all
+			// four or none; two diagonal plots take a cell each.
+			static constexpr uint8_t kNone = 255;
+			static constexpr uint8_t kCell[16] = { kNone, 8, 9, 0, 3, kNone, 7, 5, 2, 6, kNone, 4, 1, 10, 11, kNone };
+			std::vector<uint8_t> data(size_t(CW) * 4 * size_t(CH) * 4, 0);
+			for (int cy = 0; cy < CH; ++cy)
+				for (int cx = 0; cx < CW; ++cx)
 				{
-					const auto [d, t] = open.top();
-					open.pop();
-					if (d != dist[t])
-						continue;
-					const int tx = int(t % uint32_t(TW)), ty = int(t / uint32_t(TW));
-					const int from = label[t];
-					const bool owned = owners[size_t(from)] >= 0;
-					for (int k = 0; k < 8; ++k)
+					// (the plots round the corner clockwise from the north-west: plot (cx, cy) is its north-east)
+					const int quad[4] = { plotIndex(cx - 1, cy), plotIndex(cx, cy), plotIndex(cx, cy - 1), plotIndex(cx - 1, cy - 1) };
+					int riverSlice = -1, turn = 0;
+					const auto river = cornerRiver.size() == size_t(CW) * CH ? cornerRiver[size_t(cy) * CW + cx] : std::pair<int16_t, int16_t>{ -1, 0 };
+					if (river.first >= 0 && size_t(river.first) < riverBorderSlice.size() && riverBorderSlice[size_t(river.first)] >= 0)
+						riverSlice = riverBorderSlice[size_t(river.first)], turn = ((river.second / 90) % 4 + 4) % 4;
+					uint8_t* out = data.data() + (size_t(cy) * CW + cx) * 16;
+					int slot = 0, slice = 0;
+					const auto put = [&](int16_t owner, int mask) {
+						if (slot == 4 || kCell[mask] == kNone)
+							return;
+						uint8_t* t = out + slot++ * 4;
+						t[2] = uint8_t(std::min(owner + 1, 255)), t[1] = kCell[mask], t[0] = uint8_t(slice), t[3] = uint8_t(turn);
+					};
+					for (int k = 0; k < 4; ++k)
 					{
-						static const int kNeighbour[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 } };
-						int nx = tx + kNeighbour[k][0], ny = ty + kNeighbour[k][1];
-						if (map.wrapX)
-							nx = (nx % TW + TW) % TW;
-						if (map.wrapY)
-							ny = (ny % TH + TH) % TH;
-						if (nx < 0 || ny < 0 || nx >= TW || ny >= TH)
+						const int16_t owner = quad[k] >= 0 ? owners[size_t(quad[k])] : int16_t(-1);
+						if (owner < 0 || std::ranges::any_of(quad, quad + k, [&](int q) { return q >= 0 && owners[size_t(q)] == owner; }))
 							continue;
-						// Into another plot only over a river along their edge, and only between
-						// plots that compete.
-						const int ppx = tx / R, ppy = ty / R, npx = nx / R, npy = ny / R;
-						if (npx != ppx || npy != ppy)
-						{
-							if (npx != ppx && npy != ppy)
-								continue;
-							int dx = npx - ppx, dy = npy - ppy;
-							dx = dx > 1 ? -1 : dx < -1 ? 1 : dx; // (around a wrapping map)
-							dy = dy > 1 ? -1 : dy < -1 ? 1 : dy;
-							if (!zone[size_t(npx + npy * W)] || !riverBetween(ppx, ppy, dx, dy))
-								continue;
-						}
-						const uint32_t n = uint32_t(ny * TW + nx);
-						uint32_t cost = k < 4 ? 5 : 7;
-						if (riverMask[n])
-							cost *= owned ? 12 : 1;
-						if (d + cost < dist[n])
-						{
-							dist[n] = d + cost;
-							label[n] = from;
-							open.push({ d + cost, n });
-						}
+						// (the curved tiles where the owner's ground at the corner is water: in the
+						// original a corner of land by the sea is notched as inland, one over the sea
+						// is round)
+						slice = riverSlice >= 0 ? riverSlice
+							: std::ranges::any_of(quad, [&](int q) { return q >= 0 && owners[size_t(q)] == owner && water[size_t(q)]; }) ? 1 : 0;
+						// (unturned, the tile's quadrant j is the world's j + turn)
+						int mask = 0;
+						for (int j = 0; j < 4; ++j)
+							if (const int q = quad[(j + turn) % 4]; q >= 0 && owners[size_t(q)] == owner)
+								mask |= 1 << j;
+						if (mask == 5)
+							put(owner, 1), put(owner, 4);
+						else if (mask == 10)
+							put(owner, 2), put(owner, 8);
+						else
+							put(owner, mask);
 					}
 				}
-			}
-
-			// Each texel's owner, then its distance to another owner's ground (two chamfer passes).
-			std::vector<uint16_t> owner(label.size());
-			for (size_t i = 0; i < label.size(); ++i)
-				owner[i] = uint16_t(owners[size_t(label[i])] + 1);
-			// Along the rivers the ground follows the river bed's texels: smoothed, each texel the
-			// owner of most of those around it, so that the border has no steps.
-			if (anyZone)
+			if (!borderTex || borderTex->width != uint32_t(CW * 4) || borderTex->height != uint32_t(CH))
 			{
-				const auto texel = [&](int tx, int ty) -> int {
-					if (map.wrapX)
-						tx = (tx % TW + TW) % TW;
-					if (map.wrapY)
-						ty = (ty % TH + TH) % TH;
-					return tx < 0 || ty < 0 || tx >= TW || ty >= TH ? -1 : ty * TW + tx;
-				};
-				for (int round = 0; round < 2; ++round)
-				{
-					std::vector<uint16_t> smoothed = owner;
-					for (int ty = 0; ty < TH; ++ty)
-						for (int tx = 0; tx < TW; ++tx)
-						{
-							if (!zone[size_t(tx / R + (ty / R) * W)])
-								continue;
-							std::pair<uint16_t, int> counts[25];
-							int kinds = 0;
-							for (int dy = -2; dy <= 2; ++dy)
-								for (int dx = -2; dx <= 2; ++dx)
-								{
-									if (std::abs(dx) + std::abs(dy) > 3)
-										continue;
-									const int n = texel(tx + dx, ty + dy);
-									if (n < 0)
-										continue;
-									const uint16_t o = owner[size_t(n)];
-									int k = 0;
-									while (k < kinds && counts[k].first != o)
-										++k;
-									if (k == kinds)
-										counts[kinds++] = { o, 0 };
-									++counts[k].second;
-								}
-							int best = 0;
-							for (int k = 1; k < kinds; ++k)
-								if (counts[k].second > counts[best].second)
-									best = k;
-							smoothed[size_t(ty) * TW + tx] = counts[best].first;
-						}
-					owner = std::move(smoothed);
-				}
-			}
-			const auto at = [&](int tx, int ty) -> int {
-				if (map.wrapX)
-					tx = (tx % TW + TW) % TW;
-				if (map.wrapY)
-					ty = (ty % TH + TH) % TH;
-				return tx < 0 || ty < 0 || tx >= TW || ty >= TH ? -1 : ty * TW + tx;
-			};
-			const float reach = kBorderReach * float(R);
-			std::vector<float> edge(label.size(), reach);
-			for (int ty = 0; ty < TH; ++ty)
-				for (int tx = 0; tx < TW; ++tx)
-				{
-					const int i = ty * TW + tx;
-					for (const auto& s : kStep)
-						if (const int n = at(tx + s[0], ty + s[1]); n >= 0 && owner[size_t(n)] != owner[size_t(i)])
-						{
-							edge[size_t(i)] = 0.5f;
-							break;
-						}
-				}
-			constexpr float kDiagonal = 1.41421356f;
-			for (int pass = 0; pass < 2; ++pass)
-			{
-				const int step = pass == 0 ? 1 : -1;
-				for (int ty = pass == 0 ? 0 : TH - 1; ty >= 0 && ty < TH; ty += step)
-					for (int tx = pass == 0 ? 0 : TW - 1; tx >= 0 && tx < TW; tx += step)
-					{
-						float& e = edge[size_t(ty * TW + tx)];
-						const int previous[4][2] = { { -step, 0 }, { -step, -step }, { 0, -step }, { step, -step } };
-						for (int k = 0; k < 4; ++k)
-							if (const int n = at(tx + previous[k][0], ty + previous[k][1]); n >= 0)
-								e = std::min(e, edge[size_t(n)] + (k & 1 ? kDiagonal : 1.0f));
-					}
-			}
-
-			std::vector<uint16_t> data(label.size() * 4, 0);
-			for (size_t i = 0; i < label.size(); ++i)
-			{
-				data[i * 4 + 0] = owner[i];
-				data[i * 4 + 1] = uint16_t(std::min(edge[i] / reach, 1.0f) * 65535.0f + 0.5f);
-			}
-			if (!borderTex || borderTex->width != uint32_t(TW) || borderTex->height != uint32_t(TH))
-			{
-				const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data.data()), data.size() * 2);
-				borderTex = renderer.createTexture(uint32_t(TW), uint32_t(TH), 1, 1, TextureFormat::RGBA16, std::span(&bytes, 1));
+				const std::span<const uint8_t> bytes(data.data(), data.size());
+				borderTex = renderer.createTexture(uint32_t(CW * 4), uint32_t(CH), 1, 1, TextureFormat::BGRA8, std::span(&bytes, 1));
 			}
 			else
-				renderer.updateTexture(*borderTex, 0, 0, 0, 0, uint32_t(TW), uint32_t(TH), data.data());
+				renderer.updateTexture(*borderTex, 0, 0, 0, 0, uint32_t(CW * 4), uint32_t(CH), data.data());
 		}
 
 		// The terrain shader's tile variant hash, the same bits.
@@ -1933,6 +2370,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 						return &p;
 				return nullptr;
 			};
+			// (a piece stands on the ground, or at `at.z` where that is higher: the water's level 0)
+			constexpr float kOnGround = -std::numeric_limits<float>::infinity();
 			const auto add = [&](const FeatureArt& art, const FeatureArt::Piece& piece, Vec3 at, uint32_t h) {
 				if (piece.models.empty())
 					return;
@@ -1942,13 +2381,20 @@ float4 PSTerrain(PSIn i) : SV_Target
 					return;
 				if (LoadedModel* lm = model(nif, {}))
 				{
-					at.z = ground(at.x, at.y);
+					at.z = std::max(ground(at.x, at.y), at.z);
 					features.push_back(placeStatic(lm, placement(at, -float(rotation) * std::numbers::pi_v<float> / 2, art.scale)));
 				}
 			};
 
 			// Trees and ice tile by plot corners: each corner takes the piece for the plots
-			// around it that have the feature.
+			// around it that have the feature. (The original grows no trees on water: a forest
+			// or jungle on a water plot isn't drawn, while ice, fallout and the others are.)
+			const auto shownFeature = [&](const PlotView* p) {
+				if (!p)
+					return -1;
+				const FeatureArt* art = featureArt(p->feature);
+				return art && art->tiling == FeatureArt::Tiling::Trees && p->water ? -1 : p->feature;
+			};
 			const int cornersX = map.wrapX ? W : W + 1, cornersY = map.wrapY ? H : H + 1;
 			for (int cy = 0; cy < cornersY; ++cy)
 				for (int cx = 0; cx < cornersX; ++cx)
@@ -1958,7 +2404,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 					int done[4] = { -1, -1, -1, -1 };
 					for (int k = 0; k < 4; ++k)
 					{
-						const int f = around[k] ? around[k]->feature : -1;
+						const int f = shownFeature(around[k]);
 						const FeatureArt* art = featureArt(f);
 						if (!art || (art->tiling != FeatureArt::Tiling::Trees && art->tiling != FeatureArt::Tiling::HalfTiling) ||
 							std::find(std::begin(done), std::end(done), f) != std::end(done))
@@ -1966,13 +2412,13 @@ float4 PSTerrain(PSIn i) : SV_Target
 						done[k] = f;
 						int mask = 0;
 						for (int j = 0; j < 4; ++j)
-							if (around[j] && around[j]->feature == f)
+							if (shownFeature(around[j]) == f)
 								mask |= bits[j];
 						if (art->varieties.empty())
 							continue;
 						const size_t variety = std::min<size_t>(around[k]->featureVariety, art->varieties.size() - 1);
 						if (const auto* piece = findPiece(art->varieties[variety], mask))
-							add(*art, *piece, { float(cx) * S(), float(cy) * S(), 0 }, hash(cx, cy, f));
+							add(*art, *piece, { float(cx) * S(), float(cy) * S(), kOnGround }, hash(cx, cy, f));
 					}
 				}
 			// The others stand in their plot.
@@ -1987,13 +2433,18 @@ float4 PSTerrain(PSIn i) : SV_Target
 					const auto* piece = findPiece(pieces, 0);
 					if (!piece && !pieces.empty())
 						piece = &pieces.front();
+					// (on a water plot it stands on the water, at the level of the original's plot point
+					// there: an oasis's pool and sand over the sea, not under it on the sea floor)
 					if (piece)
-						add(*art, *piece, { (float(x) + 0.5f) * S(), (float(y) + 0.5f) * S(), 0 }, hash(x, y, p.feature));
+						add(*art, *piece, { (float(x) + 0.5f) * S(), (float(y) + 0.5f) * S(), p.water ? 0.0f : kOnGround }, hash(x, y, p.feature));
 				}
 		}
 
 		// A model of the snapshot standing at a point, animated when it has an idle animation.
-		void addDecor(int index, Vec3 at, float yaw, uint32_t h)
+		// Draped: its heights over the terrain under each of its points, as roads are (a land
+		// resource: its fields would sink under the slope of a hill beside it). Not a model with
+		// skinned figures (cows, horses, deer): they stand upright.
+		void addDecor(int index, Vec3 at, float yaw, uint32_t h, int state = 0, bool draped = false)
 		{
 			if (index < 0 || size_t(index) >= map.models.size())
 				return;
@@ -2001,8 +2452,26 @@ float4 PSTerrain(PSIn i) : SV_Target
 			LoadedModel* lm = model(art.nif, art.kfm);
 			if (!lm)
 				return;
-			at.z = ground(at.x, at.y);
-			if (!lm->idle)
+			if (std::ranges::any_of(lm->model.items, [](const scene::DrawItem& item) { return item.skinned; }))
+				draped = false;
+			const float groundZ = ground(at.x, at.y);
+			at.z = draped ? 4.0f : groundZ; // (draped: a little over it: low leaves, a wheat field's, are not lost in the terrain's bumps)
+			const anim::Sequence* sequence = state >= 1 && state <= 3 && lm->states[state - 1] ? &*lm->states[state - 1] : nullptr;
+			if (draped && !lm->idle && !sequence)
+			{
+				Instance inst;
+				inst.model = lm;
+				inst.place = placement(at, yaw, art.scale);
+				inst.world.resize(lm->bindWorld.size());
+				for (size_t i = 0; i < inst.world.size(); ++i)
+					inst.world[i] = inst.place * lm->bindWorld[i];
+				inst.center = inst.place.point(lm->bounds.center()) + Vec3{ 0, 0, groundZ };
+				inst.radius = lm->bounds.radius() * art.scale + 1;
+				inst.onGround = true;
+				decor.push_back(std::move(inst));
+				return;
+			}
+			if (!lm->idle && !sequence)
 			{
 				decor.push_back(placeStatic(lm, placement(at, yaw, art.scale)));
 				return;
@@ -2010,16 +2479,71 @@ float4 PSTerrain(PSIn i) : SV_Target
 			Instance inst;
 			inst.model = lm;
 			inst.place = placement(at, yaw, art.scale);
-			inst.center = inst.place.point(lm->bounds.center());
+			inst.center = inst.place.point(lm->bounds.center()) + Vec3{ 0, 0, draped ? groundZ : 0 };
 			inst.radius = lm->bounds.radius() * art.scale + 1;
 			inst.animated = true;
+			inst.onGround = draped;
+			inst.sequence = sequence;
 			inst.phase = unitFloat(h) * 10;
 			decor.push_back(std::move(inst));
 		}
 
+		// What the plot LSystem lays out on a plot: models standing, and nodes of models (a
+		// farm's crops) laid on the ground, each over the one before it.
+		void addLayout(const std::vector<PlotPiece>& pieces, Vec3 center, uint32_t h, int state = 0)
+		{
+			float lift = 0.5f;
+			for (const PlotPiece& piece : pieces)
+			{
+				const Vec3 at{ center.x + piece.x * S(), center.y + piece.y * S(), 0 };
+				if (piece.cut > 0)
+					layoutCuts.push_back({ at, piece.cut * S() });
+				if (piece.node.empty())
+				{
+					addDecor(piece.model, at, piece.yaw, h++, state);
+					continue;
+				}
+				if (piece.model < 0 || size_t(piece.model) >= map.models.size())
+					continue;
+				const ModelArt& art = map.models[size_t(piece.model)];
+				LoadedModel* lm = model(art.nif, {});
+				if (!lm)
+					continue;
+				buildParts(*lm);
+				const auto part = std::ranges::find_if(lm->parts, [&](const LoadedModel::Part& p) {
+					return toLowerAscii(lm->model.nodes[size_t(p.node)].name) == toLowerAscii(piece.node);
+				});
+				if (part == lm->parts.end())
+					continue;
+				if (piece.standing)
+				{
+					// (a house of a city file: stands on the ground, as the city's own houses)
+					const Vec3 middle = part->bounds.center();
+					decor.push_back(placeStatic(lm, placement({ at.x, at.y, ground(at.x, at.y) }, piece.yaw, art.scale),
+						translation({ -middle.x, -middle.y, 0 }), &part->visible, &part->bounds));
+					continue;
+				}
+				// (the node stands somewhere in its file: moved to the middle of the plot's piece)
+				const Vec3 origin = lm->bindWorld[size_t(part->node)].translation;
+				Instance inst;
+				inst.model = lm;
+				inst.place = placement({ at.x, at.y, lift }, piece.yaw, art.scale) * translation({ -origin.x, -origin.y, 0 });
+				inst.world.resize(lm->bindWorld.size());
+				for (size_t i = 0; i < inst.world.size(); ++i)
+					inst.world[i] = inst.place * lm->bindWorld[i];
+				inst.visible = part->visible;
+				inst.center = { at.x, at.y, ground(at.x, at.y) };
+				inst.radius = part->bounds.radius() * art.scale + 0.2f * S();
+				inst.onGround = true;
+				inst.laid = true; // (the original: a farm's crops tinted by the border, as the ground)
+				decor.push_back(std::move(inst));
+				lift += 0.1f;
+			}
+		}
+
 		// A piece laid on the terrain (roads, rivers): heights over it, a little above it
 		// against z-fighting; turned clockwise.
-		void addOnGround(const std::string& nif, Vec3 at, int degrees, float lift)
+		void addOnGround(const std::string& nif, Vec3 at, int degrees, float lift, bool route = false)
 		{
 			LoadedModel* lm = model(nif, {});
 			if (!lm)
@@ -2033,6 +2557,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 			inst.center = { at.x, at.y, ground(at.x, at.y) };
 			inst.radius = lm->bounds.radius() + 0.2f * S();
 			inst.onGround = true;
+			inst.route = route;
+			inst.laid = true;
 			decor.push_back(std::move(inst));
 		}
 
@@ -2044,6 +2570,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 			const auto east = [&](int x, int y) { const PlotView* q = map.plot(x, y); return q && q->riverEast; };
 			const auto water = [&](int x, int y) { const PlotView* q = map.plot(x, y); return q && q->water; };
 			const int cornersX = map.wrapX ? map.width : map.width + 1, cornersY = map.wrapY ? map.height : map.height + 1;
+			// (which piece lies at each corner, for the culture borders' tiles there)
+			std::vector<std::pair<int16_t, int16_t>> pieces(size_t(cornersX) * cornersY, { int16_t(-1), int16_t(0) });
 			for (int cy = 0; cy < cornersY; ++cy)
 				for (int cx = 0; cx < cornersX; ++cx)
 				{
@@ -2097,7 +2625,35 @@ float4 PSTerrain(PSIn i) : SV_Target
 						continue;
 					const auto& [r, degrees] = fits[hash(cx, cy, 31) % fits.size()];
 					addOnGround(r->nif, { float(cx) * S(), float(cy) * S(), 0 }, degrees, 0.8f);
+					pieces[size_t(cy) * cornersX + cx] = { int16_t(r - map.rivers.data()), int16_t(degrees) };
 				}
+			if (pieces != cornerRiver)
+			{
+				cornerRiver = std::move(pieces);
+				cornerRiverChanged = true;
+			}
+		}
+
+		// The files of a route piece the XML names. Most of the original's road pieces exist only as
+		// variants: no RoadB03.nif, but RoadB03-000.nif to RoadB03-003.nif (the "a" to "d" of the
+		// artists' road key, art/terrain/routes/roadkeypage*.jpg), and the game draws one of them.
+		// Empty when there is none that loads (some files the XML lists do not exist, in the
+		// original either).
+		const std::vector<std::string>& routeFiles(const std::string& nif)
+		{
+			const auto [it, added] = routeVariants.try_emplace(nif);
+			if (!added)
+				return it->second;
+			const auto loads = [&](const std::string& file) { return assets.locate(makeAssetKey(file)) && model(file, {}); };
+			if (loads(nif))
+				it->second.push_back(nif);
+			else if (nif.size() > 4 && toLowerAscii(nif.substr(nif.size() - 4)) == ".nif")
+				for (int i = 0; i < 100; ++i)
+					if (const std::string file = std::format("{}-{:03}.nif", nif.substr(0, nif.size() - 4), i); loads(file))
+						it->second.push_back(file);
+					else
+						break;
+			return it->second;
 		}
 
 		// Route pieces: the one whose connections, turned, are the neighbours with routes;
@@ -2110,13 +2666,16 @@ float4 PSTerrain(PSIn i) : SV_Target
 				if (const PlotView* q = map.plot(x + kDx[d], y + kDy[d]); q && q->route >= 0)
 					mask |= 1 << d;
 			const Vec3 center{ (float(x) + 0.5f) * S(), (float(y) + 0.5f) * S(), 0 };
-			const auto place = [&](const RouteArt& r, int degrees) { addOnGround(r.nif, center, degrees, 0.6f); };
+			// (one of the piece's variants, the same for the plot each time the decor is built)
+			const auto place = [&](const RouteArt& r, int degrees) {
+				const auto& files = routeFiles(r.nif);
+				addOnGround(files[hash(x, y, 41) % files.size()], center, degrees, 0.6f, true);
+			};
 			const auto find = [&](int wanted) -> std::pair<const RouteArt*, int> {
 				for (const RouteArt& r : map.routes)
 					if (r.route == p.route)
 						for (const int degrees : r.rotations.empty() ? std::vector<int>{ 0 } : r.rotations)
-							// (some files the XML lists do not exist, in the original either)
-							if (turned(r.connections, degrees) == wanted && assets.locate(makeAssetKey(r.nif)) && model(r.nif, {}))
+							if (turned(r.connections, degrees) == wanted && !routeFiles(r.nif).empty())
 								return { &r, degrees };
 				return { nullptr, 0 };
 			};
@@ -2131,9 +2690,37 @@ float4 PSTerrain(PSIn i) : SV_Target
 						place(*r, degrees);
 		}
 
+		// Bridges: where a road crosses a river between two plots side by side (not corner to
+		// corner), across the middle of the edge, along the road; a railroad bridge between two
+		// railroads. On the higher of the banks: the river's bed is lower.
+		void addBridges()
+		{
+			const auto bridge = [&](const PlotView& a, const PlotView& b, Vec3 at, float yaw) {
+				const auto& art = a.route == map.railroadRoute && b.route == map.railroadRoute && !map.railroadBridge.nif.empty() ? map.railroadBridge : map.routeBridge;
+				LoadedModel* lm = art.nif.empty() ? nullptr : model(art.nif, "");
+				if (!lm)
+					return;
+				at.z = std::max(ground(at.x, at.y), 0.5f * (ground(at.x - S() / 2 * std::cos(yaw), at.y - S() / 2 * std::sin(yaw)) +
+					ground(at.x + S() / 2 * std::cos(yaw), at.y + S() / 2 * std::sin(yaw))));
+				decor.push_back(placeStatic(lm, placement(at, yaw, art.scale > 0 ? art.scale : 1)));
+			};
+			for (int y = 0; y < map.height; ++y)
+				for (int x = 0; x < map.width; ++x)
+				{
+					const PlotView& p = map.plots[size_t(x) + size_t(y) * size_t(map.width)];
+					if (p.route < 0)
+						continue;
+					if (const PlotView* east = map.plot(x + 1, y); east && east->route >= 0 && p.riverEast)
+						bridge(p, *east, { float(x + 1) * S(), (float(y) + 0.5f) * S(), 0 }, 0);
+					if (const PlotView* south = map.plot(x, y - 1); south && south->route >= 0 && p.riverSouth)
+						bridge(p, *south, { (float(x) + 0.5f) * S(), float(y) * S(), 0 }, std::numbers::pi_v<float> / 2);
+				}
+		}
+
 		void buildDecor()
 		{
 			decor.clear();
+			layoutCuts.clear();
 			addRivers();
 			for (int y = 0; y < map.height; ++y)
 				for (int x = 0; x < map.width; ++x)
@@ -2142,16 +2729,20 @@ float4 PSTerrain(PSIn i) : SV_Target
 					const Vec3 center{ (float(x) + 0.5f) * S(), (float(y) + 0.5f) * S(), 0 };
 					if (p.route >= 0)
 						addRoute(x, y, p);
-					if (p.improvement >= 0 && size_t(p.improvement) < map.improvements.size())
-						addDecor(map.improvements[size_t(p.improvement)], center, 0, hash(x, y, 7));
+					if (p.layout >= 0 && size_t(p.layout) < map.plotLayouts.size())
+						addLayout(map.plotLayouts[size_t(p.layout)], center, hash(x, y, 7), p.improvementState);
+					else if (p.improvement >= 0 && size_t(p.improvement) < map.improvements.size())
+						addDecor(map.improvements[size_t(p.improvement)], center, 0, hash(x, y, 7), p.improvementState);
 					if (p.bonus >= 0 && size_t(p.bonus) < map.bonuses.size())
-						addDecor(map.bonuses[size_t(p.bonus)], center, 0, hash(x, y, 8));
+						addDecor(map.bonuses[size_t(p.bonus)], center, 0, hash(x, y, 8), p.bonusState, !p.water);
 				}
-			buildRiverMask();
+			addBridges();
 		}
 
 		// Trees inside the tree cut spheres of the improvements, resources, roads and rivers go:
 		// a tree that is a node of its own, or one of a forest piece's trees (DrawItem::trees).
+		static constexpr float kRouteTreeCut = 0.12f;
+
 		void cutTrees()
 		{
 			std::unordered_map<int, std::vector<std::pair<Vec3, float>>> cuts; // by plot
@@ -2171,15 +2762,78 @@ float4 PSTerrain(PSIn i) : SV_Target
 				}
 				if (d.model->water)
 					waters[plotKey(d.place.translation.x, d.place.translation.y)].push_back(&d);
+				// (a road or railroad clears a lane through a forest, as in the original: the trees
+				// within kRouteTreeCut plots of its points go; its points are 10-15 units apart)
+				if (d.route)
+					for (const scene::DrawItem& item : d.model->model.items)
+						if (item.node >= 0 && size_t(item.node) < d.world.size())
+							for (const auto& v : item.vertices)
+							{
+								const Vec3 w = d.world[size_t(item.node)].point(v.position);
+								cuts[plotKey(w.x, w.y)].push_back({ w, kRouteTreeCut * S() });
+							}
 			}
+			for (const auto& [c, r] : layoutCuts)
+				cuts[plotKey(c.x, c.y)].push_back({ c, r });
 			if (cuts.empty() && waters.empty())
 				return;
+			// A river piece's triangles where they lie on the map, and for each cell of a grid
+			// over them the triangles that reach into it (in their order): a point is tested
+			// against those only. (Every triangle for every point of every tree near a river
+			// took most of a second whenever an improvement or a road changed.)
+			struct RiverCells
+			{
+				std::vector<Vec3> corners; // (placed)
+				float x0 = 0, y0 = 0, size = 1;
+				int columns = 0, rows = 0;
+				std::vector<std::vector<uint32_t>> cells; // the first corner of each triangle
+			};
+			std::unordered_map<const Instance*, RiverCells> riverCells;
+			const auto cellsOf = [&](const Instance& river) -> const RiverCells& {
+				auto [it, added] = riverCells.try_emplace(&river);
+				RiverCells& g = it->second;
+				if (!added)
+					return g;
+				const LoadedModel::Water& w = *river.model->water;
+				const size_t n = w.corners.size() / 3 * 3;
+				g.corners.reserve(n);
+				for (size_t i = 0; i < n; ++i)
+					g.corners.push_back(river.place.point(w.corners[i]));
+				if (g.corners.empty())
+					return g;
+				// (a triangle's box a little larger: a point just outside it counts, below)
+				const float slack = 0.01f * S();
+				float x0 = g.corners[0].x, y0 = g.corners[0].y, x1 = x0, y1 = y0;
+				for (const Vec3& c : g.corners)
+					x0 = std::min(x0, c.x), y0 = std::min(y0, c.y), x1 = std::max(x1, c.x), y1 = std::max(y1, c.y);
+				g.size = S() / 8;
+				g.x0 = x0 - slack, g.y0 = y0 - slack;
+				g.columns = std::max(1, int((x1 + slack - g.x0) / g.size) + 1);
+				g.rows = std::max(1, int((y1 + slack - g.y0) / g.size) + 1);
+				g.cells.resize(size_t(g.columns) * size_t(g.rows));
+				for (size_t t = 0; t < n; t += 3)
+				{
+					const Vec3 &a = g.corners[t], &b = g.corners[t + 1], &c = g.corners[t + 2];
+					const int cx0 = std::clamp(int((std::min({ a.x, b.x, c.x }) - slack - g.x0) / g.size), 0, g.columns - 1);
+					const int cx1 = std::clamp(int((std::max({ a.x, b.x, c.x }) + slack - g.x0) / g.size), 0, g.columns - 1);
+					const int cy0 = std::clamp(int((std::min({ a.y, b.y, c.y }) - slack - g.y0) / g.size), 0, g.rows - 1);
+					const int cy1 = std::clamp(int((std::max({ a.y, b.y, c.y }) + slack - g.y0) / g.size), 0, g.rows - 1);
+					for (int cy = cy0; cy <= cy1; ++cy)
+						for (int cx = cx0; cx <= cx1; ++cx)
+							g.cells[size_t(cy) * size_t(g.columns) + size_t(cx)].push_back(uint32_t(t));
+				}
+				return g;
+			};
 			// In a river piece's water: the texture's alpha where the point is on its grid.
 			const auto inWater = [&](const Instance& river, Vec3 p) {
 				const LoadedModel::Water& w = *river.model->water;
-				for (size_t t = 0; t + 2 < w.corners.size(); t += 3)
+				const RiverCells& g = cellsOf(river);
+				const float fx = (p.x - g.x0) / g.size, fy = (p.y - g.y0) / g.size;
+				if (g.cells.empty() || !(fx >= 0 && fy >= 0 && fx < float(g.columns) && fy < float(g.rows)))
+					return false;
+				for (const uint32_t t : g.cells[size_t(fy) * size_t(g.columns) + size_t(fx)])
 				{
-					const Vec3 a = river.place.point(w.corners[t]), b = river.place.point(w.corners[t + 1]), c = river.place.point(w.corners[t + 2]);
+					const Vec3 &a = g.corners[t], &b = g.corners[t + 1], &c = g.corners[t + 2];
 					const float d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
 					if (std::abs(d) < 1e-6f)
 						continue;
@@ -2561,16 +3215,36 @@ float4 PSTerrain(PSIn i) : SV_Target
 			}
 		}
 
-		Vec3 motionPoint(const Motion& m) const
+		Vec3 motionPoint(const Motion& m, float delay = 0) const
 		{
-			const float t = m.duration > 0 ? std::clamp((time - m.start) / m.duration, 0.0f, 1.0f) : 1.0f;
+			const float t = m.duration > 0 ? std::clamp((time - delay - m.start) / m.duration, 0.0f, 1.0f) : 1.0f;
 			return lerp(m.from, m.to, t);
+		}
+
+		// The leg of a unit's walk on now (a figure delay seconds behind the first), if any.
+		const Motion* activeMotion(uint64_t unit, float delay = 0) const
+		{
+			const auto it = motions.find(unit);
+			if (it != motions.end())
+				for (const Motion& m : it->second)
+					if (time - delay < m.start + m.duration)
+						return &m;
+			return nullptr;
+		}
+
+		void finishMotions()
+		{
+			for (auto& [unit, route] : motions)
+				while (!route.empty() && time >= route.front().start + route.front().duration + route.front().spread)
+					route.pop_front();
+			std::erase_if(motions, [](const auto& entry) { return entry.second.empty(); });
 		}
 
 		// Units: the plot's centre unit, as many figures as its formation has.
 		void buildUnits()
 		{
 			units.clear();
+			finishMotions();
 			// When each battle began, on this view's clock.
 			for (const BattleView& b : map.battles)
 				if (!battleStarts.contains(b.serial))
@@ -2605,19 +3279,52 @@ float4 PSTerrain(PSIn i) : SV_Target
 				Vec3 center{ (float(u.x) + 0.5f) * S(), (float(u.y) + 0.5f) * S(), 0 };
 				if (cityPlots.contains(u.x + u.y * map.width))
 					center.y -= 0.3f * S();
-				// A unit seen on another plot before walks there (the whole way, if it is near).
+				// A unit seen on another plot before walks there, plot by plot through those the game
+				// moved it through (a whole Go To this turn is one game update: the snapshots alone
+				// see only its end). As the original's: the plots one order walked, in a second
+				// (moveSeconds) at an even pace; a step the game did not tell, a short one.
 				const uint64_t key = uint64_t(uint32_t(u.owner)) << 32 | uint32_t(u.id);
 				if (const auto it = unitPositions.find(key); it != unitPositions.end() && u.id >= 0)
 				{
-					Vec3 from = it->second;
-					if (const auto walking = motions.find(key); walking != motions.end())
-						from = motionPoint(walking->second);
-					Vec3 d = center - from;
-					if (map.wrapX && std::abs(d.x) > worldW() / 2)
-						d.x -= std::copysign(worldW(), d.x);
-					const float plots = length(d) / S();
-					if (plots > 0.05f && plots < 3.5f)
-						motions[key] = { center - d, center, time, 0.25f + 0.3f * plots };
+					auto& route = motions[key];
+					Vec3 from = route.empty() ? it->second : route.back().to;
+					float start = route.empty() ? time : route.back().start + route.back().duration;
+					std::vector<Vec3> legs;
+					auto add = [&](Vec3 to) {
+						Vec3 d = to - from;
+						if (map.wrapX && std::abs(d.x) > worldW() / 2)
+							d.x -= std::copysign(worldW(), d.x);
+						const float plots = length(d) / S();
+						if (plots > 0.05f && plots < 3.5f)
+						{
+							legs.push_back(d);
+							from = from + d;
+						}
+					};
+					for (const UnitView::MoveStep& step : u.moveSteps)
+					{
+						Vec3 to{ (float(step.x) + 0.5f) * S(), (float(step.y) + 0.5f) * S(), 0 };
+						if (cityPlots.contains(step.x + step.y * map.width))
+							to.y -= 0.3f * S();
+						add(to);
+					}
+					add(center);
+					float total = 0;
+					for (const Vec3& d : legs)
+						total += length(d);
+					Vec3 at = route.empty() ? it->second : route.back().to;
+					const float orderStart = start;
+					for (const Vec3& d : legs)
+					{
+						const float duration = u.moveSeconds > 0 ? u.moveSeconds * length(d) / total : 0.25f + 0.3f * length(d) / S();
+						// (the last figure up to 0.7 s behind, the more of them the more: a stack's)
+						const float figures = float(std::max<size_t>(u.models.size(), 1));
+						route.push_back({ at, at + d, start, duration, u.moveSeconds > 0 ? 0.7f * (1 - 1 / figures) : 0, orderStart, u.moveSeconds });
+						at = at + d;
+						start += duration;
+					}
+					if (route.empty())
+						motions.erase(key);
 				}
 				// (one already resting when first seen, as in a loaded game, is fortified already)
 				if (!u.resting)
@@ -2629,16 +3336,27 @@ float4 PSTerrain(PSIn i) : SV_Target
 				const int columns = int(std::ceil(std::sqrt(double(n))));
 				const int rows = int((n + size_t(columns) - 1) / size_t(std::max(columns, 1)));
 				const float spacing = 0.12f * S();
-				for (size_t i = 0; i < n; ++i)
+				// (the formation's figures, then its great general and its siege tower)
+				std::vector<std::pair<int, int>> figures; // model, role
+				for (const int m : u.models)
+					figures.push_back({ m, 0 });
+				if (u.leader >= 0)
+					figures.push_back({ u.leader, 1 });
+				if (u.siegeTower >= 0)
+					figures.push_back({ u.siegeTower, 2 });
+				for (size_t i = 0; i < figures.size(); ++i)
 				{
-					if (u.models[i] < 0 || size_t(u.models[i]) >= map.models.size())
+					const auto [modelIndex, role] = figures[i];
+					if (modelIndex < 0 || size_t(modelIndex) >= map.models.size())
 						continue;
-					const ModelArt& art = map.models[size_t(u.models[i])];
+					const ModelArt& art = map.models[size_t(modelIndex)];
 					LoadedModel* lm = model(art.nif, art.kfm);
 					if (!lm)
 						continue;
-					const float ox = (float(int(i) % columns) - float(columns - 1) / 2) * spacing;
-					const float oy = (float(int(i) / columns) - float(rows - 1) / 2) * spacing;
+					// (the general beside the formation, on its right; the tower ahead of it, to the left)
+					const float ox = role == 1 ? (float(columns) / 2 + 0.6f) * spacing : role == 2 ? -0.25f * S()
+																								: (float(int(i) % columns) - float(columns - 1) / 2) * spacing;
+					const float oy = role ? 0.0f : (float(int(i) / columns) - float(rows - 1) / 2) * spacing;
 					const float c = std::cos(yaw), s = std::sin(yaw);
 					Instance inst;
 					inst.model = lm;
@@ -2657,7 +3375,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 					inst.unit = key;
 					inst.resting = u.resting;
 					inst.ranged = art.ranged;
-					inst.battle = u.battle, inst.attacking = u.attacking, inst.figureIndex = int(i);
+					// (the general fights as the first figure: it falls with the last)
+					inst.battle = u.battle, inst.attacking = u.attacking, inst.figureIndex = role ? 0 : int(i), inst.role = role;
 					inst.work = u.work;
 					inst.foundAt = u.founded >= 0 ? time - u.founded : -1;
 					// (as hurt as the unit: its model's states share the damage, the last the worst)
@@ -2687,14 +3406,25 @@ float4 PSTerrain(PSIn i) : SV_Target
 					else if (const auto w = workSince.find(key); w == workSince.end() || w->second.first != u.work)
 						workSince[key] = { u.work, time };
 					inst.soundAt = { float(u.x) + 0.5f, float(u.y) + 0.5f, 0 };
-					if (u.battle >= 0 && u.attacking && size_t(u.battle) < map.battles.size())
+					// Fighting, as the original shows it (Wine, close up): the defenders stand where they
+					// are; the attackers run up to them, each figure to the one across (to close to fight
+					// hand to hand, a little short of its plot), or, when every round is ranged (both
+					// shoot), half way; to one giving itself up, half way.
+					if (u.battle >= 0 && size_t(u.battle) < map.battles.size() && u.attacking && role != 1)
 					{
 						const BattleView& b = map.battles[size_t(u.battle)];
 						Vec3 d{ float(b.defenderX - b.attackerX) * S(), float(b.defenderY - b.attackerY) * S(), 0 };
 						if (map.wrapX && std::abs(d.x) > worldW() / 2)
 							d.x -= std::copysign(worldW(), d.x);
+						const bool shooting = !b.rounds.empty() && std::all_of(b.rounds.begin(), b.rounds.end(), [](const BattleRoundView& r) { return r.ranged; });
 						if (const float len = length(d); len > 0)
-							inst.step = d * (0.4f * S() / len);
+						{
+							// (shooting, it stops twice its art's battle distance short, in plots: the
+							// original's tanks, catapults and cannons, 0.5, fire from their plot, its
+							// musketmen, 0.35, come a third of the way)
+							const float shootFrom = std::clamp(2 * art.battleDistance, 0.0f, 1.0f) * S();
+							inst.step = d * (role == 2 ? 0.5f : b.surrender ? 0.45f : shooting ? std::max(len - shootFrom, 0.0f) / len : 1 - (1 - kBattleCloseIn) * S() / len);
+						}
 					}
 					if (!art.shadow.empty())
 						if ((inst.shadow = model(art.shadow, {})))
@@ -2718,10 +3448,209 @@ float4 PSTerrain(PSIn i) : SV_Target
 			return std::round((renderer.camera().target.x - x) / w) * w;
 		}
 
-		void drawTerrain(const Frustum& frustum, const MapView::Options& options)
+		Vec3 flagPosition(const UnitView& u) const
 		{
-			if (!vb || !atlasTex || !plotTex || !detailTex || !decalTex || !cellTex || !borderTex)
+			const uint64_t key = uint64_t(uint32_t(u.owner)) << 32 | uint32_t(u.id);
+			Vec3 at{ (float(u.x) + 0.5f) * S(), (float(u.y) + 0.5f) * S(), 0 };
+			if (const auto it = unitPositions.find(key); it != unitPositions.end())
+				at = it->second;
+			const float yaw = renderer.camera().yaw, extent = S() * 0.5f;
+			at += Vec3{ -std::sin(yaw), std::cos(yaw), 0 } * (map.flagOffset.x * extent);
+			at += Vec3{ -std::cos(yaw), -std::sin(yaw), 0 } * (map.flagOffset.y * extent);
+			at.z = ground(at.x, at.y);
+			at.x += wrapOffset(at.x);
+			return at;
+		}
+
+		struct FlagDraw { Vec3 top, clothBottom; bool medallions = false; };
+		std::map<int, FlagDraw> flagDraws; // projected by the overlay for health and stack counts
+
+		float flagZoom() const { return fader(map.flagScale, 1); }
+
+		// A CIV4DetailManager fader at the camera's distance: between its keys, the nearest
+		// one's beyond them.
+		float fader(const std::vector<std::pair<float, float>>& keys, float none) const
+		{
+			if (keys.empty())
+				return none;
+			const float distance = renderer.camera().distance;
+			const auto upper = std::ranges::upper_bound(keys, distance, {}, &std::pair<float, float>::first);
+			if (upper == keys.begin())
+				return upper->second;
+			if (upper == keys.end())
+				return keys.back().second;
+			const auto& lower = *std::prev(upper);
+			const float t = (distance - lower.first) / std::max(upper->first - lower.first, 1.0f);
+			return lower.second + (upper->second - lower.second) * t;
+		}
+
+		// Over the flag, a medallion for each unit on the plot (up to the model's 7): white, or
+		// for each selected unit how it can move (green: not moved yet, yellow: moved
+		// and can go on, red: cannot move).
+		bool drawMedallions(const UnitView& u, const Affine& place)
+		{
+			if (map.flagMedallions < 0 || size_t(map.flagMedallions) >= map.models.size())
+				return false;
+			const ModelArt& art = map.models[size_t(map.flagMedallions)];
+			LoadedModel* lm = model(art.nif, art.kfm, nullptr, true);
+			if (!lm || lm->medallions.empty())
+				return false;
+			// (the states' rows of Medallions.dds: "off" shows its empty row, "fortify" the white
+			// one the original shows for every unit not selected, its own and others')
+			const int shown = std::clamp(int(u.medallions.size()), 1, 7);
+			anim::Pose pose = anim::Pose::bind(lm->model);
+			for (int k = 1; k <= shown; ++k)
+			{
+				const uint32_t state = size_t(k) <= u.medallions.size() ? u.medallions[size_t(k - 1)] : 3;
+				if (const auto it = lm->medallions.find(uint32_t(10 * k) + state); it != lm->medallions.end())
+					it->second.apply(0, pose);
+			}
+			// (the billboard's other pieces are the winged coin of a unit that can be promoted)
+			const auto& nodes = lm->model.nodes;
+			for (size_t n = 0; n < nodes.size(); ++n)
+				if (const int parent = nodes[n].parent; parent >= 0 && nodes[size_t(parent)].name.starts_with("UpgradeMedallion"))
+				{
+					int k = 0;
+					pose.hidden[n] = std::sscanf(nodes[n].name.c_str(), "Medallion_%d", &k) == 1 ? k < 1 || k > shown : !u.promotionReady;
+				}
+			// (in the flag's own frame: they hang over its pole)
+			auto world = lm->model.worldTransforms(pose.locals);
+			for (auto& w : world)
+				w = place * w;
+			std::vector<scene::Material> materials;
+			for (const auto& item : lm->model.items)
+				materials.push_back(anim::animatedMaterial(item, pose));
+			renderer.draw(*lm->gpu, world, lm->model.visibility(pose.hidden), materials);
+			return true;
+		}
+
+		// The units' health bars as the original's billboards: a flat bar facing the camera, as
+		// long as the unit's strength now (UnitView::healthBar: a whole Modern Armor's is
+		// HEALTH_BAR_WIDTH / 2, a unit without strength has none), green from two thirds of its
+		// hit points, yellow from a third, red below (measured in the original: 75 % green,
+		// 66 % and 40 % yellow, 33 % red), as thick at every length (2.6 units times
+		// UNIT_HEALTH_BILLBOARD_SCALE: 13 px of 3200 at the start distance); ending over the
+		// plot's middle and reaching left, behind the unit (UNIT_HEALTH_BILLBOARD_RADIUS) and up the
+		// screen from the ground (..._Z): in the scene, so what stands in front of it hides it.
+		scene::Model barModel;
+		std::unique_ptr<GpuModel> barGpu;
+		bool barTried = false;
+
+		void drawHealthBars(const Frustum& frustum)
+		{
+			if (!barTried)
+			{
+				barTried = true;
+				barModel.nodes.push_back({ "HealthBar" });
+				scene::DrawItem bar;
+				bar.node = 0;
+				// (its right end at its origin, reaching left along x, z its height, facing -y)
+				for (const auto [x, z] : { std::pair{ -1.0f, -0.5f }, { 0.0f, -0.5f }, { 0.0f, 0.5f }, { -1.0f, 0.5f } })
+					bar.vertices.push_back({ { x, 0, z }, { 0, -1, 0 } });
+				bar.indices = { 0, 1, 2, 0, 2, 3 };
+				bar.material.lightingMode = 0;
+				bar.material.cull = scene::Cull::None;
+				barModel.items.push_back(std::move(bar));
+				barGpu = renderer.upload(barModel, assets, AssetLocation{});
+			}
+			if (!barGpu)
 				return;
+			const Camera& camera = renderer.camera();
+			const Vec3 eye = camera.eye();
+			Vec3 toward{ eye.x - camera.target.x, eye.y - camera.target.y, 0 };
+			const float length = std::sqrt(toward.x * toward.x + toward.y * toward.y);
+			toward = length > 1e-3f ? toward * (1 / length) : Vec3{ 0, -1, 0 };
+			const Vec3 right{ -toward.y, toward.x, 0 }, up = camera.up(), facing = cross(up, right); // (it faces the camera)
+			const float unit = S() / 180; // (the faders are in the original's units: 180 a plot)
+			const float height = 2.6f * fader(map.healthScale, 2) * unit;
+			const float radius = fader(map.healthRadius, -60) * unit, z = fader(map.healthZ, 75) * unit;
+			std::vector<scene::Material> material(1, barModel.items[0].material);
+			for (const UnitView& u : map.units)
+			{
+				const int plot = u.x + u.y * map.width;
+				const float health = std::clamp(u.health, 0.0f, 1.0f), width = u.healthBar * unit;
+				// (none on a unit fighting, while its battle is shown: its damage is already the
+				// battle's end, and the original shows no bar until the fight is over; seen in Wine)
+				if ((fog && !map.plots[size_t(plot)].visible) || width <= 0 || u.battle >= 0)
+					continue;
+				Vec3 at{ (float(u.x) + 0.5f) * S(), (float(u.y) + 0.5f) * S(), 0 };
+				if (const auto it = unitPositions.find(uint64_t(uint32_t(u.owner)) << 32 | uint32_t(u.id)); it != unitPositions.end())
+					at = it->second;
+				at = at + toward * radius;
+				at.z = ground(at.x, at.y);
+				at = at + up * z; // (..._Z along the screen's up, as a billboard is moved)
+				at.x += wrapOffset(at.x);
+				if (!frustum.sphere(at, width))
+					continue;
+				Affine place;
+				place.translation = at;
+				for (int r = 0; r < 3; ++r)
+				{
+					place.rotation.m[size_t(r)][0] = (r == 0 ? right.x : r == 1 ? right.y : right.z) * width;
+					place.rotation.m[size_t(r)][1] = r == 0 ? facing.x : r == 1 ? facing.y : facing.z;
+					place.rotation.m[size_t(r)][2] = (r == 0 ? up.x : r == 1 ? up.y : up.z) * height;
+				}
+				const nif::Color3 colour = health >= 2 / 3.0f ? nif::Color3{ 0, 1, 0 } : health >= 1 / 3.0f ? nif::Color3{ 1, 1, 0 } : nif::Color3{ 1, 0, 0 };
+				material[0].emissive = colour;
+				const Affine world[] = { place };
+				const uint8_t visible[] = { 1 };
+				renderer.draw(*barGpu, world, visible, material);
+			}
+		}
+
+		void drawFlags(const Frustum& frustum)
+		{
+			flagDraws.clear();
+			// BtS drops the flags at its last zoom step, where the camera reaches its minimum.
+			if (renderer.camera().distance <= map.cameraMinDistance + 0.5f || renderer.camera().distance >= 22 * S())
+				return;
+			for (const UnitView& u : map.units)
+			{
+				const int plot = u.x + u.y * map.width;
+				if ((fog && !map.plots[size_t(plot)].visible) || u.shownOwner < 0 || size_t(u.shownOwner) >= map.players.size())
+					continue;
+				// (a unit fighting has no flag, nor its health light, while its battle is shown: the
+				// original's, attacker and defender, Combat Zoom on or off; seen in Wine)
+				if (u.battle >= 0)
+					continue;
+				const PlayerView& owner = map.players[size_t(u.shownOwner)];
+				const Vec3 at = flagPosition(u);
+				if (owner.flagModel < 0 || size_t(owner.flagModel) >= map.models.size() || !frustum.sphere(at, 2 * S()))
+					continue;
+				const ModelArt& art = map.models[size_t(owner.flagModel)];
+				const auto* decal = flagArt.flag(owner.flagDecal, owner.primary, owner.secondary, owner.whiteFlag);
+				LoadedModel* lm = decal ? model(art.nif, art.kfm, decal) : nullptr;
+				if (!lm || lm->bounds.empty())
+					continue;
+				const float scale = art.scale * flagZoom();
+				const Affine place = placement(at + Vec3{ 0, 0, -lm->bounds.min.z * scale },
+					renderer.camera().yaw + std::numbers::pi_v<float> / 2, scale);
+				if (u.selected && map.flagGlow >= 0 && size_t(map.flagGlow) < map.models.size())
+				{
+					const ModelArt& glow = map.models[size_t(map.flagGlow)];
+					if (LoadedModel* g = model(glow.nif, glow.kfm))
+					{
+						std::vector<Affine> world;
+						for (const auto& w : g->bindWorld)
+							world.push_back(place * w);
+						renderer.draw(*g->gpu, world, g->bindVisible);
+					}
+				}
+				anim::Pose pose = anim::Pose::bind(lm->model);
+				if (lm->idle && !frozen)
+					lm->idle->apply(time + unitFloat(hash(u.x, u.y, u.id)) * lm->idle->duration(), pose);
+				auto world = lm->model.worldTransforms(pose.locals);
+				for (auto& w : world)
+					w = place * w;
+				renderer.draw(*lm->gpu, world, lm->model.visibility(pose.hidden));
+				const float height = lm->bounds.max.z - lm->bounds.min.z;
+				flagDraws[plot] = { place.point({ 0, 0, lm->bounds.max.z }), place.point({ 0, 0, lm->bounds.max.z - height * 0.47f }),
+					drawMedallions(u, place) };
+			}
+		}
+
+		TerrainConstants terrainConstants(const MapView::Options& options) const
+		{
 			TerrainConstants tc{};
 			tc.mapW = map.width;
 			tc.mapH = map.height;
@@ -2733,6 +3662,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 			tc.showBorders = options.borders;
 			tc.showFog = options.fog;
 			tc.waterZ = 0;
+			for (size_t t = 0; t < kGridTerrains; ++t)
+				std::memcpy(tc.gridLines[t], gridLines.empty() ? kDefaultGridLine.data() : gridLines[std::min(t, gridLines.size() - 1)].data(), sizeof(tc.gridLines[t]));
 			for (size_t i = 0; i < std::min(map.players.size(), kMaxPlayers); ++i)
 			{
 				const Color& c = map.players[i].primary;
@@ -2741,7 +3672,13 @@ float4 PSTerrain(PSIn i) : SV_Target
 				tc.playerColors[i][2] = c.b;
 				tc.playerColors[i][3] = 1;
 			}
+			return tc;
+		}
 
+		// The ground's mesh, in every copy of the map in view (wrapping), with a pipeline whose
+		// fragment shader takes the terrain's seven textures.
+		void drawGround(const Frustum& frustum, SDL_GPUGraphicsPipeline* pipeline, TerrainConstants& tc)
+		{
 			std::vector<float> copies{ 0 };
 			if (map.wrapX)
 				copies = { -worldW(), 0, worldW() };
@@ -2749,12 +3686,13 @@ float4 PSTerrain(PSIn i) : SV_Target
 				const Vec3 c{ worldW() / 2 + dx, worldH() / 2, 0 };
 				return frustum.sphere(c, length(Vec3{ worldW(), worldH(), 0 }) / 2 + map.peakScale * S());
 			};
-			renderer.reserveSamplers(6);
+			renderer.reserveSamplers(7);
 			SDL_GPURenderPass* pass = renderer.pass();
-			renderer.bindPipeline(terrainPipeline);
-			const SDL_GPUTextureSamplerBinding textures[6] = { { plotTex->texture, sampler }, { atlasTex->texture, sampler },
-				{ decalTex->texture, detailWrap }, { detailTex->texture, detailWrap }, { cellTex->texture, sampler }, { borderTex->texture, sampler } };
-			SDL_BindGPUFragmentSamplers(pass, 0, textures, 6);
+			renderer.bindPipeline(pipeline);
+			const SDL_GPUTextureSamplerBinding textures[7] = { { plotTex->texture, sampler }, { atlasTex->texture, sampler },
+				{ decalTex->texture, detailWrap }, { detailTex->texture, detailWrap }, { cellTex->texture, sampler }, { borderTex->texture, sampler },
+				{ borderArtTex->texture, sampler } };
+			SDL_BindGPUFragmentSamplers(pass, 0, textures, 7);
 			const SDL_GPUBufferBinding vbb{ vb->buffer, 0 }, ibb{ ib->buffer, 0 };
 			SDL_BindGPUVertexBuffers(pass, 0, &vbb, 1);
 			SDL_BindGPUIndexBuffer(pass, &ibb, SDL_GPU_INDEXELEMENTSIZE_32BIT);
@@ -2768,6 +3706,82 @@ float4 PSTerrain(PSIn i) : SV_Target
 				SDL_DrawGPUIndexedPrimitives(pass, indexCount, 1, 0, 0, 0);
 			}
 		}
+
+		void drawTerrain(const Frustum& frustum, const MapView::Options& options)
+		{
+			if (!vb || !atlasTex || !plotTex || !detailTex || !decalTex || !cellTex || !borderTex || !borderArtTex)
+				return;
+			TerrainConstants tc = terrainConstants(options);
+			drawGround(frustum, terrainPipeline, tc);
+		}
+
+		// The culture borders (Options::borders): over the ground above the water's level (pass
+		// 1, before what stands on it) or under it (pass 2, after the water).
+		void drawBorders(const Frustum& frustum, const MapView::Options& options, uint32_t part)
+		{
+			if (!options.borders || !vb || !atlasTex || !plotTex || !detailTex || !decalTex || !cellTex || !borderTex || !borderArtTex)
+				return;
+			TerrainConstants tc = terrainConstants(options);
+			tc.showBorders = part;
+			drawGround(frustum, borderPipeline, tc);
+		}
+
+		void drawWater(const Frustum& frustum, const MapView::Options& options)
+		{
+			if (!waterVb || !waterTex || !plotTex)
+				return;
+			// The texture's two placements (Water.fx: mtxWaterTextureMat, ...Mat2): the plane's texture
+			// scaling in texture units a world unit, scrolled at its rates, the second the other way
+			// (measured in the original: two patterns drifting apart east and west, a little north and
+			// south, each about 0.0048 texture units a second: the rates are per frame at 30 a second).
+			const float k = map.water.scale, t = time * kWaterFrames;
+			WaterConstants wc{};
+			wc.uv1[0] = k, wc.uv1[3] = k;
+			wc.uv2[0] = k, wc.uv2[3] = k;
+			wc.scroll[0] = map.water.rateU * t, wc.scroll[1] = map.water.rateV * t;
+			wc.scroll[2] = -map.water.rateU * t, wc.scroll[3] = -map.water.rateV * t;
+			for (float& v : wc.scroll)
+				v -= std::floor(v);
+			wc.alpha = map.water.alpha;
+			wc.mapW = map.width;
+			wc.mapH = map.height;
+			wc.wrapX = map.wrapX;
+			wc.wrapY = map.wrapY;
+			wc.plotSize = S();
+			wc.showFog = options.fog;
+			wc.shore = kShoreDepth * S();
+			wc.shoreWidth = kShoreWidth * S();
+
+			std::vector<float> copies{ 0 };
+			if (map.wrapX)
+				copies = { -worldW(), 0, worldW() };
+			renderer.reserveSamplers(2);
+			SDL_GPURenderPass* pass = renderer.pass();
+			renderer.bindPipeline(waterPipeline);
+			const SDL_GPUTextureSamplerBinding textures[2] = { { waterTex->texture, waterSampler }, { plotTex->texture, sampler } };
+			SDL_BindGPUFragmentSamplers(pass, 0, textures, 2);
+			const SDL_GPUBufferBinding vbb{ waterVb->buffer, 0 }, ibb{ waterIb->buffer, 0 };
+			SDL_BindGPUVertexBuffers(pass, 0, &vbb, 1);
+			SDL_BindGPUIndexBuffer(pass, &ibb, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+			for (const float dx : copies)
+			{
+				if (!frustum.sphere({ worldW() / 2 + dx, worldH() / 2, 0 }, length(Vec3{ worldW(), worldH(), 0 }) / 2))
+					continue;
+				wc.offset[0] = dx;
+				SDL_PushGPUVertexUniformData(renderer.commands(), 1, &wc, sizeof(wc));
+				SDL_PushGPUFragmentUniformData(renderer.commands(), 1, &wc, sizeof(wc));
+				SDL_DrawGPUIndexedPrimitives(pass, waterIndexCount, 1, 0, 0, 0);
+			}
+		}
+
+		static constexpr float kWaterFrames = 30; // a second: the plane's scroll rates are per frame
+		// Of a plot: how deep the ground is under the shore, and over how much more depth the water
+		// fades in there. Measured in the original: on a straight coast the water ends about a quarter
+		// of a plot inside the water plot (the sand between is the coast's ground), and a lake of one
+		// plot is water about 0.56 of a plot across; the ground's levels (baseLevel, blended between
+		// plot centres) are that deep there.
+		static constexpr float kShoreDepth = 0.042f;
+		static constexpr float kShoreWidth = 0.003f;
 
 		// Units grow as the camera moves away, as in the game (ALLOW_UNIT_SCALE_ADJUST_ON_ZOOM).
 		float figureZoom() const { return std::clamp(1 + (renderer.camera().distance / S() - 5) / 8, 1.0f, 2.2f); }
@@ -2807,6 +3821,21 @@ float4 PSTerrain(PSIn i) : SV_Target
 			float at = 0, step = 0;
 			bool dying = false;
 		};
+		// The battle's first rounds that are first strikes, one side's alone (CvUnit::planBattle: as
+		// many as the strikes one has more, or the other's figures killed in them by that many);
+		// the ranged rounds after them (both sides ranged) are both sides'.
+		static int firstStrikeRounds(const BattleView& b)
+		{
+			const int more = std::abs(b.firstStrikes[0] - b.firstStrikes[1]);
+			if (more == 0)
+				return 0;
+			const int struck = b.firstStrikes[0] > b.firstStrikes[1] ? 1 : 0;
+			int killed = 0, ranged = 0;
+			for (const BattleRoundView& r : b.rounds)
+				if (r.ranged)
+					killed += r.killed[struck], ++ranged;
+			return std::min(std::max(more, killed / more), ranged);
+		}
 		BattlePose battlePose(const Instance& inst) const
 		{
 			BattlePose p;
@@ -2814,13 +3843,44 @@ float4 PSTerrain(PSIn i) : SV_Target
 				return p;
 			const BattleView& b = map.battles[size_t(inst.battle)];
 			const auto began = battleStarts.find(b.serial);
-			if (began == battleStarts.end() || b.rounds.empty())
+			if (began == battleStarts.end() || (b.rounds.empty() && !b.surrender))
 				return p;
 			const float slice = kBattleSliceSeconds, t = time - began->second, end = float(b.slices) * slice;
 			if (t < 0 || t > end + 1)
 				return p; // (over: as usual again)
 			p.fighting = true;
-			p.step = inst.attacking ? std::clamp(t / 0.6f, 0.0f, 1.0f) * std::clamp((end - t) / 0.6f, 0.0f, 1.0f) : 0;
+			if (b.surrender)
+			{
+				// Giving itself up, as the original shows it: the attacker steps up and stays; the
+				// other surrenders (its clip, else it stands), fades out over the last half second (its
+				// XFadeOut, else it is gone at the end) and is not seen again until the game takes it.
+				constexpr float fade = 0.5f;
+				if (inst.attacking)
+				{
+					p.step = std::clamp(t / 0.6f, 0.0f, 1.0f);
+					return p;
+				}
+				const LoadedModel& lm = *inst.model;
+				if (t >= end - fade && lm.fadeOut)
+				{
+					p.clip = &*lm.fadeOut, p.at = std::min((t - (end - fade)) / fade * lm.fadeOut->duration(), lm.fadeOut->duration());
+					p.gone = t >= end;
+				}
+				else if (t >= end)
+					p.gone = true;
+				else if (lm.surrender)
+					p.clip = &*lm.surrender, p.at = std::min(t, lm.surrender->duration());
+				return p;
+			}
+			// (the attackers run up while it is set up; they stay to its end, when the survivors stand
+			// in their places again, as the original's do)
+			p.step = std::clamp(t / kBattleRunUp, 0.0f, 1.0f);
+			// (the siege tower: rolled up with them, it stands there to the end)
+			if (inst.role == 2)
+			{
+				p.gone = t >= end;
+				return p;
+			}
 			const LoadedModel& lm = *inst.model;
 			const int side = inst.attacking ? 0 : 1;
 			const float roundsAt = float(kBattleSetupSlices) * slice, roundLength = float(kBattleRoundSlices) * slice;
@@ -2865,11 +3925,18 @@ float4 PSTerrain(PSIn i) : SV_Target
 					p.gone = true;
 					return p;
 				}
+			// Over: those alive stand in their places again at once (the original's do).
+			if (t >= end)
+				return BattlePose{};
 			// A round on: it strikes (the figures a little one after another), or now and then,
-			// in a melee round, it is hit and staggers.
+			// in a melee round, it is hit and staggers. The ranged rounds of first strikes are the
+			// striker's alone: the other stands and takes them (the original: a crossbowman's or a
+			// longbowman's volleys, the axemen not answering).
 			if (t >= roundsAt)
 				if (const int r = int((t - roundsAt) / roundLength); r < int(b.rounds.size()))
 				{
+					if (r < firstStrikeRounds(b) && b.firstStrikes[side] < b.firstStrikes[1 - side])
+						return p;
 					const bool ranged = b.rounds[size_t(r)].ranged || inst.ranged;
 					const anim::Sequence* s = pick(lm.strike, r % 3, ranged);
 					if (!ranged && unitFloat(hash(inst.figureIndex * 7 + side, r, int(b.serial & 0xFFFF))) < 0.35f)
@@ -2886,8 +3953,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 		// keys "SOUND:...,AS3D_..."): the strikes' of its first two, every death's.
 		void battleSounds(const Instance& inst, const BattlePose& p)
 		{
-			if (p.clip && (p.dying || inst.figureIndex < 2))
-				clipSounds(inst, *p.clip, p.at);
+			if (p.clip)
+				clipSounds(inst, *p.clip, p.at, p.dying || inst.figureIndex < 2); // (every figure's arrows fly)
 		}
 
 		// A figure acting (a mission's animation) at this time: pillaging (its melee strike,
@@ -2903,6 +3970,19 @@ float4 PSTerrain(PSIn i) : SV_Target
 			// (a plane strikes over its plot, once, after it flew there; it flies back as it does)
 			if (inst.air && inst.actionX >= 0)
 			{
+				// (intercepting another plane: it only flies out to meet it)
+				if (inst.action == 6)
+					return { nullptr, 0.0f };
+				// (intercepted: hit as it comes over, it strikes nothing)
+				if (inst.action == 5)
+				{
+					const LoadedModel& lm = *inst.model;
+					const anim::Sequence* h = lm.hurt[0][0] ? &*lm.hurt[0][0] : nullptr;
+					const float s = t - kFlightOut;
+					if (!h || s < 0 || s > h->duration())
+						return { nullptr, 0.0f };
+					return { h, s };
+				}
 				const anim::Sequence* c = strikeClip(*inst.model);
 				const float s = t - kFlightOut;
 				if (!c || s < 0 || s > strikeTime(*inst.model))
@@ -2925,6 +4005,16 @@ float4 PSTerrain(PSIn i) : SV_Target
 			case 1: // pillaging
 				clip = first(lm.strike, 0);
 				break;
+			case 4: // intercepting from the ground: once, as the plane comes over (its missile flies to it)
+			{
+				clip = lm.antiAir ? &*lm.antiAir : first(lm.strike, 1);
+				if (!clip)
+					clip = first(lm.strike, 0);
+				const float at = t - 0.5f * kFlightOut;
+				if (!clip || at < 0 || at > clip->duration())
+					return { nullptr, 0.0f };
+				return { clip, at };
+			}
 			default: // bombarding, a ranged attack, an air strike or bomb, a paradrop, recon, a nuke
 				clip = first(lm.strike, 1);
 				if (!clip)
@@ -3034,6 +4124,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 		void clipSounds(const Instance& inst, const anim::Sequence& seq, float now, bool sounds = true)
 		{
 			auto& [clip, last] = clipTimes[inst.unit * 31 + uint64_t(inst.figureIndex)];
+			// (a little back is not a new start: a founding's clip time comes from the last capture,
+			// which lags the frame by a moment, and steps back so at each one; its keys were heard)
+			if (clip == &seq && now < last && last - now < 0.5f)
+				return;
 			const float from = clip == &seq && now >= last ? last : -1;
 			clip = &seq, last = now;
 			for (const auto& [keyTime, text] : seq.textKeys())
@@ -3054,8 +4148,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 				}
 				if (!sounds || !onSound || text.size() < 6 || _strnicmp(text.c_str(), "SOUND:", 6) != 0)
 					continue;
-				// (the script is the last of its comma-separated parts that names one)
-				std::string tag;
+				// (every comma-separated part that names a script plays, together, as the original's:
+				// a settler's founding is "SOUND:AS3D_UN_FOUND_CITY,AS3D_UN_MOVE_SACK", a fall
+				// "AS3D_UN_BODY_FALL,AS3D_UN_FOOT_UNIT"; an old key's other parts, a name and a time
+				// as in "WarriorAttackA,316,AS3D_UN_SWOOSH_WEAPON", are none)
 				size_t begin = 6;
 				while (begin <= text.size())
 				{
@@ -3063,18 +4159,18 @@ float4 PSTerrain(PSIn i) : SV_Target
 					std::string part = text.substr(begin, comma - begin);
 					while (!part.empty() && part.front() == ' ')
 						part.erase(part.begin());
+					while (!part.empty() && (part.back() == ' ' || part.back() == '\r' || part.back() == '\n'))
+						part.pop_back();
 					if (part.rfind("AS", 0) == 0)
-						tag = part;
+						onSound(part, inst.soundAt.x, inst.soundAt.y);
 					begin = comma + 1;
 				}
-				if (!tag.empty())
-					onSound(tag, inst.soundAt.x, inst.soundAt.y);
 			}
 		}
 
 		// A model's particles under that key, on since it was last drawn (from a while back when
 		// first seen: the smoke already up), as quads facing the camera.
-		void drawParticlesOf(const LoadedModel& lm, uint64_t key, std::span<const Affine> world, std::span<const uint8_t> visible)
+		void drawParticlesOf(const LoadedModel& lm, uint64_t key, std::span<const Affine> world, std::span<const uint8_t> visible, bool luminous = false)
 		{
 			if (lm.model.particles.empty())
 				return;
@@ -3101,7 +4197,18 @@ float4 PSTerrain(PSIn i) : SV_Target
 				std::vector<scene::Vertex> quads;
 				e.particles.quads(i, world, right, up, quads);
 				if (!quads.empty())
-					renderer.drawParticles(*lm.gpu, i, lm.model.particles[i].material, std::move(quads));
+				{
+					scene::Material material = lm.model.particles[i].material;
+					if (luminous)
+					{
+						// BtS blooms this effect after rendering.  Additive composition gives this
+						// one luminous effect the same bright response without changing the map.
+						material.alphaBlend = true;
+						material.srcBlend = scene::Blend::SrcAlpha;
+						material.dstBlend = scene::Blend::One;
+					}
+					renderer.drawParticles(*lm.gpu, i, material, std::move(quads));
+				}
 			}
 		}
 
@@ -3125,6 +4232,29 @@ float4 PSTerrain(PSIn i) : SV_Target
 		// own particles and animation).
 		bool frozen = false, showEffects = true; // (MapView::Options)
 
+		// A model standing at a height (base: its place's): its parts marked ContourGeometry laid
+		// on the terrain, as the original's ContourShader.fx does (their heights over the ground
+		// there, not over the model's base), the rest as placed. A mine's ground patch sat at the
+		// mine's base, over the ground in front of it, and covered the mine's wooden deck.
+		void drawModel(const LoadedModel& lm, std::span<const Affine> world, std::span<const uint8_t> visible,
+			std::span<const scene::Material> materials, Vec3 team, bool onGround, float base)
+		{
+			if (lm.contourNodes.empty() || onGround)
+			{
+				renderer.draw(*lm.gpu, world, visible, materials, team, onGround);
+				return;
+			}
+			std::vector<uint8_t> standing(visible.begin(), visible.end()), laid(visible.size(), 0);
+			for (size_t i = 0; i < standing.size() && i < lm.contourNodes.size(); ++i)
+				if (lm.contourNodes[i])
+					laid[i] = standing[i], standing[i] = 0;
+			renderer.draw(*lm.gpu, world, standing, materials, team, false);
+			std::vector<Affine> lowered(world.begin(), world.end());
+			for (auto& w : lowered)
+				w.translation.z -= base;
+			renderer.draw(*lm.gpu, lowered, laid, materials, team, true);
+		}
+
 		void drawEffects(const Instance& inst, std::span<const Affine> world, std::span<const uint8_t> visible)
 		{
 			if (!showEffects)
@@ -3132,6 +4262,15 @@ float4 PSTerrain(PSIn i) : SV_Target
 			LoadedModel& lm = *inst.model;
 			if (lm.model.particles.empty() && lm.attachTags.empty())
 				return;
+			// (laid on the terrain: its nodes' heights are over it, as the shader puts them)
+			std::vector<Affine> raised;
+			if (inst.onGround)
+			{
+				raised.assign(world.begin(), world.end());
+				for (auto& w : raised)
+					w.translation.z += ground(w.translation.x, w.translation.y);
+				world = raised;
+			}
 			uint64_t key = uint64_t(reinterpret_cast<uintptr_t>(&lm)) * 0x9E3779B97F4A7C15ull ^ uint64_t(uint32_t(inst.plot)) << 24 ^ uint64_t(uint32_t(inst.figureIndex));
 			key += uint64_t(effectsThisFrame[key]++) * 0x100000001B3ull; // (the same model twice on a plot)
 			drawParticlesOf(lm, key, world, visible);
@@ -3142,6 +4281,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 			{
 				const auto& a = lm.attachments[k];
 				if (size_t(a.node) >= world.size()) // (its node itself hidden, a helper: shown all the same)
+					continue;
+				// ... unless the state playing hides it: a mine's smoke and fire, on in its On
+				// state, off in NotWorked.
+				if (inst.sequence && inst.sequence->drivesVisibility(a.node) && size_t(a.node) < visible.size() && !visible[size_t(a.node)])
 					continue;
 				const LoadedModel& am = *a.model;
 				const Affine at = world[size_t(a.node)] * placement({}, 0, a.scale);
@@ -3208,8 +4351,53 @@ float4 PSTerrain(PSIn i) : SV_Target
 						at = world[n];
 						break;
 					}
-				addBurst(model(art->nif, ""), at * placement({}, 0, art->scale > 0 ? art->scale : 1));
+				if (art->projectile)
+					addProjectile(*art, at.translation, at.scale); // (as large as the figure that sets it off)
+				else
+					addBurst(effectModel(art->nif), at * placement({}, 0, art->scale > 0 ? art->scale : 1));
 			}
+		}
+
+		// What a figure's projectiles fly to (set before its clip's effects are set off): the plot
+		// it attacks, the plane it shoots at; none: straight down to the ground.
+		std::optional<Vec3> keyTarget;
+
+		// An effect's model: a NIF, or a KFM's (with its clips).
+		LoadedModel* effectModel(const std::string& path)
+		{
+			if (path.size() < 4 || _stricmp(path.c_str() + path.size() - 4, ".kfm") != 0)
+				return model(path, "");
+			const std::string key = makeAssetKey(path);
+			const auto loc = assets.locate(key);
+			if (!loc)
+				return nullptr;
+			try
+			{
+				const nif::KfmFile kfm = nif::parseKfm(assets.read(*loc));
+				return model(folderOf(key) + kfm.nifFile, path);
+			}
+			catch (const std::exception&)
+			{
+				return nullptr;
+			}
+		}
+
+		void addProjectile(const MapSnapshot::Attachable& art, const Vec3& from, float size = 1)
+		{
+			LoadedModel* lm = effectModel(art.nif);
+			const size_t before = bursts.size();
+			addBurst(lm, placement(from, 0, art.scale > 0 ? art.scale : 1));
+			if (bursts.size() == before)
+				return;
+			Burst& b = bursts.back();
+			b.projectile = true;
+			b.from = from;
+			b.to = keyTarget ? *keyTarget : Vec3{ from.x, from.y, ground(from.x, from.y) };
+			b.scale = (art.scale > 0 ? art.scale : 1) * size;
+			const float speed = std::max(art.speed, 50.0f) / 180.0f * S(); // (world units a second; a plot is 180)
+			b.flight = std::clamp(length(b.to - b.from) / speed, 0.05f, 4.0f);
+			const anim::Sequence* explode = lm->strike[0][0] ? &*lm->strike[0][0] : nullptr;
+			b.until = b.start + b.flight + (explode ? explode->duration() : 0);
 		}
 
 		void drawBursts(const Frustum& frustum)
@@ -3225,9 +4413,59 @@ float4 PSTerrain(PSIn i) : SV_Target
 				anim::Pose pose = anim::Pose::bind(lm.model);
 				if (lm.embedded)
 					lm.embedded->apply(at, pose);
+				const anim::Sequence* explode = b.projectile && lm.strike[0][0] ? &*lm.strike[0][0] : nullptr;
+				if (b.projectile)
+				{
+					// (flying, it heads for its target; there, it explodes)
+					const Vec3 d = b.to - b.from;
+					const float f = std::clamp(at / b.flight, 0.0f, 1.0f);
+					const float yaw = std::abs(d.x) + std::abs(d.y) > 0.01f ? std::atan2(d.y, d.x) + std::numbers::pi_v<float> / 2 : 0.0f;
+					b.place = placement(b.from + d * f, yaw, b.scale);
+					if (at < b.flight && lm.run)
+						lm.run->apply(at, pose);
+					else if (explode)
+						explode->apply(at - b.flight, pose);
+					for (const char* root : { "MD", "MD NonAccum" })
+						if (const int n = lm.model.findNode(root); n >= 0 && size_t(n) < pose.locals.size())
+							pose.locals[size_t(n)] = lm.model.nodes[size_t(n)].local;
+				}
 				world = lm.model.worldTransforms(pose.locals);
 				for (auto& w : world)
 					w = b.place * w;
+				// (its explosion's effects and sounds: the text keys passed since the last frame)
+				if (explode && at >= b.flight)
+				{
+					const float now = at - b.flight;
+					for (const auto& [keyTime, text] : explode->textKeys())
+					{
+						const float k = keyTime - explode->startTime();
+						if (k <= b.keysLast || k > now)
+							continue;
+						for (size_t e = 0; (e = text.find("ffect:", e)) != std::string::npos; e += 6)
+						{
+							const size_t colon = text.find(':', e + 6);
+							if (colon == std::string::npos)
+								break;
+							const size_t end = std::min(text.find_first_of(" ,;\r\n", colon + 1), text.size());
+							const std::string node = text.substr(e + 6, colon - e - 6), type = text.substr(colon + 1, end - colon - 1);
+							Affine nodeAt = world.empty() ? b.place : world[0];
+							for (size_t n = 0; n < lm.model.nodes.size() && n < world.size(); ++n)
+								if (_stricmp(lm.model.nodes[n].name.c_str(), node.c_str()) == 0)
+									nodeAt = world[n];
+							explosions.push_back({ type, nodeAt });
+						}
+						if (onSound && text.size() > 6 && _strnicmp(text.c_str(), "SOUND:", 6) == 0)
+						{
+							std::string tag = text.substr(6);
+							if (const size_t comma = tag.rfind(','); comma != std::string::npos)
+								tag = tag.substr(comma + 1);
+							while (!tag.empty() && tag.front() == ' ')
+								tag.erase(tag.begin());
+							onSound(tag, b.to.x / S(), b.to.y / S());
+						}
+					}
+					b.keysLast = now;
+				}
 				const auto shown = lm.model.visibility(pose.hidden);
 				if (time >= b.until)
 					b.particles.stopEmitting();
@@ -3252,26 +4490,84 @@ float4 PSTerrain(PSIn i) : SV_Target
 				}
 			}
 			std::erase_if(bursts, [&](const Burst& b) { return time >= b.until && (b.particles.alive() == 0 || time > b.until + 20); });
+			for (const auto& [type, at] : std::exchange(explosions, {}))
+			{
+				const auto art = std::ranges::find_if(map.effects, [&](const auto& a) { return _stricmp(a.type.c_str(), type.c_str()) == 0; });
+				if (art != map.effects.end() && !art->projectile)
+					addBurst(effectModel(art->nif), at * placement({}, 0, art->scale > 0 ? art->scale : 1));
+			}
+		}
+		std::vector<std::pair<std::string, Affine>> explosions; // (set off by projectiles this frame)
+
+		// The original engine's showPromotionGlow: keep EFFECT_PROMOTION_UNIT at every unit
+		// that can take a promotion. It is a looping blue aura and rising sparkles in BtS.
+		void drawPromotionGlows(const Frustum& frustum)
+		{
+			if (!showEffects)
+				return;
+			const auto art = std::ranges::find_if(map.effects, [](const auto& a) { return _stricmp(a.type.c_str(), "EFFECT_PROMOTION_UNIT") == 0; });
+			if (art == map.effects.end())
+				return;
+			LoadedModel* lm = model(art->nif, "");
+			if (!lm)
+				return;
+			for (const UnitView& u : map.units)
+			{
+				const int plot = u.x + u.y * map.width;
+				if (!u.promotionReady || (fog && !map.plots[size_t(plot)].visible))
+					continue;
+				const uint64_t unit = uint64_t(uint32_t(u.owner)) << 32 | uint32_t(u.id);
+				Vec3 at{ (float(u.x) + 0.5f) * S(), (float(u.y) + 0.5f) * S(), 0 };
+				if (const auto position = unitPositions.find(unit); position != unitPositions.end())
+					at = position->second;
+				if (const Motion* motion = activeMotion(unit))
+					at = motionPoint(*motion);
+				at.z = ground(at.x, at.y);
+				at.x += wrapOffset(at.x);
+				if (!frustum.sphere(at, S()))
+					continue;
+				const Affine place = placement(at, 0, art->scale > 0 ? art->scale : 1);
+				std::vector<Affine> world = lm->bindWorld;
+				for (auto& w : world)
+					w = place * w;
+				if (!lm->model.items.empty())
+					renderer.draw(*lm->gpu, world, lm->bindVisible);
+				// Keep a stable particle simulation for this unit while its ready state remains set.
+				drawParticlesOf(*lm, unit ^ 0xA41F2D729C55E8BFull, world, lm->bindVisible, true);
+			}
 		}
 
-		void drawInstances(const std::vector<Instance>& list, const Frustum& frustum, bool needsSight = false)
+		// laid: -1 every instance, 1 only those laid on the terrain (Instance::laid), 0 the others.
+		void drawInstances(const std::vector<Instance>& list, const Frustum& frustum, bool needsSight = false, int laid = -1)
 		{
 			std::vector<Affine> world;
 			std::vector<scene::Material> materials;
 			const float zoom = figureZoom();
 			for (const Instance& inst : list)
 			{
+				if (laid >= 0 && inst.laid != (laid == 1))
+					continue;
 				if (fogged(inst, needsSight))
 					continue;
+				// (each figure of a walking stack a little behind the first: the original's figures
+				// run one by one; a Wine stack of 3 axemen took 1.7 s where a scout takes 1 s)
 				const Motion* motion = nullptr;
+				float delay = 0;
 				if (inst.unit)
-					if (const auto it = motions.find(inst.unit); it != motions.end() && time < it->second.start + it->second.duration)
-						motion = &it->second;
+				{
+					// (it runs the whole order slower, to arrive up to spread later)
+					if (const Motion* first = activeMotion(inst.unit, 1000); first && inst.figureIndex > 0 && first->orderSeconds > 0)
+					{
+						const float late = first->spread * unitFloat(hash(int(inst.unit), int(inst.unit >> 32), inst.figureIndex));
+						delay = std::clamp((time - first->orderStart) * late / (first->orderSeconds + late), 0.0f, late);
+					}
+					motion = activeMotion(inst.unit, delay);
+				}
 				Vec3 anchor = inst.anchor;
 				float yaw = inst.yaw;
 				// Fighting: the attacker steps up to the defender; the dead are gone.
 				const BattlePose battle = inst.figure ? battlePose(inst) : BattlePose{};
-				if (battle.gone)
+				if (battle.gone || (inst.role == 2 && !battle.fighting))
 					continue;
 				// (a settler founding a city: until its founding is done; without one, gone)
 				if (inst.foundAt >= 0 && (!inst.model->found || time - inst.foundAt > inst.model->found->duration()))
@@ -3284,7 +4580,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 				{
 					// Walking: from where it was, facing the way, on its way to the plot.
 					const Vec3 d = motion->to - motion->from;
-					anchor = motionPoint(*motion) + (inst.anchor - motion->to);
+					anchor = motionPoint(*motion, delay) + (inst.anchor - inst.center);
 					if (std::abs(d.x) + std::abs(d.y) > 0.01f)
 						yaw = std::atan2(d.y, d.x) + std::numbers::pi_v<float> / 2;
 				}
@@ -3292,6 +4588,8 @@ float4 PSTerrain(PSIn i) : SV_Target
 				const float dx = wrapOffset(center.x);
 				if (!frustum.sphere(center + Vec3{ dx, 0, 0 }, inst.radius * (inst.figure ? zoom : 1)))
 					continue;
+				// A unit's figure (and what it carries) in the units' own light, as the original's.
+				renderer.setUnitLight(inst.figure);
 				const LoadedModel& lm = *inst.model;
 				Affine place = inst.place;
 				if (inst.figure)
@@ -3315,7 +4613,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 					world.resize(lm.bindWorld.size());
 					for (size_t k = 0; k < world.size(); ++k)
 						world[k] = place * lm.bindWorld[k];
-					renderer.draw(*lm.gpu, world, lm.bindVisible, {}, inst.team, inst.onGround);
+					drawModel(lm, world, lm.bindVisible, {}, inst.team, inst.onGround, place.translation.z);
 					drawEffects(inst, world, lm.bindVisible);
 					continue;
 				}
@@ -3333,14 +4631,14 @@ float4 PSTerrain(PSIn i) : SV_Target
 						battle.clip->apply(battle.at, pose);
 						battleSounds(inst, battle);
 					}
-					else if (battle.fighting && inst.attacking && battle.step > 0 && battle.step < 1 && lm.run)
+					else if (battle.fighting && inst.attacking && inst.role == 0 && battle.step > 0 && battle.step < 1 && lm.run)
 						lm.run->apply(time, pose); // (stepping up, or back)
 					else if (motion && lm.run)
 					{
-						lm.run->apply(time - motion->start, pose);
+						lm.run->apply(time - delay - motion->start, pose);
 						// (its effects, the footprints: each time round)
 						if (const float d = lm.run->duration(); d > 0)
-							clipSounds(inst, *lm.run, std::fmod(time - motion->start, d), false);
+							clipSounds(inst, *lm.run, std::fmod(std::max(time - delay - motion->start, 0.0f), d), false);
 					}
 					else if (const auto [clip, at] = actionPose(inst); clip)
 					{
@@ -3373,7 +4671,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 					else if (rested >= 0 && fortify)
 						fortify->apply(fortify->duration(), pose);
 					else if (inst.animated)
-						lm.idle->apply(frozen ? 0 : time + inst.phase, pose);
+						(inst.sequence ? *inst.sequence : *lm.idle).apply(frozen ? 0 : time + inst.phase, pose);
 					if (inst.damage > 0)
 						for (const anim::Sequence& d : lm.damage[inst.damage - 1])
 							d.apply(std::fmod(time + inst.phase, std::max(d.duration(), 0.01f)), pose);
@@ -3384,13 +4682,33 @@ float4 PSTerrain(PSIn i) : SV_Target
 					for (auto& w : world)
 						w = place * w;
 					if (!keyEffects.empty())
+					{
+						// (its projectiles' target: the plot its action aims at, over it the plane a
+						// SAM shoots at; in a battle, a figure on the other side's plot)
+						keyTarget.reset();
+						if (inst.action >= 0 && inst.actionX >= 0)
+						{
+							Vec3 c{ (float(inst.actionX) + 0.5f) * S() + dx, (float(inst.actionY) + 0.5f) * S(), 0 };
+							c.z = ground(c.x - dx, c.y) + (inst.action == 4 ? kFlightHeight * S() : 0.0f);
+							keyTarget = c;
+						}
+						else if (battle.fighting && inst.battle >= 0 && size_t(inst.battle) < map.battles.size())
+						{
+							const BattleView& b = map.battles[size_t(inst.battle)];
+							const int ox = inst.attacking ? b.defenderX : b.attackerX, oy = inst.attacking ? b.defenderY : b.attackerY;
+							const float jx = (unitFloat(hash(inst.figureIndex, ox, oy)) - 0.5f) * 0.3f, jy = (unitFloat(hash(oy, inst.figureIndex, ox)) - 0.5f) * 0.3f;
+							Vec3 c{ (float(ox) + 0.5f + jx) * S() + dx, (float(oy) + 0.5f + jy) * S(), 0 };
+							c.z = ground(c.x - dx, c.y) + 0.08f * S();
+							keyTarget = c;
+						}
 						spawnKeyEffects(lm, world);
+					}
 					materials.clear();
 					if (std::ranges::any_of(pose.materials, [](const anim::MaterialOverride& o) { return o.any; }))
 						for (const auto& item : lm.model.items)
 							materials.push_back(anim::animatedMaterial(item, pose));
 					const auto shownNodes = lm.model.visibility(pose.hidden);
-					renderer.draw(*lm.gpu, world, shownNodes, materials, inst.team, inst.onGround);
+					drawModel(lm, world, shownNodes, materials, inst.team, inst.onGround, place.translation.z);
 					drawEffects(inst, world, shownNodes);
 					if (inst.shadow)
 					{
@@ -3430,22 +4748,23 @@ float4 PSTerrain(PSIn i) : SV_Target
 						for (auto& w : world)
 							w.translation.x += dx;
 					}
-					renderer.draw(*lm.gpu, world, shown, materials, inst.team, inst.onGround);
+					drawModel(lm, world, shown, materials, inst.team, inst.onGround, inst.place.translation.z);
 					drawEffects(inst, world, shown);
 					continue;
 				}
 				if (dx == 0)
 				{
-					renderer.draw(*lm.gpu, inst.world, visible, inst.materials, inst.team, inst.onGround);
+					drawModel(lm, inst.world, visible, inst.materials, inst.team, inst.onGround, inst.place.translation.z);
 					drawEffects(inst, inst.world, visible);
 					continue;
 				}
 				world = inst.world;
 				for (auto& w : world)
 					w.translation.x += dx;
-				renderer.draw(*lm.gpu, world, visible, inst.materials, inst.team, inst.onGround);
+				drawModel(lm, world, visible, inst.materials, inst.team, inst.onGround, inst.place.translation.z);
 				drawEffects(inst, world, visible);
 			}
+			renderer.setUnitLight(false);
 		}
 	};
 
@@ -3467,8 +4786,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 			const PlotView& p = snapshot.plots[i];
 			shape[i] = uint8_t((p.water ? 1 : 0) | (p.hills ? 2 : 0) | (p.peak ? 4 : 0) | (p.riverSouth ? 8 : 0) | (p.riverEast ? 16 : 0));
 			featureKey[i] = int32_t(p.feature) << 8 | p.featureVariety;
-			decorKey[i] = uint64_t(uint16_t(p.improvement)) | uint64_t(uint16_t(p.bonus)) << 16 | uint64_t(uint16_t(p.route)) << 32 |
-				uint64_t(p.riverSouth) << 48 | uint64_t(p.riverEast) << 49;
+			// (the route's 8 bits and the layout's 16: two of them 256 or 65536 apart on a plot would look unchanged)
+			decorKey[i] = uint64_t(uint16_t(p.improvement)) | uint64_t(uint16_t(p.bonus)) << 16 | uint64_t(uint8_t(p.route)) << 32 |
+				uint64_t(p.riverSouth) << 40 | uint64_t(p.riverEast) << 41 | uint64_t(uint16_t(p.layout + 1)) << 42 |
+				uint64_t(p.improvementState & 3) << 58 | uint64_t(p.bonusState & 3) << 60;
 		}
 		const bool reshaped = resized || shape != m->shape;
 		const bool refeatured = reshaped || newArt || featureKey != m->featureKey;
@@ -3481,12 +4802,14 @@ float4 PSTerrain(PSIn i) : SV_Target
 		{
 			m->buildAtlas();
 			m->buildDecals();
+			m->buildWaterArt();
 			m->artGeneration = snapshot.artGeneration;
 		}
 		if (reshaped)
 		{
 			m->shape = std::move(shape);
 			m->buildTerrain();
+			m->buildWater();
 		}
 		m->updatePlots();
 		// Improvements, resources and roads first: they clear trees from the features.
@@ -3550,7 +4873,7 @@ float4 PSTerrain(PSIn i) : SV_Target
 		}
 		if (m->ring.ok)
 			m->ring.player.update(dt);
-		std::erase_if(m->motions, [&](const auto& e) { return m->time > e.second.start + e.second.duration; });
+		m->finishMotions();
 	}
 
 	void MapView::draw()
@@ -3571,17 +4894,40 @@ float4 PSTerrain(PSIn i) : SV_Target
 		m->drawTerrain(frustum, options);
 		m->renderer.setFog(options.fog ? m->plotTex.get() : nullptr, m->S(), uint32_t(m->map.width), uint32_t(m->map.height), m->map.wrapX,
 			m->map.wrapY);
+		// The culture borders over the ground and what is laid on it (the original: their line over
+		// a river's water along its bank), under what stands on it (the soft dirt under resources
+		// and improvements blends over the border as over the ground).
+		if (options.improvements)
+		{
+			m->drawInstances(m->decor, frustum, false, 1);
+			m->renderer.drawGroundBlended();
+		}
+		m->drawBorders(frustum, options, 1);
 		if (options.features)
 			m->drawInstances(m->features, frustum);
 		if (options.improvements)
-			m->drawInstances(m->decor, frustum);
+			m->drawInstances(m->decor, frustum, false, 0);
+		// The sea's water over what is under it: the rivers' water laid on the ground (a delta's,
+		// out at sea, seen through the sea's) and what stands in the water.
+		m->renderer.drawGroundBlended();
+		m->drawWater(frustum, options);
+		m->drawBorders(frustum, options, 2);
 		if (options.cities)
 			m->drawInstances(m->cities, frustum);
+		m->drawGroundCircles(frustum);
 		m->figureHits.clear();
-		if (options.units)
+		m->flagDraws.clear();
+		if (options.units && !options.cityScreen)
 		{
-			m->drawInstances(m->units, frustum, true);
+			m->drawPromotionGlows(frustum);
+			// (the selection rings under the units: the figures on them cover them)
 			m->ringsDrawn = m->drawRings();
+			m->drawInstances(m->units, frustum, true);
+			if (options.flags)
+				m->drawFlags(frustum);
+			if (options.flags && options.healthBars && m->renderer.camera().distance > m->map.cameraMinDistance + 0.5f &&
+				m->renderer.camera().distance < 22 * m->S())
+				m->drawHealthBars(frustum);
 		}
 		m->drawBursts(frustum);
 		// (the particles of what is no longer drawn: gone)
@@ -3638,12 +4984,10 @@ float4 PSTerrain(PSIn i) : SV_Target
 	// production bars and what is being built where the active player may see them.
 	void MapView::drawOverlay(Overlay& overlay)
 	{
-		if (!m->hasMap || !options.banners || !options.cities || m->renderer.globe())
+		if (!m->hasMap || !options.banners || !options.cities || options.cityScreen || m->renderer.globe())
 			return;
 		const float* vp = m->renderer.viewProjection();
 		const float distance = m->renderer.camera().distance / m->S();
-		if (distance > 45)
-			return;
 		const float scale = std::clamp(1.3f - distance / 60, 0.7f, 1.1f);
 		const float W = overlay.screenWidth(), H = overlay.screenHeight();
 		const auto toScreen = [&](Vec3 p, float& x, float& y) {
@@ -3654,19 +4998,23 @@ float4 PSTerrain(PSIn i) : SV_Target
 			y = (1 - (vp[4] * p.x + vp[5] * p.y + vp[6] * p.z + vp[7]) / cw) * 0.5f * H;
 			return x > -50 && x < W + 50 && y > -50 && y < H + 50;
 		};
-		// The units' flags: the owner's colours, health, how many are on the plot.
-		if (options.flags && options.units && distance < 22)
+		// The units' flags: the visible owner's decal and colours, health, and stack count.
+		if (options.flags && options.units && distance < 22 && m->renderer.camera().distance > m->map.cameraMinDistance + 0.5f)
 			for (const UnitView& u : m->map.units)
 			{
 				const int plot = u.x + u.y * m->map.width;
 				if (options.fog && !m->map.plots[size_t(plot)].visible)
 					continue;
+				// (a stack fighting shows no flag, nor a ring, while the battle is on: the original's)
+				if (u.battle >= 0)
+					continue;
+				// (where the unit is: the original's flag stands there at once, while its figures
+				// still walk there)
 				Vec3 p{ (float(u.x) + 0.5f) * m->S(), (float(u.y) + 0.5f) * m->S(), 0 };
 				const uint64_t key = uint64_t(uint32_t(u.owner)) << 32 | uint32_t(u.id);
-				if (const auto it = m->motions.find(key); it != m->motions.end() && m->time < it->second.start + it->second.duration)
-					p = m->motionPoint(it->second);
+				const bool walking = m->activeMotion(key) != nullptr;
 				p.x += m->wrapOffset(p.x);
-				if (u.selected && !m->ringsDrawn)
+				if (u.selected && !m->ringsDrawn && !walking)
 				{
 					// The selection, without the game's art: a ring on the ground round the stack.
 					Vec3 g = p;
@@ -3680,69 +5028,150 @@ float4 PSTerrain(PSIn i) : SV_Target
 						overlay.ellipse(gx, gy, rx, ry, { 0.3f, 1, 0.4f }, pulse, 2.2f);
 					}
 				}
-				p.z = m->ground(p.x, p.y) + 0.3f * m->S() * m->figureZoom();
+				p.z = m->ground(p.x, p.y);
+				p.z += 0.3f * m->S() * m->figureZoom();
 				float x = 0, y = 0;
 				if (!toScreen(p, x, y))
 					continue;
 				const PlayerView* owner = u.shownOwner >= 0 && size_t(u.shownOwner) < m->map.players.size() ? &m->map.players[size_t(u.shownOwner)] : nullptr;
 				const Color primary = owner ? owner->primary : Color{}, secondary = owner ? owner->secondary : Color{ 0, 0, 0 };
-				const float fw = 9 * scale, fh = 12 * scale;
-				overlay.line(x - fw / 2, y - fh, x - fw / 2, y + fh * 0.6f, { 0.15f, 0.12f, 0.1f }, 0.9f, 1.2f);
-				overlay.rect(x - fw / 2, y - fh, x + fw / 2, y, primary, 0.95f);
-				overlay.frame(x - fw / 2, y - fh, x + fw / 2, y, secondary, 0.95f, 0, 1.2f);
-				const float health = std::clamp(u.health, 0.0f, 1.0f);
-				if (options.healthBars)
+				const float flagScale = scale * std::clamp(18 / std::max(distance, 1.0f), 0.8f, 2.0f);
+				const float fw = 24 * flagScale, fh = 30 * flagScale;
+				float topY = y - fh;
+				if (const auto it = m->flagDraws.find(plot); it != m->flagDraws.end())
 				{
-					overlay.rect(x - fw / 2, y + 1, x + fw / 2, y + 3.5f * scale, { 0, 0, 0 }, 0.7f);
-					overlay.rect(x - fw / 2, y + 1, x - fw / 2 + fw * health, y + 3.5f * scale, { 1 - health, 0.3f + 0.6f * health, 0.15f }, 0.95f);
+					float topX = 0;
+					if (!toScreen(it->second.clothBottom, x, y) || !toScreen(it->second.top, topX, topY))
+						continue;
 				}
-				if (u.count > 1)
-					overlay.text(std::to_wstring(u.count), x + fw / 2 + 2, y - fh - 1, 10 * scale, { 1, 1, 1 }, 0.95f, true);
+				else
+				{
+					// Mods without usable flag models can still show the civilization's emblem.
+					if (const ButtonArt::Icon* flag = owner ? m->flagArt.flag(owner->flagDecal, primary, secondary, owner->whiteFlag) : nullptr)
+						overlay.image(flag->key, flag->bgra, flag->width, flag->height, 1, x - fw / 2, y - fh, x + fw / 2, y);
+					else
+						overlay.rect(x - fw / 2, y - fh, x + fw / 2, y, primary, 0.95f);
+				}
+				const auto drawn = m->flagDraws.find(plot);
+				if (u.count > 1 && (drawn == m->flagDraws.end() || !drawn->second.medallions))
+					overlay.text(std::to_wstring(u.count), x + fw / 2 + 2, topY - 1, 10 * scale, { 1, 1, 1 }, 0.95f, true);
 			}
+		// The city bars, as the original's CityBar.nif lays them out (in its units: the banner
+		// 128 x 32 with its top at the origin, the population's circle at its left end, the
+		// production symbol at its right end, the icon line above), facing the screen.
+		// Placed as CIV4DetailManager's CITYBILLBOARD_RADIUS places it: its top on the ground
+		// south of the city (towards the bottom of the screen), 90 units out up close, 35 at
+		// 5000 and beyond; the original's grid shows it no closer than 70 there. Sized as
+		// measured in the original (the star's width, at camera distances of 5 to 102 plots):
+		// CITYBILLBOARD_SCALE's 1.5 up close to its 0.67 far out, in points a model unit.
+		const float plots = m->renderer.camera().distance / m->S();
+		const float civ = m->S() / 180; // (the original's units: 180 a plot)
+		const float units = plots * 180;
+		const float radius = std::max(70.0f, std::lerp(90.0f, 35.0f, std::clamp((units - 700) / 4300, 0.0f, 1.0f)));
+		const float k = [&] {
+			static constexpr std::array<std::pair<float, float>, 8> measured{ { { 3.89f, 1.39f }, { 5.18f, 1.327f }, { 8.8f, 1.16f },
+				{ 12.3f, 0.962f }, { 14.85f, 0.913f }, { 28.5f, 0.743f }, { 47.5f, 0.718f }, { 102, 0.694f } } };
+			if (plots <= measured.front().first)
+				return measured.front().second;
+			for (size_t i = 1; i < measured.size(); ++i)
+				if (plots <= measured[i].first)
+					return std::lerp(measured[i - 1].second, measured[i].second,
+						(plots - measured[i - 1].first) / (measured[i].first - measured[i - 1].first));
+			return measured.back().second;
+		}();
+		const float yaw = m->renderer.camera().yaw;
+		const Vec3 towardsScreenBottom{ std::cos(yaw), std::sin(yaw), 0 };
+		ButtonArt* art = overlay.buttonArt();
+		const auto symbol = [&](const std::string& button) -> const ButtonArt::Icon* {
+			if (!art || button.empty())
+				return nullptr;
+			if (const auto it = m->cityBarSymbols.find(button); it != m->cityBarSymbols.end())
+				return it->second.width ? &it->second : nullptr;
+			ButtonArt::Icon& out = m->cityBarSymbols[button];
+			const ButtonArt::Icon* icon = art->icon(button);
+			const ButtonArt::Icon* mask = art->icon("Art/Interface/CityBar/ProductionIconMask.tga");
+			if (!icon || !mask || !mask->width || !mask->height)
+				return nullptr;
+			out = *icon;
+			out.key = std::hash<std::string>{}("citybar-symbol:" + button);
+			for (uint32_t y = 0; y < out.height; ++y)
+				for (uint32_t x = 0; x < out.width; ++x)
+				{
+					const uint8_t* mp = mask->bgra.data() + (size_t(y * mask->height / out.height) * mask->width + x * mask->width / out.width) * 4;
+					const float keep = float(mp[3]) / 255;
+					uint8_t* p = out.bgra.data() + (size_t(y) * out.width + x) * 4;
+					for (int i = 0; i < 4; ++i)
+						p[i] = uint8_t(float(p[i]) * keep + 0.5f);
+				}
+			return &out;
+		};
+		m->cityBars.clear();
 		for (const CityView& c : m->map.cities)
 		{
 			if (options.fog && !m->map.plots[size_t(c.x) + size_t(c.y) * size_t(m->map.width)].revealed)
 				continue;
 			Vec3 p{ (float(c.x) + 0.5f) * m->S(), (float(c.y) + 0.5f) * m->S(), 0 };
 			p.x += m->wrapOffset(p.x);
-			p.z = m->ground(p.x, p.y) + 0.35f * m->S();
-			const float cw = vp[12] * p.x + vp[13] * p.y + vp[14] * p.z + vp[15];
-			if (cw <= 0)
+			p.z = m->ground(p.x, p.y);
+			p = p + towardsScreenBottom * (radius * civ);
+			float ox = 0, oy = 0;
+			if (!toScreen(p, ox, oy))
 				continue;
-			const float sx = (vp[0] * p.x + vp[1] * p.y + vp[2] * p.z + vp[3]) / cw, sy = (vp[4] * p.x + vp[5] * p.y + vp[6] * p.z + vp[7]) / cw;
-			const float x = (sx + 1) * 0.5f * W, y = (1 - sy) * 0.5f * H;
-			if (x < -200 || x > W + 200 || y < -60 || y > H + 60)
-				continue;
+			// (a point of the bar's model on the screen)
+			const auto X = [&](float u) { return ox + u * k; };
+			const auto Y = [&](float v) { return oy - v * k; };
 
-			const Color owner = c.owner >= 0 && size_t(c.owner) < m->map.players.size() ? m->map.players[size_t(c.owner)].primary : Color{};
-			const std::wstring name = (c.capital ? L"\u2605 " : L"") + wide(c.name);
-			const std::wstring pop = std::to_wstring(c.population);
-			const float size = 13 * scale, h = 20 * scale, r = h / 2;
-			const float nameW = overlay.width(name, size, true), popR = r + 1;
-			const float w = popR * 2 + 6 * scale + nameW + 10 * scale;
-			const float x0 = x - w / 2, y0 = y - h / 2;
-			overlay.rect(x0, y0, x0 + w, y0 + h, { 0.05f, 0.06f, 0.08f }, 0.72f, r);
-			overlay.frame(x0, y0, x0 + w, y0 + h, owner, 0.9f, r, 1.5f);
-			overlay.circle(x0 + popR, y, popR, c.sizeDot, 1);
-			overlay.text(pop, x0 + popR, y - size * 0.68f, size * 0.95f, c.sizeText, 1, true, Overlay::Align::Center, false);
-			overlay.text(name, x0 + popR * 2 + 6 * scale, y - size * 0.68f, size, { 1, 1, 1 }, 1, true);
-			// The bars under the banner, as the game's.
-			float by = y0 + h + 2;
-			const float bx0 = x0 + popR * 2, bx1 = x0 + w - r * 0.6f, bh = 3.5f * scale;
-			for (const auto& [stored, rate, color] :
-				{ std::tuple{ c.foodStored, c.foodRate, c.foodBar }, std::tuple{ c.productionStored, c.productionRate, c.productionBar } })
+			// (a click on it is one on the city: the population's circle to the production symbol)
+			m->cityBars.push_back({ X(-85), Y(0), X(91), Y(-32), c.x, c.y });
+
+			// The banner: its background, the growth (upper half) and production (lower half)
+			// bars, then its outline.
+			overlay.rect(X(-52.935f), Y(0), X(75.065f), Y(-32), { 0, 0, 0 }, 0.7f, 16 * k);
+			for (const auto& [stored, rate, color, top] :
+				{ std::tuple{ c.foodStored, c.foodRate, c.foodBar, 0.0f }, std::tuple{ c.productionStored, c.productionRate, c.productionBar, -16.0f } })
 			{
 				if (stored < 0)
 					continue;
-				overlay.rect(bx0, by, bx1, by + bh, { 0, 0, 0 }, 0.6f);
+				const float b0 = X(-21), b1 = X(60);
 				const float s = std::clamp(stored, 0.0f, 1.0f), e = std::clamp(stored + rate, 0.0f, 1.0f);
-				overlay.rect(bx0, by, bx0 + (bx1 - bx0) * s, by + bh, color, 0.95f);
-				overlay.rect(bx0 + (bx1 - bx0) * s, by, bx0 + (bx1 - bx0) * e, by + bh, color, 0.45f);
-				by += bh + 1;
+				overlay.rect(b0, Y(top - 3), b0 + (b1 - b0) * s, Y(top - 13), color, 0.75f);
+				overlay.rect(b0 + (b1 - b0) * s, Y(top - 3), b0 + (b1 - b0) * e, Y(top - 13), color, 0.35f);
 			}
-			if (!c.production.empty() && distance < 25)
-				overlay.richText(wide(c.production), x, by, size * 0.8f, false, { 0.85f, 0.88f, 0.95f }, 0.95f, Overlay::Align::Center);
+			overlay.art("Art/Interface/CityBar/CityBar_Base.dds", X(-52.935f), Y(0), X(75.065f), Y(-32));
+
+			// The population: the star of a capital, else the circle, in the game's colour.
+			overlay.art(c.capital ? "Art/Interface/CityBar/CityBar_Star.tga" : "Art/Interface/CityBar/CityBar_Circle.tga", X(-85), Y(16), X(-21), Y(-48),
+				c.sizeDot);
+			const float popSize = 21 * k;
+			overlay.text(std::to_wstring(c.population), X(-52.935f), Y(-16) - popSize * 0.62f, popSize, c.sizeText, 1, false, Overlay::Align::Center,
+				false);
+
+			// The production symbol: what it builds, cut round, under its bevel.
+			if (c.ownTeam)
+			{
+				const float s = 0.963f;
+				const float x0 = X(70.404f - 13 * s), x1 = X(70.404f + 21 * s), y0 = Y(-15.869f + 17 * s), y1 = Y(-15.869f - 17 * s);
+				if (const ButtonArt::Icon* icon = symbol(c.productionArt))
+					overlay.image(icon->key, icon->bgra, icon->width, icon->height, 0, x0, y0, x1, y1);
+				overlay.art("Art/Interface/CityBar/ProductionIconBevel.tga", x0, y0, x1, y1);
+			}
+
+			// The name in the upper half, what it builds in the lower, the icons above.
+			const std::wstring name = wide(c.name);
+			overlay.text(name, X(18.266f), Y(0.411f) + 1.5f * k, 12.5f * k, { 1, 1, 1 }, 1, false, Overlay::Align::Center);
+			if (!c.production.empty())
+				overlay.richText(wide(c.production), X(18.266f), Y(-15.589f) + 1.5f * k, 11 * k, false, { 1, 1, 1 }, 1, Overlay::Align::Center);
+			if (!c.icons.empty())
+				overlay.richText(wide(c.icons), X(-0.112f), Y(17.902f), 14 * k, false, { 1, 1, 1 }, 1, Overlay::Align::Center);
 		}
+	}
+
+	std::optional<std::pair<int, int>> MapView::cityBarAt(float x, float y) const
+	{
+		for (auto it = m->cityBars.rbegin(); it != m->cityBars.rend(); ++it)
+			if (x >= it->x0 && x <= it->x1 && y >= it->y0 && y <= it->y1)
+				return std::pair{ it->x, it->y };
+		return std::nullopt;
 	}
 
 	const std::vector<uint32_t>& MapView::terrainColors() const { return m->terrainColors; }
@@ -3773,5 +5202,6 @@ float4 PSTerrain(PSIn i) : SV_Target
 	}
 
 	const std::vector<std::string>& MapView::problems() const { return m->problems; }
+	void MapView::setGroundCircles(std::vector<GroundCircle> circles) { m->groundCircles = std::move(circles); }
 	void MapView::setSoundHandler(std::function<void(const std::string&, float, float)> handler) { m->onSound = std::move(handler); }
 }

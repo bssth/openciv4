@@ -2,11 +2,21 @@
 //
 //   oc4core [--civ4 <root>] [--mod <Mods\\Name> | <mod folder>] [--python-home <dir>] [--log-dir <dir>]
 //           [--turns N [--map Continents] [--size SMALL] [--players N] [--seed N]]
+//           [--option GAMEOPTION_X[=0|1]]... [--victories VICTORY_A,VICTORY_B | none] [--map-option N=V]...
+//           [--slot N=human|ai|closed[:CIV[:LEADER[:TEAM]]]]... [--advanced-start-points N]
 //           [--load <file.CivBeyondSwordSave>] [--save <file.CivBeyondSwordSave> [--save-at TURN]]
 //           [--profile] [--profile-out <stacks.folded>] [--rand-log] [--exec <script.py>] [--exec-first <script.py>]
 //           [--menu | --view | --play [--screenshot <file.png>] [--view-size WxH] [--ui-scale PERCENT] [--show-fps] [--wasd-pan] [--auto-end-turn] [--no-edge-scroll] [--look X,Y[,distance in plots]] [--keys <window keys>]
 //            [--view-seconds S]]
 //           [--host PORT [--humans N] | --join HOST:PORT]
+//
+// A new game's setup beyond the world: --option turns a game option on (=0: off; else the
+// XML's default), --victories the only victory conditions (else all), --map-option sets the
+// map script's option N to its value V (both from 0), --slot changes a player slot (0 the
+// human's, the others AI; an empty part is random, the team its own), --advanced-start-points
+// the points of Advanced Start (when it is on; else 600, as the original's). The prefixes
+// GAMEOPTION_, VICTORY_, CIVILIZATION_ and LEADER_ may be left out. The menu's new game
+// takes those the menu does not choose.
 //
 // --log-dir enables the DLL's logs (xml.log, ...), like LoggingEnabled = 1 in CivilizationIV.ini;
 // --rand-log adds every synchronised random number to MessageControl.log there.
@@ -21,7 +31,7 @@
 // opens it, Esc closes it), or with --own-interface the window's simple one.
 // --keys are typed in on your turns then (letters and Space as keys, '^', '@' and '+' before
 // one hold Ctrl, Alt and Shift, '>' ends the turn, '~' is Esc, "(x,y)" right clicks that plot,
-// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e" and "%t" type an arrow, Return or Tab into the window, "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
+// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e", "%t" and "%b" type an arrow, Return, Tab or Backspace into the window ("^%l" with Ctrl held, as a game hotkey), "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
 // popup nothing answers gets its first, 'text' goes into its next edit box, "{Name}" or
 // "{Name/part}" clicks the interface's widget so named, "^{Name}" with Ctrl held, "?{Name}" rests
 // the mouse on it); with
@@ -32,7 +42,8 @@
 // --menu (and no options at all) opens the window on a temporary main menu: a new game, with
 // the leader, map script, world and difficulty to choose, or a saved one, played as with
 // --play then (its leading "{Name}" --keys click the menu's widgets: MenuNew, MenuLaunch, ...;
-// "{MenuLeader}{MenuLeader/3}" opens a pull down and picks its 4th item).
+// "{MenuLeader}{MenuLeader/3}" opens a pull down and picks its 4th item; "<x,y>" clicks that
+// pixel, 'text' types into the edit box clicked).
 //
 // Starts Python, publishes the DLL to it, initialises CvGlobals and loads all XML the
 // way the original engine does. With --turns it then starts a new game on a map
@@ -251,6 +262,22 @@ namespace
 				o.game.worldSize = "WORLDSIZE_" + next().string();
 			else if (a == L"--players")
 				o.game.players = std::stoi(next().wstring());
+			else if (a == L"--option")
+				o.game.options.push_back(host::setup::parseOption(next().string()));
+			else if (a == L"--advanced-start-points")
+				o.game.advancedStartPoints = host::setup::number(next().string(), "--advanced-start-points");
+			else if (a == L"--victories")
+				o.game.victories = host::setup::parseVictories(next().string());
+			else if (a == L"--map-option")
+			{
+				const auto [option, value] = host::setup::parseMapOption(next().string());
+				o.game.mapOptions.insert_or_assign(option, value);
+			}
+			else if (a == L"--slot")
+			{
+				auto [slot, set] = host::setup::parseSlot(next().string());
+				o.game.slots.insert_or_assign(slot, std::move(set));
+			}
 			else if (a == L"--load")
 				o.load = next();
 			else if (a == L"--host")
@@ -352,6 +379,11 @@ namespace
 	// The game's code (FInputDevice::KB_..., as its hotkeys have it) of a Windows key; -1 none.
 	unsigned scriptedKey(char c)
 	{
+		// ("%1" ... "%9", "%0", "%=": F1 ... F10, F12, the advisors' keys)
+		if (c >= '1' && c <= '9')
+			return render::key::F1 + unsigned(c - '1');
+		if (c == '0' || c == '=')
+			return render::key::F1 + (c == '0' ? 9u : 11u);
 		switch (c)
 		{
 		case 'u': return render::key::Up;
@@ -360,6 +392,7 @@ namespace
 		case 'r': return render::key::Right;
 		case 'e': return render::key::Return;
 		case 't': return render::key::Tab;
+		case 'b': return render::key::Back;
 		default: return 0;
 		}
 	}
@@ -405,8 +438,48 @@ namespace
 		}
 	}
 
+	// The other civilizations' moves shown (Show Enemy Moves / Show Friendly Moves): a group whose
+	// move ends where the player sees it gets a mission timer (CvSelectionGroup::updateMissionTimer,
+	// 4 game updates and one more a plot moved), the camera is told to look at it, and its owner
+	// moves nothing else while it is busy (CvPlayerAI::AI_unitUpdate waits for !hasBusyUnit): one
+	// group at a time, a stack as one. The timer counts game updates, so these run a slice of time
+	// apart while one is on, as the original's engine does; with nothing shown they run flat out.
+	// (Measured in the original under Wine: a game update every 0.26 s, a shown move every 4 updates.)
+	constexpr std::chrono::milliseconds kShownMoveSlice{ 250 };
+	bool shownMoveOn()
+	{
+		for (int p = 0; p < MAX_PLAYERS; ++p)
+			if (const CvPlayerAI& player = CvPlayerAI::getPlayerNonInl(static_cast<PlayerTypes>(p));
+				player.isAlive() && player.isTurnActive() && !player.isHuman() && player.hasBusyUnit())
+				return true;
+		return false;
+	}
+
 	// Of the game's controls, those the host can do: all but the multiplayer game's (chat,
 	// pings, its administration) and the map's signs.
+	// The controls that open a screen of the game's: the advisors, the Civilopedia, Victory, Info.
+	bool screenControl(int control)
+	{
+		switch (control)
+		{
+		case CONTROL_DOMESTIC_SCREEN:
+		case CONTROL_FINANCIAL_SCREEN:
+		case CONTROL_CIVICS_SCREEN:
+		case CONTROL_FOREIGN_SCREEN:
+		case CONTROL_MILITARY_SCREEN:
+		case CONTROL_TECH_CHOOSER:
+		case CONTROL_RELIGION_SCREEN:
+		case CONTROL_CORPORATION_SCREEN:
+		case CONTROL_ESPIONAGE_SCREEN:
+		case CONTROL_VICTORY_SCREEN:
+		case CONTROL_INFO:
+		case CONTROL_CIVILOPEDIA:
+			return true;
+		default:
+			return false;
+		}
+	}
+
 	bool playableControl(int control)
 	{
 		switch (control)
@@ -421,7 +494,6 @@ namespace
 		case CONTROL_CYCLE_CAMERA_FLYING_MODES:
 		case CONTROL_FLYING_CAMERA:
 		case CONTROL_MOUSE_FLYING_CAMERA:
-		case CONTROL_TOP_DOWN_CAMERA:
 			return false;
 		default:
 			return true;
@@ -500,9 +572,19 @@ namespace
 			[&sounds](uint64_t voice) { sounds.stopMovie(voice); });
 		std::string era;
 		// (before each frame: what is heard there, and the game's messages to the player)
+		// The camera's distances (GlobalDefines, world units) in plots, as window.look() gives
+		// them: the closest zoom, the start's, the farthest before the map view.
+		const float plotSize = std::max(GC.getPLOT_SIZE(), 1.0f);
+		const auto cameraPlots = [&](const char* define, float fallback) {
+			const float v = GC.getDefineFLOAT(define);
+			return (v > 0 ? v : fallback) / plotSize;
+		};
+		const float cameraNearest = cameraPlots("CAMERA_MIN_DISTANCE", 700), cameraStart = cameraPlots("CAMERA_START_DISTANCE", 2200),
+			cameraTop = std::max(cameraPlots("CAMERA_SMALLEST_MAX_DISTANCE", 7000), cameraNearest + 1);
 		const auto hear = [&] {
 			const auto look = window.look();
-			sounds.update({ look.x, look.y, look.distance }, era);
+			const float closeness = std::clamp((cameraTop - look.distance) / (cameraTop - cameraNearest), 0.0f, 1.0f);
+			sounds.update({ look.x, look.y, look.distance, closeness, look.eyeX, look.eyeY, look.eyeZ }, era);
 			std::vector<std::pair<std::string, float>> lines;
 			// (none over a talk: the leader's face is where they are; the turn log keeps them)
 			if (!utility.diplomacy().active())
@@ -533,8 +615,9 @@ namespace
 			logMapKnown("at the start");
 		// The game's own interface (CvMainInterface.py and the screens), unless asked not to.
 		host::Screens screens(utility);
-		// The soundscape where the camera looks: a city's by it (its era's, its size's), else the
-		// plot's feature's, improvement's or terrain's; none unexplored or from far up.
+		// The soundscape where the camera looks: the city's whose screen is up (its era's, its
+		// size's), else the plot's feature's, improvement's or terrain's; none unexplored or
+		// from far up.
 		const host::SoundscapePlaces scapes = sounds.started() ? host::soundscapePlaces(utility) : host::SoundscapePlaces{};
 		if (playLog && sounds.started())
 		{
@@ -543,30 +626,81 @@ namespace
 				count(scapes.terrain), scapes.terrain.size(), count(scapes.feature), scapes.feature.size(), count(scapes.improvement),
 				scapes.improvement.size(), scapes.city.empty() ? -1 : scapes.city[0][0], scapes.city.empty() ? -1 : scapes.city[0][1],
 				scapes.city.empty() ? -1 : scapes.city[0][2]);
+			std::printf("  camera (plots): closest %.1f, start %.1f, farthest %.1f, now %.1f\n", cameraNearest, cameraStart, cameraTop, window.look().distance);
 		}
 		const auto soundscapeHere = [&]() -> int {
 			const auto look = window.look();
 			CvMap& map = GC.getMap();
 			const TeamTypes team = game.getActiveTeam();
-			const CvPlot* plot = map.plot(int(std::floor(look.x)), int(std::floor(look.y)));
-			if (look.distance > 25 || !plot || team == NO_TEAM || !plot->isRevealed(team, false))
-				return -1;
 			const auto of = [](const std::vector<int>& table, int i) { return i >= 0 && size_t(i) < table.size() ? table[size_t(i)] : -1; };
-			for (int dy = -1; dy <= 1; ++dy)
-				for (int dx = -1; dx <= 1; ++dx)
-					if (const CvPlot* p = map.plot(plot->getX() + dx, plot->getY() + dy); p && p->isRevealed(team, false))
-						if (const CvCity* city = p->getPlotCity())
-						{
-							const EraTypes era = CvPlayerAI::getPlayerNonInl(city->getOwner()).getCurrentEra();
-							if (era >= 0 && size_t(era) < scapes.city.size())
-								if (const int s = of(scapes.city[size_t(era)], int(city->getCitySizeType())); s >= 0)
-									return s;
-						}
+			// (a city's own, its dogs and talk, only while its screen is up: the original's; from
+			// whatever distance the city screen looks)
+			if (const CvCity* city = ui.isCityScreenUp() ? ui.getHeadSelectedCity() : nullptr)
+			{
+				const EraTypes era = CvPlayerAI::getPlayerNonInl(city->getOwner()).getCurrentEra();
+				if (era >= 0 && size_t(era) < scapes.city.size())
+					if (const int s = of(scapes.city[size_t(era)], int(city->getCitySizeType())); s >= 0)
+						return s;
+			}
+			const CvPlot* plot = map.plot(int(std::floor(look.x)), int(std::floor(look.y)));
+			if (look.distance > cameraTop || !plot || team == NO_TEAM || !plot->isRevealed(team, false))
+				return -1;
 			if (const int s = of(scapes.feature, plot->getFeatureType()); s >= 0)
 				return s;
 			if (const int s = of(scapes.improvement, plot->getImprovementType()); s >= 0)
 				return s;
 			return of(scapes.terrain, plot->getTerrainType());
+		};
+		// The leaders' music where the camera looks, in the game's first era (the original's):
+		// each civilization's share of the land around (the plots its borders hold as the
+		// player knows them, the nearer the more), its leader's peace music of its era; heard
+		// only from close by: full at the closest zoom, gone just past the start's (at the start
+		// the soundtrack alone, all but).
+		const auto territoryMusicHere = [&]() {
+			std::vector<std::pair<int, float>> music;
+			const PlayerTypes active = game.getActivePlayer();
+			const TeamTypes team = game.getActiveTeam();
+			if (active == NO_PLAYER || team == NO_TEAM || CvPlayerAI::getPlayerNonInl(active).getCurrentEra() != 0)
+				return music;
+			const auto look = window.look();
+			const float silentFrom = cameraNearest + 1.1f * std::max(cameraStart - cameraNearest, 1.0f);
+			const float zoom = std::clamp((silentFrom - look.distance) / (silentFrom - cameraNearest), 0.0f, 1.0f);
+			if (zoom <= 0)
+				return music;
+			CvMap& map = GC.getMap();
+			const int radius = 2;
+			const int cx = int(std::floor(look.x)), cy = int(std::floor(look.y));
+			float total = 0;
+			for (int dy = -radius; dy <= radius; ++dy)
+				for (int dx = -radius; dx <= radius; ++dx)
+				{
+					const float d = std::hypot(float(cx + dx) + 0.5f - look.x, float(cy + dy) + 0.5f - look.y);
+					const float w = std::max(0.0f, 1 - d / float(radius + 1));
+					const CvPlot* p = w > 0 ? map.plot(cx + dx, cy + dy) : nullptr;
+					if (!p)
+						continue;
+					total += w;
+					const PlayerTypes owner = p->getRevealedOwner(team, false);
+					if (owner == NO_PLAYER)
+						continue;
+					const CvPlayerAI& player = CvPlayerAI::getPlayerNonInl(owner);
+					const LeaderHeadTypes leader = player.getLeaderType();
+					const EraTypes era = player.getCurrentEra();
+					if (leader < 0 || size_t(leader) >= scapes.leaderPeaceMusic.size() || era < 0)
+						continue;
+					const auto& eras = scapes.leaderPeaceMusic[size_t(leader)];
+					const int script = size_t(era) < eras.size() ? eras[size_t(era)] : -1;
+					if (script < 0)
+						continue;
+					auto it = std::find_if(music.begin(), music.end(), [&](const auto& m) { return m.first == script; });
+					if (it == music.end())
+						music.push_back({ script, w });
+					else
+						it->second += w;
+				}
+			for (auto& m : music)
+				m.second *= zoom / std::max(total, 1.0f);
+			return music;
 		};
 		host::Screens::setTextWidth([&window](const std::string& markup, int font) { return window.textWidth(markup, font); });
 		host::Screens::setTextHeight([&window](const std::string& markup, int width, int font) { return window.textHeight(markup, width, font); });
@@ -593,7 +727,7 @@ namespace
 		if (!opt.ownInterface && !screens.start(int(window.width()), int(window.height())))
 			std::printf("  the game's interface did not start: the host's own\n");
 		int preparedTurn = -1;
-		int askedResearch = -1; // the cities the player had when research was last asked for (no city, no research)
+		int askedResearch = -1; // the cities the player had at the turn's start, or when research was last asked for
 		uint64_t shownPopup = 0;
 		render::MapWindow::PopupView popupView;
 		std::vector<int> popupItems; // the popup's item for each one the window shows
@@ -602,6 +736,15 @@ namespace
 			return p && i >= 0 && size_t(i) < popupItems.size() ? capture.popupHelp(*p, popupItems[size_t(i)]) : std::string();
 		});
 		auto last = Clock::now(), captured = last, ticked = last, typed = last;
+		// (the option Keep the camera on a unit after it attacks: the unit, the window's inputs then,
+		// whether the camera went to it after the battle)
+		struct KeptAttacker
+		{
+			IDInfo unit;
+			unsigned inputs = 0;
+			bool looked = false;
+		};
+		std::optional<KeptAttacker> keptAttacker;
 		host::AutoEndTurn autoEndTurn; // (the option: idle turns end by themselves)
 		const auto start = last;
 		long long frames = 0;
@@ -623,6 +766,7 @@ namespace
 		std::pair<const void*, int> pathFrom{};        // (the unit it starts from and its plot: the gamepad's plot cursor shows it all the while)
 		std::tuple<const void*, const void*, int, int> coloredFor{}; // what was selected when the plots were last coloured
 		uint64_t marksShown = ~0ull; // the marks the window has
+		uint64_t cameraShown = 0;     // the game's camera turn and tilt the window has (engine.cameraVersion)
 		uint64_t globeShown = 0;      // ... and the globe's state it shows (engine.globeVersion)
 		int globeTurn = -1;
 		std::vector<render::MapWindow::PlotMarks::Mark> globeMarks;
@@ -645,7 +789,40 @@ namespace
 		};
 		// A key: the action it is the hotkey of that can be done now (the highest priority of
 		// them); Esc leaves the interface mode, the city screen or the screen on top.
+		// The action a key is the hotkey of that can be done now (the highest priority of them), -1
+		// none; only the screens' (the advisors, the Civilopedia) when asked.
+		const auto hotkeyAction = [&](const render::MapWindow::KeyPress& k, int code, bool screensOnly) {
+			int best = -1, bestPriority = 0;
+			utility.setModifierKeys(k.shift, k.ctrl, k.alt);
+			for (int i = 0; code >= 0 && i < GC.getNumActionInfos(); ++i)
+			{
+				const CvActionInfo& a = GC.getActionInfo(i);
+				if (screensOnly && !screenControl(a.getControlType()))
+					continue;
+				const bool first = a.getHotKeyVal() == code && a.isShiftDown() == k.shift && a.isCtrlDown() == k.ctrl && a.isAltDown() == k.alt;
+				const bool second = a.getHotKeyValAlt() == code && a.isShiftDownAlt() == k.shift && a.isCtrlDownAlt() == k.ctrl && a.isAltDownAlt() == k.alt;
+				const int priority = first ? a.getHotKeyPriority() : a.getHotKeyPriorityAlt();
+				if ((first || second) && (best < 0 || priority > bestPriority) && usable(i))
+				{
+					best = i;
+					bestPriority = priority;
+				}
+			}
+			utility.setModifierKeys(false, false, false);
+			return best;
+		};
 		const auto press = [&](const render::MapWindow::KeyPress& k) {
+			// In a talk the advisors' and the Civilopedia's keys still open them, over it, as the
+			// original's do (seen in Wine: F1, F5, F6, F8, F9, F12 from an AI's talk); the talk
+			// stays under them and has its keys back when they close.
+			if (utility.diplomacy().active() && k.key != render::key::Escape && k.key != render::key::Return)
+				if (const int a = hotkeyAction(k, gameKey(k.key), true); a >= 0)
+				{
+					if (log)
+						std::printf("  key %u: screen action %d in a talk\n", k.key, a);
+					act(a, k.shift, k.ctrl, k.alt);
+					return;
+				}
 			if (screens.diploKey(k.key))
 				return;
 			if (k.key == render::key::Escape)
@@ -688,21 +865,7 @@ namespace
 					}
 					return;
 				}
-			int best = -1, bestPriority = 0;
-			utility.setModifierKeys(k.shift, k.ctrl, k.alt);
-			for (int i = 0; code >= 0 && i < GC.getNumActionInfos(); ++i)
-			{
-				const CvActionInfo& a = GC.getActionInfo(i);
-				const bool first = a.getHotKeyVal() == code && a.isShiftDown() == k.shift && a.isCtrlDown() == k.ctrl && a.isAltDown() == k.alt;
-				const bool second = a.getHotKeyValAlt() == code && a.isShiftDownAlt() == k.shift && a.isCtrlDownAlt() == k.ctrl && a.isAltDownAlt() == k.alt;
-				const int priority = first ? a.getHotKeyPriority() : a.getHotKeyPriorityAlt();
-				if ((first || second) && (best < 0 || priority > bestPriority) && usable(i))
-				{
-					best = i;
-					bestPriority = priority;
-				}
-			}
-			utility.setModifierKeys(false, false, false);
+			const int best = hotkeyAction(k, code, false);
 			if (log)
 				std::printf("  key %u%s%s%s: action %d %s\n", k.key, k.shift ? "+shift" : "", k.ctrl ? "+ctrl" : "", k.alt ? "+alt" : "", best,
 					best >= 0 ? host::gameText(GC.getActionInfo(best).getDescription()).c_str() : "(none)");
@@ -736,6 +899,8 @@ namespace
 		// it was and stays live (the camera moves, the figures move), and nothing here touches
 		// the game.
 		host::TurnWorker worker;
+		// (the others' next game update while a move of theirs is shown: shownMoveOn)
+		Clock::time_point nextShownMoveUpdate{};
 		// A game played by hand is saved at each turn's start (Documents\My Games\openciv4\Saves\
 		// auto, ten in turn), as the original does; a scripted one is not.
 		if (opt.viewSeconds <= 0)
@@ -884,7 +1049,7 @@ namespace
 				if (preparedTurn != game.getGameTurn())
 				{
 					preparedTurn = game.getGameTurn();
-					askedResearch = -1;
+					askedResearch = player.getNumCities();
 					std::printf("  your turn %d: %d cities, %d units\n", game.getGameTurn(), player.getNumCities(), player.getNumUnits());
 					// (for scripted games: which of our units have an enemy next to them)
 					if (playLog)
@@ -899,18 +1064,48 @@ namespace
 					changed = true;
 				}
 				// As the original's interface does a few times a second: the popups (the DLL's
-				// questions, and what to research when nothing is: once a turn, and again after a new
-				// city); once the units that moved are done, the next one that waits for orders (the
+				// questions, and what to research when nothing is after a new city: not at a turn's
+				// start, as in the original a scenario begins without asking; the DLL asks at the
+				// turn's end, so the question comes with the next turn); once the units that moved are done, the next one that waits for orders (the
 				// DLL holds it back with the cycle counter); then whether the turn is over (its "press
 				// Enter", or ending it).
+				// OpenCiv4's option (Keep the camera on a unit after it attacks): the active player's
+				// attacker stays selected, and the camera goes to it when the battle is over, until the
+				// player clicks or types; the next unit waits till then. (Off, as the original: the next unit
+				// is chosen as soon as the battle ends, with Combat Zoom or without.)
+				if (const std::optional<IDInfo> attacker = ui.takeFocusAttacker(); attacker && utility.keepAttacker())
+					keptAttacker = KeptAttacker{ *attacker, window.inputCount(), false };
+				if (keptAttacker)
+				{
+					CvUnit* unit = CvPlayerAI::getPlayerNonInl(keptAttacker->unit.eOwner).getUnit(keptAttacker->unit.iID);
+					if (!utility.keepAttacker() || !unit || window.inputCount() != keptAttacker->inputs || ui.isDiploOrPopupWaiting())
+						keptAttacker.reset();
+					else if (!unit->isFighting() && !keptAttacker->looked)
+					{
+						keptAttacker->looked = true;
+						if (opt.lookX < 0 || opt.viewSeconds <= 0 || std::getenv("OC4_FOLLOW_CAMERA"))
+							window.centerOn(unit->getX(), unit->getY());
+						if (!ui.isSelected(unit))
+							ui.selectUnit(unit, true, false, false);
+					}
+				}
 				if (const auto now = Clock::now(); now - ticked > std::chrono::milliseconds(150))
 				{
 					ticked = now;
-					if (!ui.isDiploOrPopupWaiting() && player.getCurrentResearch() == NO_TECH &&
-						std::exchange(askedResearch, player.getNumCities()) != player.getNumCities())
+					if (const int cities = player.getNumCities(); player.getCurrentResearch() != NO_TECH || cities < askedResearch)
+						askedResearch = cities;
+					else if (cities > askedResearch && !ui.isDiploOrPopupWaiting())
+					{
+						askedResearch = cities;
 						player.chooseTech();
+					}
 					ui.updatePopups(me);
-					if (ui.getCycleSelectionCounter() > 0)
+					// (not while a popup waits, as the game core's own calls: a new city's name is
+					// asked with the camera on the city, not on the next unit; nor while the option keeps
+					// the attacker; nor while a city's screen is up: the next unit would take the
+					// selection and close it, as when the turn's "what to build" popup is answered with
+					// Examine City. It comes once the screen is left, after the question the city asks again.)
+					if (ui.getCycleSelectionCounter() > 0 && !ui.isDiploOrPopupWaiting() && !keptAttacker && !ui.isCityScreenUp())
 					{
 						ui.changeCycleSelectionCounter(-1);
 						if (ui.getCycleSelectionCounter() == 0)
@@ -1126,6 +1321,14 @@ namespace
 						press({ render::key::Escape, false, false, false });
 					else if (std::isalnum(static_cast<unsigned char>(c)) || c == ' ')
 						press({ unsigned(std::toupper(static_cast<unsigned char>(c))), shift, ctrl, alt });
+					else if (c == '%' && n + 1 < script.size())
+					{
+						// ("^%l": an arrow, Return or Tab with Ctrl held, as the game's hotkeys have them:
+						// Ctrl+Left turns the camera)
+						if (const unsigned k = scriptedKey(script[n + 1]))
+							press({ k, shift, ctrl, alt });
+						++n;
+					}
 					script.erase(0, std::min(n + 1, script.size()));
 					changed = true;
 				}
@@ -1163,8 +1366,13 @@ namespace
 					}
 					clicks.clear();
 					utility.engine().clear(AREA_BORDER_LAYER_HIGHLIGHT_PLOT, true);
+					// (in green, as the original's and the script's own big brush, COLOR_GREEN)
 					if (const py::object h = si.attr("WorldBuilderGetHighlightPlot")(py::make_tuple(wbScreen)); py::len(h) >= 2)
-						utility.engine().mark({ h[py::int_(0)].cast<int>(), h[py::int_(1)].cast<int>(), 1, 1, 1, 0.9f, AREA_BORDER_LAYER_HIGHLIGHT_PLOT, true, false });
+					{
+						const ColorTypes green = ColorTypes(GC.getInfoTypeForString("COLOR_GREEN"));
+						const NiColorA c = green >= 0 ? GC.getColorInfo(green).getColor() : NiColorA(0, 1, 0, 1);
+						utility.engine().mark({ h[py::int_(0)].cast<int>(), h[py::int_(1)].cast<int>(), c.r, c.g, c.b, 0.9f, AREA_BORDER_LAYER_HIGHLIGHT_PLOT, true, false });
+					}
 				}
 				catch (py::error_already_set& e)
 				{
@@ -1235,11 +1443,18 @@ namespace
 						ui.selectGroup(own, click.shift, click.ctrl, click.alt);
 					else
 						ui.clearSelectionList();
+					// (as the original's: the camera goes to the plot clicked, a unit there or not;
+					// a scripted game told where to look keeps looking there)
+					if (opt.lookX < 0 || opt.viewSeconds <= 0)
+						window.centerOn(plot->getX(), plot->getY());
 				}
 				else if (ui.getHeadSelectedUnit())
 				{
 					utility.setModifierKeys(click.shift, click.ctrl, click.alt);
-					ui.unitSound(ui.getHeadSelectedUnit(), true); // (the order's: moves have none of the DLL's)
+					// (the order's: moves have none of the DLL's; none for the units' own plot, where
+					// they go nowhere, as the original's: a right button let go back on it is silent)
+					if (const CvUnit* head = ui.getHeadSelectedUnit(); head->plot() != plot)
+						ui.unitSound(head, true);
 					game.selectionListMove(plot, click.alt, click.shift, click.ctrl);
 					utility.setModifierKeys(false, false, false);
 				}
@@ -1263,7 +1478,14 @@ namespace
 			// shows it (the game core's interface pathfinder, the turns each plot is reached in).
 			const CvUnit* pathHead = ui.getHeadSelectedUnit();
 			const std::pair<const void*, int> from{ pathHead, pathHead ? pathHead->getX() * 4096 + pathHead->getY() : -1 };
-			if (const auto target = player.isTurnActive() ? window.pathTarget() : std::nullopt; target != pathShown || (target && from != pathFrom))
+			// The go-to modes (G, a worker's road to there: Alt+R, ...: those the XML marks bGotoPlot)
+			// show it for the plot under the mouse without the button, as the original does. (none in
+			// the WorldBuilder, where the right button takes away what is on a plot)
+			const bool playing = player.isTurnActive() && !ui.worldBuilder();
+			const InterfaceModeTypes pathMode = ui.getInterfaceMode();
+			window.setGoingTo(playing && pathMode > NO_INTERFACEMODE && pathMode < NUM_INTERFACEMODE_TYPES && GC.getInterfaceModeInfo(pathMode).getGotoPlot() &&
+				pathHead && pathHead->getOwner() == me);
+			if (const auto target = playing ? window.pathTarget() : std::nullopt; target != pathShown || (target && from != pathFrom))
 			{
 				pathShown = target;
 				pathFrom = from;
@@ -1282,21 +1504,31 @@ namespace
 				ui.setDirty(ColoredPlots_DIRTY_BIT, false);
 				game.updateColoredPlots();
 			}
-			// The selected settler's city radius (the founding border), as the engine draws it.
+			// The selected settler's founding border, as the engine draws it: the plots a city
+			// founded there would claim (its own and the eight next to it: CvCity::init's free
+			// culture), in the player's colour.
 			if (engine.foundingDirty.exchange(false) || selected != coloredFor)
 			{
 				engine.clear(AREA_BORDER_LAYER_FOUNDING_BORDER, true);
 				bool founds = false;
 				for (int i = 0; head && head->getOwner() == me && i < GC.getNumActionInfos() && !founds; ++i)
-					founds = GC.getActionInfo(i).getMissionType() == MISSION_FOUND && game.canHandleAction(i, nullptr, true);
+					// (where it can found now: none next to a city, as in the original)
+					founds = GC.getActionInfo(i).getMissionType() == MISSION_FOUND && game.canHandleAction(i, nullptr, false);
 				if (founds)
-					for (int dy = -2; dy <= 2; ++dy)
-						for (int dx = -2; dx <= 2; ++dx)
-							if (std::abs(dx) + std::abs(dy) < 4) // (the fat cross: no corners)
-								if (const CvPlot* p = GC.getMap().plot(head->getX() + dx, head->getY() + dy))
-									engine.mark({ p->getX(), p->getY(), 1, 1, 1, 0.55f, AREA_BORDER_LAYER_FOUNDING_BORDER, true, false });
+				{
+					const NiColorA& c = GC.getColorInfo(static_cast<ColorTypes>(GC.getPlayerColorInfo(CvPlayerAI::getPlayerNonInl(me).getPlayerColor()).getColorTypePrimary())).getColor();
+					for (int dy = -1; dy <= 1; ++dy)
+						for (int dx = -1; dx <= 1; ++dx)
+							if (const CvPlot* p = GC.getMap().plot(head->getX() + dx, head->getY() + dy))
+								engine.mark({ p->getX(), p->getY(), c.r, c.g, c.b, 0.9f, AREA_BORDER_LAYER_FOUNDING_BORDER, true, false });
+				}
 			}
 			coloredFor = selected;
+			if (const uint64_t c = engine.cameraVersion; c != cameraShown)
+			{
+				cameraShown = c;
+				window.setCameraAngles(engine.baseTurn, engine.basePitch, engine.satellite);
+			}
 			// The globe: its view, and its layer's plots coloured (the game core's colours for the
 			// active player, again each turn).
 			if (const uint64_t g = engine.globeVersion; g != globeShown || (engine.globeLayer >= 0 && game.getGameTurn() != globeTurn))
@@ -1343,7 +1575,11 @@ namespace
 				for (const auto& m : marks)
 				{
 					const auto [x, y] = m.core ? host::windowPlot({ m.x, m.y }) : std::pair{ m.x, m.y };
-					shownMarks.marks.push_back({ x, y, m.layer, { m.r, m.g, m.b }, m.a, m.border });
+					// (the WorldBuilder's plot and brush, and a settler's founding border, in the
+					// original's area border style)
+					const bool hatched = m.border && (m.layer == AREA_BORDER_LAYER_HIGHLIGHT_PLOT || m.layer == AREA_BORDER_LAYER_WORLD_BUILDER ||
+						m.layer == AREA_BORDER_LAYER_FOUNDING_BORDER);
+					shownMarks.marks.push_back({ x, y, m.layer, { m.r, m.g, m.b }, m.a, m.border, false, hatched });
 				}
 				for (const auto& s : signs)
 				{
@@ -1407,11 +1643,28 @@ namespace
 			}
 			if (ui.lookAtX >= 0)
 			{
-				// (a scripted game told where to look keeps looking there)
-				if (opt.lookX < 0 || opt.viewSeconds <= 0)
+				// (a scripted game told where to look keeps looking there; development: OC4_FOLLOW_CAMERA=1
+				// lets the game move it, as in play)
+				if (opt.lookX < 0 || opt.viewSeconds <= 0 || std::getenv("OC4_FOLLOW_CAMERA"))
 					window.centerOn(ui.lookAtX, ui.lookAtY);
+				if (playLog && !player.isTurnActive())
+					std::printf("  others' move shown: the camera to %d,%d at %.2fs\n", ui.lookAtX, ui.lookAtY,
+						std::chrono::duration<double>(Clock::now() - start).count());
 				ui.lookAtX = ui.lookAtY = -1;
 			}
+			if (ui.lookAtPointX >= 0)
+			{
+				if (opt.lookX < 0 || opt.viewSeconds <= 0 || std::getenv("OC4_FOLLOW_CAMERA"))
+				{
+					if (ui.lookAtBattleZoom)
+						window.enterBattleView(ui.lookAtPointX, ui.lookAtPointY, ui.lookAtBattleDirX);
+					else
+						window.centerOnPoint(ui.lookAtPointX, ui.lookAtPointY);
+				}
+				ui.lookAtPointX = ui.lookAtPointY = -1;
+			}
+			if (std::exchange(ui.releaseCamera, false))
+				window.leaveBattleView();
 			const auto now = Clock::now();
 				if (changed || now - captured > std::chrono::milliseconds(200))
 				{
@@ -1423,9 +1676,13 @@ namespace
 						walls.push_back(host::windowPlot(c));
 					capture.setGreatWallCities(std::move(walls));
 				}
-				window.setMap(capture.capture(&ui));
+				// (in the WorldBuilder no unit shows as selected, as the original's)
+				window.setMap(capture.capture(ui.worldBuilder() ? nullptr : &ui));
 				if (sounds.started())
+				{
 					sounds.setSoundscape(soundscapeHere());
+					sounds.setTerritoryMusic(territoryMusicHere());
+				}
 				std::string state = game.getGameState() == GAMESTATE_OVER ? "the game is over" : !player.isAlive() ? "you have been defeated"
 					: !player.isTurnActive() ? "the other civilizations move" : ui.isEndTurnMessage() ? "press Enter to end the turn" : "your turn";
 				if (const InterfaceModeTypes mode = ui.getInterfaceMode(); mode != INTERFACEMODE_SELECTION && mode != NO_INTERFACEMODE)
@@ -1454,17 +1711,30 @@ namespace
 			if (!CvPlayerAI::getPlayerNonInl(game.getActivePlayer()).isTurnActive() && game.getGameState() != GAMESTATE_OVER &&
 				!utility.diplomacy().active())
 			{
-				window.setBusy(true);
-				worker.start([&session, &game] {
-					const auto until = Clock::now() + std::chrono::milliseconds(100);
-					do
-						if (host::Entities::battleWait())
-							Sleep(5);
-						else
-							session.update();
-					while (!CvPlayerAI::getPlayerNonInl(game.getActivePlayer()).isTurnActive() && Clock::now() < until &&
-						game.getGameState() != GAMESTATE_OVER);
-				});
+				// (a move shown: the next update a slice after the last, the window live meanwhile)
+				if (Clock::now() >= nextShownMoveUpdate)
+				{
+					window.setBusy(true);
+					worker.start([&session, &game, &nextShownMoveUpdate] {
+						const auto until = Clock::now() + std::chrono::milliseconds(100);
+						do
+							if (host::Entities::battleWait())
+								Sleep(5);
+							else
+							{
+								// (the update that ends a timer too: the next group's move a slice later)
+								const bool wasShown = shownMoveOn();
+								session.update();
+								if (wasShown || shownMoveOn())
+								{
+									nextShownMoveUpdate = Clock::now() + kShownMoveSlice;
+									break;
+								}
+							}
+						while (!CvPlayerAI::getPlayerNonInl(game.getActivePlayer()).isTurnActive() && Clock::now() < until &&
+							game.getGameState() != GAMESTATE_OVER);
+					});
+				}
 			}
 		}
 		// (the game is ours again before anything else looks at it)
@@ -1672,6 +1942,21 @@ namespace
 				keys.erase(0, 2);
 				typed = now;
 			}
+			// (a scripted menu: "<x,y>" clicks that pixel as the mouse does; 'text' is typed)
+			if (int px = 0, py = 0; keys.starts_with('<') && now - typed > std::chrono::milliseconds(400) &&
+				keys.find('>') != std::string::npos && std::sscanf(keys.c_str() + 1, "%d,%d", &px, &py) == 2)
+			{
+				window.mouseClick(px, py);
+				keys.erase(0, keys.find('>') + 1);
+				typed = now;
+			}
+			if (keys.starts_with('\'') && now - typed > std::chrono::milliseconds(400))
+				if (const size_t end = keys.find('\'', 1); end != std::string::npos)
+				{
+					window.typeText(keys.substr(1, end - 1));
+					keys.erase(0, end + 1);
+					typed = now;
+				}
 			// (a scripted menu: "{Name}" clicks that widget)
 			if (keys.starts_with('{') && now - typed > std::chrono::milliseconds(400))
 				if (const size_t end = keys.find('}'); end != std::string::npos)
@@ -1702,7 +1987,7 @@ namespace
 			std::printf("  saved %s\n", opt.screenshot.string().c_str());
 		}
 		screens.closeMenu();
-		window.setEditing(false);
+		window.setUiTextFocus(false);
 		window.setUi({});
 		window.setUiWheel({});
 		sounds.setTalkMusic(-1, -1);
@@ -2025,9 +2310,10 @@ int wmain(int argc, wchar_t** argv)
 						otherMods.push_back(m.folder);
 				// (a save that cannot be played here: the menu again, saying why)
 				std::string message;
+				Options menuOpt = opt;
 				for (;;)
 				{
-					const auto choice = runMenu(opt, *menuWindow, utility, title, maps, otherMods, played.viewKeys, message);
+					const auto choice = runMenu(menuOpt, *menuWindow, utility, title, maps, otherMods, played.viewKeys, message);
 					if (!choice || choice->kind == host::MenuChoice::Kind::Exit)
 					{
 						std::printf("\nmenu: %s\n", choice ? "exit" : "closed");
@@ -2045,8 +2331,34 @@ int wmain(int argc, wchar_t** argv)
 					}
 					if (choice->kind == host::MenuChoice::Kind::NewGame)
 					{
+						// (what the command line chose and the menu does not: as chosen there)
+						const host::NewGameSettings asked = played.game;
 						played.game = choice->game;
-						break;
+						if (played.game.players == 0)
+							played.game.players = asked.players;
+						if (played.game.options.empty())
+							played.game.options = asked.options;
+						if (played.game.victories.empty())
+							played.game.victories = asked.victories;
+						if (played.game.mapOptions.empty() && played.game.mapScript == asked.mapScript)
+							played.game.mapOptions = asked.mapOptions;
+						if (played.game.slots.empty())
+							played.game.slots = asked.slots;
+						if (played.game.advancedStartPoints < 0)
+							played.game.advancedStartPoints = asked.advancedStartPoints;
+						// (settings the game cannot start from: the menu again, saying why)
+						try
+						{
+							session.checkNewGame(played.game);
+							break;
+						}
+						catch (const std::exception& e)
+						{
+							message = e.what();
+							menuOpt.menuPage = choice->game.slots.empty() ? "new" : "custom";
+							std::printf("\nmenu: %s\n", message.c_str());
+							continue;
+						}
 					}
 					if (choice->kind == host::MenuChoice::Kind::Mod)
 					{
@@ -2066,6 +2378,7 @@ int wmain(int argc, wchar_t** argv)
 					catch (const std::exception& e)
 					{
 						message = e.what();
+						menuOpt.menuPage = "load";
 						std::printf("\nmenu: %s\n", message.c_str());
 					}
 				}

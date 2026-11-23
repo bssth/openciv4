@@ -271,7 +271,8 @@ namespace oc4::render
 
 	bool Theme::Button::empty() const
 	{
-		return std::ranges::all_of(skin, [](const Skin& s) { return s.empty(); }) && std::ranges::none_of(image, [](const Bitmap& b) { return bool(b); });
+		return std::ranges::all_of(skin, [](const Skin& s) { return s.empty(); }) && std::ranges::none_of(image, [](const Bitmap& b) { return bool(b); }) &&
+			std::ranges::all_of(mark, [](const Skin& s) { return s.empty(); });
 	}
 
 	struct Theme::Impl
@@ -763,29 +764,31 @@ namespace oc4::render
 				}
 		}
 
-		// A skin's layers: one that inherits takes the other skin's, and the one after it (with no
-		// flags of its own) changes their last.
+		// A skin's layers: one that inherits takes the other skin's, and the ones after it (with
+		// no flags of their own) change those in turn, the first the first ("layer {}" one it
+		// keeps): a checked box's rollover changes its box and keeps its mark.
 		Skin skin(const Style* s, const Value* v, int depth = 0)
 		{
 			Skin out;
 			v = resolve(s, v);
 			if (!v || v->kind != Value::Kind::Skin || depth > 8)
 				return out;
-			bool inherited = false;
+			size_t next = 0, end = 0; // the inherited layers still to change
 			for (const RawLayer& raw : v->layers)
 			{
 				if (const auto it = raw.find("Inherit"); it != raw.end())
 				{
 					Skin from = skin(s, &it->second, depth + 1);
-					inherited = !from.empty();
+					next = out.size();
 					out.insert(out.end(), from.begin(), from.end());
+					end = out.size();
 				}
-				else if (inherited && !raw.contains("LayerFlags"))
-					apply(s, raw, out.back());
+				else if (next < end && !raw.contains("LayerFlags"))
+					apply(s, raw, out[next++]);
 				else
 				{
 					apply(s, raw, out.emplace_back());
-					inherited = false;
+					next = end = 0;
 				}
 			}
 			std::erase_if(out, [](const Layer& l) { return !l.image && !l.center && l.middle != Layer::Middle::Fill; });
@@ -876,6 +879,7 @@ namespace oc4::render
 			{
 				b->skin[i] = m->skin(s, m->property(s, std::string("GFC_CtrlTheme_Bitmap_Control_Button_Skin_") + kStates[i]));
 				b->image[i] = m->bitmap(s, m->property(s, std::string("GFC_Control_Button_Image_") + kStates[i]));
+				b->mark[i] = m->skin(s, m->property(s, std::string("GFC_CtrlTheme_Bitmap_Control_Button_Skin_Image_") + kStates[i]));
 				const bool text = m->colour(s, m->property(s, std::string("GFC_Control_Button_Color_Text_") + kStates[i]), b->text[i], b->textAlpha[i]);
 				const bool shadow = m->colour(s, m->property(s, std::string("GFC_Control_Button_Color_TextShadow_") + kStates[i]), b->shadow[i], b->shadowAlpha[i]);
 				b->coloured = b->coloured || (text && shadow);

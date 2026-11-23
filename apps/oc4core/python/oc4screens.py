@@ -25,6 +25,7 @@ _FONT_LEFT, _FONT_RIGHT, _FONT_CENTER = 1 << 0, 1 << 1, 1 << 2
 
 _version = [1]          # bumped on every change the display list shows
 _screens = {}           # python file id -> _Screen
+_shownSeq = [0]         # screens shown so far: each one's shownAt
 _resolution = [1024, 768]
 _logged = set()
 _citySelection = [()]   # the cities a table's rows selected last
@@ -32,6 +33,8 @@ _drop = [None, 0]       # the pull down whose list is open (file id, name), and 
 _areas = []             # what scrolls under the mouse, back to front: (x0, y0, x1, y1, file id, name, step, down, sideways)
 _bars = {}              # the scroll bars: (file id, name, part) -> (x0, y0, x1, y1)
 _dropRects = {}         # where each pull down is: (file id, name) -> (x0, y0, x1, y1)
+_editSelectAll = [False]
+_editFocus = [None]     # the edit box typed into: (file id, name), or None
 
 
 def _changed():
@@ -87,7 +90,7 @@ class _Widget(object):
 	__slots__ = ('name', 'kind', 'parent', 'mode', 'x', 'y', 'z', 'w', 'h', 'style', 'pstyle', 'text', 'help', 'tex', 'tex2',
 		'wt', 'd1', 'd2', 'opt', 'flags', 'font', 'shown', 'enabled', 'state', 'hittest', 'seq', 'vertical', 'scroll', 'children',
 		'bars', 'lists', 'columns', 'rows', 'headers', 'iconw', 'iconh', 'items', 'selected', 'color', 'size', 'defw', 'defh', 'points',
-		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset')
+		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed', 'password')
 
 	def __init__(self, name, kind):
 		self.name = name
@@ -112,6 +115,9 @@ class _Widget(object):
 		self.vertical = True
 		self.scroll = False
 		self.children = []
+		self.maxChars = 0      # an edit box's: at most this many characters (0: any)
+		self.password = False
+		self.allowed = None    # ... and only these (None: any)
 		self.bars = None       # stacked bars: [[percent, (r, g, b, a)], ...]
 		self.lists = None      # multi lists: [[(texture, wt, d1, d2, option, disabledTexture), ...], ...]
 		self.columns = None    # tables: [[header, width, right], ...]
@@ -151,6 +157,9 @@ class _Screen(object):
 		self.hideLists = {}
 		self.endTurn = None    # (text, shown)
 		self.closeOnEscape = True
+		self.shownAt = 0       # when it was last shown (_shownSeq): the newest is on top
+		self.group = 0         # setScreenGroup: the Civilopedia's 1 (see _closeOthers)
+		self.passInput = False # (showScreen's bPassInput: the map under it still takes clicks and keys)
 
 	def add(self, name, kind, parent=None, mode='abs'):
 		name = _str(name)
@@ -257,7 +266,7 @@ def minimapOverlay(version):
 	"""The shown screen's own minimap, when it changed since that version: (version, width,
 	height, the game's map, territory, [(x, y, RGBA)], [(x, y, RGBA)], the whole map (a replay's));
 	None if unchanged, () for none (sizes 0: the game's map)."""
-	for s in sorted(_screens.values(), key=lambda s: -s.id):
+	for s in sorted(_screens.values(), key=lambda s: (-s.shownAt, -s.id)):
 		if s.shown and not s.main and s.minimap is not None and s.mm is not None:
 			mm = s.mm
 			if mm.version == version:
@@ -408,15 +417,21 @@ class CyGInterfaceScreen(object):
 			_changed()
 
 	def showScreen(self, bState=0, bPassInput=False):
+		self._s.passInput = bool(bPassInput)
 		if not self._s.shown:
+			_closeOthers(self._s)
+			_shownSeq[0] += 1
+			self._s.shownAt = _shownSeq[0]
 			self._s.shown = True
 			_changed()
+			_screenMusic(self._s, True)
 
 	def hideScreen(self):
 		if self._s.shown:
 			self._s.shown = False
 			_forget(self._s)
 			_changed()
+			_screenMusic(self._s, False)
 			oc4host.screen_closed(self._s.id)
 
 	def isActive(self):
@@ -439,8 +454,9 @@ class CyGInterfaceScreen(object):
 	def isRequiredForcedRedraw(self): return False
 	def setRenderInterfaceOnly(self, b): pass
 	def getRenderInterfaceOnly(self): return False
-	def setScreenGroup(self, iGroup): pass
-	def getScreenGroup(self): return 0
+	def setScreenGroup(self, iGroup):
+		self._s.group = _int(iGroup, 0)
+	def getScreenGroup(self): return self._s.group
 	# (the screen's sound as it is shown: the tech splash's quote)
 	def setSound(self, szSound):
 		if szSound:
@@ -812,12 +828,15 @@ class CyGInterfaceScreen(object):
 			pass
 		self._model(szName, art, info.getButton(), iX, iY, iWidth, iHeight, eWidgetType, iData1, iData2, fXRot, fZRot, fScale, bAnimate)
 	def addFlagWidgetGFC(self, szName, iX, iY, iWidth, iHeight, iOwner, eWidgetType=-1, iData1=-1, iData2=-1):
-		"""A player's flag (the main interface's by the minimap): its civilization's flag picture,
-		an emblem on a banner in the player's colour; a white flag's picture is the whole flag in
-		its own colours (its alpha is no mask: "opaque:")."""
+		"""A player's flag (the main interface's by the minimap): the host draws the flag model of
+		the player's era waving, in the player's colours with the civilization's emblem (text:
+		the player). Where it cannot, its civilization's flag picture, an emblem on a banner in
+		the player's colour; a white flag's picture is the whole flag in its own colours (its
+		alpha is no mask: "opaque:")."""
 		w = self._s.add(szName, 'flag')
 		w.x, w.y, w.w, w.h = int(iX), int(iY), int(iWidth), int(iHeight)
 		w.wt, w.d1, w.d2 = _int(eWidgetType), _int(iData1), _int(iData2)
+		w.text = u'%d' % _int(iOwner)
 		try:
 			gc = _cpe.CyGlobalContext()
 			player = gc.getPlayer(int(iOwner))
@@ -1099,10 +1118,10 @@ class CyGInterfaceScreen(object):
 
 	def setTableText(self, szName, iColumn, iRow, text, szIcon='', eWidgetType=-1, iData1=-1, iData2=-1, iJustify=_FONT_LEFT):
 		w = self._s.get(szName)
-		if w is None or w.rows is None:
+		# (a row the screen never added is left alone, as in the original: BUG's Info screen writes
+		# "Religions Founded" into a fourth row of a three-row table, and the original doesn't show it)
+		if w is None or w.rows is None or not 0 <= int(iRow) < len(w.rows):
 			return
-		while len(w.rows) <= int(iRow):
-			w.rows.append({})
 		w.rows[int(iRow)][int(iColumn)] = (_text(text), _str(szIcon), _int(eWidgetType), _int(iData1), _int(iData2), _int(iJustify, _FONT_LEFT))
 		_changed()
 
@@ -1238,7 +1257,6 @@ class CyGInterfaceScreen(object):
 	def addEditBoxGFC(self, szName, iX, iY, iWidth, iHeight, eWidgetType=-1, iData1=-1, iData2=-1, eFont=1):
 		w = self._s.add(szName, 'edit')
 		w.x, w.y, w.w, w.h = int(iX), int(iY), int(iWidth), int(iHeight)
-		w.wt, w.d1, w.d2, w.font = _int(eWidgetType), _int(iData1), _int(iData2), _int(eFont, 1)
 
 	def setEditBoxString(self, szName, szString):
 		w = self._s.get(szName)
@@ -1251,10 +1269,20 @@ class CyGInterfaceScreen(object):
 
 	def setEditBoxPassword(self, szName):
 		w = self._s.get(szName)
-		if w is not None:
-			_set(w, 'style', 'password')
+		if w is not None and w.kind == 'edit':
+			_set(w, 'password', True)
 
-	def setEditBoxMaxCharCount(self, *args): pass
+	def setEditBoxMaxCharCount(self, szName, iMaxCharCount=0, *args):
+		w = self._s.get(szName)
+		if w is not None:
+			w.maxChars = max(0, _int(iMaxCharCount, 0))
+
+	def setEditBoxCharacters(self, szName, szAllowed):
+		"""openciv4's own: the characters typing puts in the edit box (u'0123456789': digits only)."""
+		w = self._s.get(szName)
+		if w is not None:
+			w.allowed = _text(szAllowed) if szAllowed else None
+
 	def setEditBoxTextColor(self, *args): pass
 
 	def addSlider(self, szName, iX, iY, iWidth, iHeight, iDefault, iMin, iMax, eWidgetType=-1, iData1=-1, iData2=-1, bIsVertical=False):
@@ -1663,7 +1691,9 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 	flags = w.flags
 	if kind == 'text' and w.mode == 'rel':
 		flags = (flags & ~(_FONT_CENTER | _FONT_RIGHT)) | _FONT_LEFT
-	text = u'*' * len(w.text) if kind == 'edit' and w.style == 'password' else w.text
+	text = u'*' * len(w.text) if kind == 'edit' and w.password else w.text
+	if kind == 'edit' and _editFocus[0] == (s.id, w.name):
+		text = text + u'|' # (the caret: typed into)
 	out.append((base + (-1,), kind, x, y, x + width, y + height, clip, w.style if w.style else w.pstyle, text, w.tex, w.tex2, w.font, flags,
 		w.state, w.enabled, w.hittest, color, w.wt, w.d1, w.d2, w.opt, w.z, w.seq))
 	if w.children:
@@ -1714,7 +1744,8 @@ def display():
 	del _areas[:]
 	_dropRects.clear()
 	_bars.clear()
-	for s in sorted(_screens.values(), key=lambda s: (not s.main, s.id)):
+	# (the main interface first, then the screens in the order they were shown: the newest on top)
+	for s in sorted(_screens.values(), key=lambda s: (not s.main, s.shownAt, s.id)):
 		if not (s.main or s.shown):
 			continue
 		items = []
@@ -1839,6 +1870,72 @@ def openDropdown(fileId, name):
 	_changed()
 
 
+def _availableEdit(screen, widget):
+	if widget is None or widget.kind != 'edit' or not widget.enabled or not screen.shown:
+		return False
+	while widget is not None:
+		if not widget.shown:
+			return False
+		widget = screen.get(widget.parent) if widget.parent is not None else None
+	return True
+
+
+def _focusedEdit():
+	if _editFocus[0] is None:
+		return None
+	fileId, name = _editFocus[0]
+	s = _screens.get(fileId)
+	w = s.get(name) if s is not None else None
+	return w if _availableEdit(s, w) else None
+
+
+def focusEdit(fileId, name):
+	"""A click on an edit box: the keys type into it (on anything else: into none)."""
+	s = _screens.get(int(fileId))
+	w = s.get(_str(name)) if s is not None else None
+	key = (int(fileId), _str(name)) if _availableEdit(s, w) else None
+	_editSelectAll[0] = False
+	if key != _editFocus[0]:
+		_editFocus[0] = key
+		_changed()
+
+
+def editFocused():
+	"""Whether an edit box takes the keys."""
+	if _focusedEdit() is None:
+		focusEdit(-1, '')
+		return False
+	return True
+
+
+def typeIntoEdit(text):
+	"""Apply edit keys and text in the order they arrived."""
+	w = _focusedEdit()
+	if w is None:
+		focusEdit(-1, '')
+		return
+	for c in _text(text):
+		if c == u'\x01':
+			_editSelectAll[0] = True
+		elif c in (u'\t', u'\x02'):
+			s = _screens[_editFocus[0][0]]
+			edits = sorted((item for item in s.widgets.values() if _availableEdit(s, item)), key=lambda item: item.seq)
+			step = 1 if c == u'\t' else -1
+			w = edits[(edits.index(w) + step) % len(edits)]
+			focusEdit(s.id, w.name)
+		elif c in (u'\r', u'\x1b'):
+			focusEdit(-1, '')
+			break
+		elif c == u'\b':
+			_set(w, 'text', u'' if _editSelectAll[0] else w.text[:-1])
+			_editSelectAll[0] = False
+		elif c >= u' ' and (w.allowed is None or c in w.allowed):
+			value = u'' if _editSelectAll[0] else w.text
+			if not w.maxChars or len(value) < w.maxChars:
+				_set(w, 'text', value + c)
+				_editSelectAll[0] = False
+
+
 def closeDropdown():
 	"""Closes the open pull down's list; whether one was open."""
 	if _drop[0] is None:
@@ -1945,6 +2042,50 @@ def closeOnEscape(fileId):
 	return s is not None and s.shown and not s.main and s.closeOnEscape
 
 
+def _closeOthers(s):
+	"""A screen of its own shown: the ones up before it close, as the original's do (seen in Wine,
+	BUG + BULL: F5 over the Domestic Advisor leaves the Military Advisor alone up; F9 over Victory,
+	F3 over Info, F4 over Religion, F2 over the Sevopedia the same). Not the main interface, nor a
+	screen that lets the map's input through (the World Builder, BUG's dot map), nor the engine's
+	talk (an advisor opened from an AI's talk goes over it, and the talk is there as it was when
+	the advisor's EXIT closes it), nor a screen of a lower group than the new one's: the
+	Civilopedia's (setScreenGroup 1) opens over the tech advisor, and Esc closes it back to it."""
+	if s.main or s.id == _DIPLO or s.passInput:
+		return
+	for o in list(_screens.values()):
+		if o is s or not o.shown or o.main or o.id == _DIPLO or o.passInput or o.group < s.group:
+			continue
+		hide(o.id)
+		try:
+			import CvScreensInterface
+			CvScreensInterface.onClose((o.id,))
+		except Exception:
+			import traceback
+			traceback.print_exc()
+
+
+def topScreen():
+	"""The shown screen on top (the newest shown, the main interface not counted): its file id,
+	-1 none."""
+	up = [s for s in _screens.values() if s.shown and not s.main]
+	return max(up, key=lambda s: s.shownAt).id if up else -1
+
+
+def escapeTop():
+	"""The host: Esc (no talk up). The newest screen up that closes so closes (the Civilopedia over
+	an advisor first); false if none does."""
+	up = sorted([s for s in _screens.values() if s.shown and not s.main], key=lambda s: -s.shownAt)
+	for s in up:
+		if s.id == _DIPLO:
+			return False
+		if s.closeOnEscape:
+			hide(s.id)
+			import CvScreensInterface
+			CvScreensInterface.onClose((s.id,))
+			return True
+	return False
+
+
 def reset(fileId):
 	"""Forgets a screen's widgets (before it is laid out again for another resolution)."""
 	s = _screens.get(int(fileId))
@@ -1960,6 +2101,27 @@ def hide(fileId):
 		s.shown = False
 		_forget(s)
 		_changed()
+		_screenMusic(s, False)
+
+
+def _screenMusic(s, shown):
+	"""A screen with music of its own: the Dawn of Man plays our leader's diplomacy music (its
+	peace theme for the era we are in, after its intro), as the original does, until it closes."""
+	if s.name != 'CvDawnOfMan':
+		return
+	if not shown:
+		oc4host.audio_talk_music(-1, -1)
+		return
+	try:
+		gc = _cpe.CyGlobalContext()
+		us = gc.getPlayer(_cpe.CyGame().getActivePlayer())
+		leader = gc.getLeaderHeadInfo(us.getLeaderType())
+		era = us.getCurrentEra()
+		oc4host.audio_talk_music(leader.getDiploPeaceIntroMusicScriptIds(era), leader.getDiploPeaceMusicScriptIds(era))
+	except Exception:
+		# (the screen still shows; the error is printed, not hidden)
+		import traceback
+		traceback.print_exc()
 
 
 def _forget(s):
@@ -2389,10 +2551,12 @@ class CyCamera(object):
 	def LookAtUnit(self, unit): _lookAtPoint(unit.plot().getPoint())
 	def GetZoom(self): return 1.0
 	def SetZoom(self, f): pass
-	def GetBaseTurn(self): return 0.0
-	def SetBaseTurn(self, f): pass
-	def GetBasePitch(self): return 0.0
-	def SetBasePitch(self, f): pass
+	def GetBaseTurn(self): return oc4host.camera_base_turn()
+	def SetBaseTurn(self, f): oc4host.camera_set_base_turn(float(f))
+	def MoveBaseTurnLeft(self, f=45.0): oc4host.camera_move_base_turn(-float(f))
+	def MoveBaseTurnRight(self, f=45.0): oc4host.camera_move_base_turn(float(f))
+	def GetBasePitch(self): return oc4host.camera_base_pitch()
+	def SetBasePitch(self, f): oc4host.camera_set_base_pitch(float(f))
 
 
 for _name in ('CyGInterfaceScreen', 'CyInterface', 'CyGlobeLayerManager', 'CyAudioGame', 'CyEngine', 'CyCamera'):
@@ -2746,6 +2910,7 @@ _diploOpen = set()  # the item lists the player opened in this talk ('their', 'o
 _FRAME_LEFT, _FRAME_TOP, _FRAME_RIGHT, _FRAME_BOTTOM, _FRAME_W, _FRAME_H = 12, 15, 500, 1010, 512, 1024
 _FRAME_WINDOW = (76, 70, 436, 680)
 _FRAME_SPEECH, _FRAME_ANSWERS = (695, 825), (830, 1005)
+_FRAME_SHOWN_H = 734   # its height on screen, in pixels (Wine, 1600 x 900)
 
 
 def _diploList(screen, name, header, items, theirs, offered, x, y, w, h, root=None, opened=True):
@@ -2828,13 +2993,15 @@ def diploShow():
 	# (the talk takes every click; the map and the interface show through)
 	screen.addPanel('DiploCover', u'', u'', True, False, 0, 0, W, H, PanelStyles.PANEL_STYLE_EMPTY)
 
-	# The middle column, the original's frame stretched over it.
-	CW = 480
-	cx = W / 2 - CW / 2
+	# The middle column, the original's frame stretched over it: 480 x 734 in the middle of the
+	# screen, as the original draws it (measured in Wine at 1600 x 900: 478 x 734 from y 84), the
+	# map and the interface round it.
+	CW, CH = 480, min(_FRAME_SHOWN_H, H)
+	cx, cy = W / 2 - CW / 2, (H - CH) / 2
 	sx = float(CW) / (_FRAME_RIGHT - _FRAME_LEFT)
-	sy = float(H) / (_FRAME_BOTTOM - _FRAME_TOP)
+	sy = float(CH) / (_FRAME_BOTTOM - _FRAME_TOP)
 	fx = lambda u: int(cx + (u - _FRAME_LEFT) * sx)
-	fy = lambda v: int((v - _FRAME_TOP) * sy)
+	fy = lambda v: int(cy + (v - _FRAME_TOP) * sy)
 
 	# the leader, under the frame's posts
 	wx0, wy0, wx1, wy1 = fx(_FRAME_WINDOW[0]), fy(_FRAME_WINDOW[1]), fx(_FRAME_WINDOW[2]), fy(_FRAME_WINDOW[3])
@@ -2854,7 +3021,7 @@ def diploShow():
 	title = u'%s - %s' % (them.getName(), them.getCivilizationDescription(0))
 	if attitude:
 		title += u' (%s)' % attitude
-	screen.setText('DiploTitle', 'Background', u'<font=3b>' + title + u'</font>', _FONT_LEFT, cx + 8, fy(_FRAME_TOP) + (fy(_FRAME_WINDOW[1]) - 22) / 2,
+	screen.setText('DiploTitle', 'Background', u'<font=3b>' + title + u'</font>', _FONT_LEFT, cx + 8, fy(_FRAME_TOP) + (fy(_FRAME_WINDOW[1]) - fy(_FRAME_TOP) - 22) / 2,
 		-0.1, FontTypes.TITLE_FONT, WidgetTypes.WIDGET_LEADERHEAD, who, me)
 
 	# what the leader says
@@ -2875,20 +3042,24 @@ def diploShow():
 		answers.append((comment, data1, data2))
 	_diplo['answers'] = answers
 
-	# The sides: what each one has (its tradeable items), what each offers.
-	SW = 254
-	lx, rx = cx - 9 - SW, cx + CW + 8
-	split = fy(_FRAME_SPEECH[0])
-	theirName, root = them.getName().upper(), translator.getText('TXT_KEY_TRADEABLE_ITEMS', ())
-	listsOpen = trading and showAll and not current
-	_diploList(screen, 'DiploTheirItems', translator.getText('TXT_KEY_TRADE_PLAYER_HAS', (theirName,)).upper(), oc4host.diplo_items(True, False),
-		True, False, lx, 0, SW, split, root, listsOpen or 'their' in _diploOpen)
-	_diploList(screen, 'DiploOurItems', translator.getText('TXT_KEY_TRADE_YOU_HAVE', ()).upper(), oc4host.diplo_items(False, False),
-		False, False, rx, 0, SW, split, root, listsOpen or 'our' in _diploOpen)
-	_diploList(screen, 'DiploTheirOffer', translator.getText('TXT_KEY_TRADE_PLAYER_OFFERS', (theirName,)).upper(), oc4host.diplo_items(True, True),
-		True, True, lx, split + 8, SW, H - split - 8)
-	_diploList(screen, 'DiploOurOffer', translator.getText('TXT_KEY_TRADE_YOU_OFFER', ()).upper(), oc4host.diplo_items(False, True),
-		False, True, rx, split + 8, SW, H - split - 8)
+	# The sides: what each one has (its tradeable items), what each offers; as tall as the frame.
+	# Only while they trade (an AI's proposal, the script's startTrade / showAllTrade, until its
+	# endTrade): a greeting, a first contact, the talk's menu show the leader alone, as in the
+	# original.
+	if trading:
+		SW = 254
+		lx, rx = cx - 9 - SW, cx + CW + 8
+		top, bottom, split = fy(_FRAME_TOP), fy(_FRAME_BOTTOM), fy(_FRAME_SPEECH[0])
+		theirName, root = them.getName().upper(), translator.getText('TXT_KEY_TRADEABLE_ITEMS', ())
+		listsOpen = showAll and not current
+		_diploList(screen, 'DiploTheirItems', translator.getText('TXT_KEY_TRADE_PLAYER_HAS', (theirName,)).upper(), oc4host.diplo_items(True, False),
+			True, False, lx, top, SW, split - top, root, listsOpen or 'their' in _diploOpen)
+		_diploList(screen, 'DiploOurItems', translator.getText('TXT_KEY_TRADE_YOU_HAVE', ()).upper(), oc4host.diplo_items(False, False),
+			False, False, rx, top, SW, split - top, root, listsOpen or 'our' in _diploOpen)
+		_diploList(screen, 'DiploTheirOffer', translator.getText('TXT_KEY_TRADE_PLAYER_OFFERS', (theirName,)).upper(), oc4host.diplo_items(True, True),
+			True, True, lx, split + 8, SW, bottom - split - 8)
+		_diploList(screen, 'DiploOurOffer', translator.getText('TXT_KEY_TRADE_YOU_OFFER', ()).upper(), oc4host.diplo_items(False, True),
+			False, True, rx, split + 8, SW, bottom - split - 8)
 
 	for n, (offset, hoffset) in kept.items():
 		w = s.widgets.get(n)
@@ -2997,9 +3168,10 @@ def diploClick(name, part, right=False, shift=False):
 
 
 # (Esc goes back a step first: "Never mind" from the trade table, the deals or "something else" to the
-# greeting; "Something else" from its own questions (their research, their attitude, a target) to it)
+# greeting; "Something else" from its own questions (their research, their attitude, a target) to it.
+# A first contact has only war or peace to say: Esc is the peace, the greeting returned)
 _DIPLO_ESCAPE = ('NEVERMIND', 'EXIT', 'REJECT', 'REJECT_DEMAND', 'REJECT_OFFER', 'REFUSE_HELP', 'NO_CONVERT', 'NO_JOIN_WAR',
-	'NO_MAKE_PEACE_WITH', 'NO_RENEGOTIATE', 'NO_REVOLUTION', 'NO_STOP_TRADING')
+	'NO_MAKE_PEACE_WITH', 'NO_RENEGOTIATE', 'NO_REVOLUTION', 'NO_STOP_TRADING', 'PEACE')
 _DIPLO_SOMETHING_ELSE_MENUS = ('AI_DIPLOCOMMENT_RESEARCH', 'AI_DIPLOCOMMENT_TARGET', 'AI_DIPLOCOMMENT_ATTITUDE',
 	'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_FURIOUS', 'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_ANNOYED', 'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_CAUTIOUS',
 	'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_PLEASED', 'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_FRIENDLY')

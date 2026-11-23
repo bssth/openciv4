@@ -11,6 +11,8 @@
 
 #include <SDL3/SDL_gpu.h>
 
+#include <DirectXMath.h>
+
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -30,8 +32,12 @@ namespace oc4::render
 		float pitch = 0.35f; // radians above the XY plane
 		float distance = 100;
 		float fovY = 0.75f;
+		float centreUp = 0.5f; // where on the screen what it looks at is drawn: 0 bottom, 1 top
 
 		Vec3 eye() const;
+		// The perspective (right-handed, DirectXMath's row-vector order), shifted up or down so
+		// that the target is drawn at centreUp.
+		DirectX::XMMATRIX projection(float aspect, float nearZ, float farZ) const;
 		// The screen's up in the world: towards where the camera looks along the ground, so that
 		// it still holds looking straight down.
 		Vec3 up() const;
@@ -47,7 +53,7 @@ namespace oc4::render
 	enum class TextureFormat : uint8_t
 	{
 		// RGBA16 is unorm: SDL GPU cannot sample integer formats, so shaders read whole values as round(v * 65535).
-		BGRA8, BC1, BC2, BC3, R8, R32Float, RGBA16
+		BGRA8, BC1, BC2, BC3, R8, RG8, R32Float, RGBA16
 	};
 
 	// A texture (2D or an array of them) on the GPU, released with its last owner.
@@ -118,10 +124,13 @@ cbuffer Frame : register(b0, UNIFORMS)
 	float3 lightDir;     float pad0;
 	float3 lightColor;   float pad1;
 	float3 ambientLight; float pad2;
-	float3 eyePos;       float pad3;
+	float3 eyePos;       float fogDistance; // the distance fog: the camera's distance from what it looks at (0: none)
 	float4 groundGrid;   // terrain heights: 1 / cell size, columns, rows, wrap width (0: none)
 	float4 fogGrid;      // the fog of war: plot size (0: none), columns, rows, wrap (1 X, 2 Y)
 	float4 globe;        // the globe view: the point it is centred on (xy), its radius (z, 0: flat), the map's wrap width (w)
+	float3 unitLightDir;     float pad4; // the units' own light (flags bit 14): Art/Terrain/Lights/UnitLight.nif
+	float3 unitLightColor;   float pad5;
+	float3 unitAmbientLight; float pad6;
 };
 
 // The globe view: the map wrapped round a sphere centred under the point looked at, its width
@@ -138,6 +147,17 @@ float3 globeBend(float3 p)
 	const float2 dir = len > 1e-4 ? d / len : float2(0, 0);
 	const float h = globe.z + p.z;
 	return float3(globe.xy + dir * h * sin(a), h * cos(a) - globe.z);
+}
+
+// The original's distance fog (the landscape's iFogR/G/B: black), linear in the distance from the
+// eye: none up to 1.2 times the camera's distance from the point it looks at, black at 1.8 times.
+// So it scales with the zoom: seen straight down nothing is that far; at the tilted zooms the top
+// of the view (its corners most) darkens. The multiplier for a colour at p (bent: as drawn).
+float distanceFog(float3 p)
+{
+	if (fogDistance <= 0)
+		return 1;
+	return saturate((1.8 - length(p - eyePos) / fogDistance) / 0.6);
 }
 )hlsl";
 
@@ -165,6 +185,14 @@ float3 globeBend(float3 p)
 	};
 
 	// The light of a view: the direction it shines in, its colour, the ambient light.
+	// A light as Gamebryo's fixed-function pipeline has it: a point light (no falloff, as all
+	// the leaders' are), its diffuse colour times its dimmer.
+	struct PointLight
+	{
+		Vec3 position;
+		Vec3 color;
+	};
+
 	struct ViewLight
 	{
 		Vec3 direction{ -0.4f, -0.6f, -0.7f };
@@ -185,7 +213,10 @@ float3 globeBend(float3 p)
 		uint32_t width() const { return m_width; }
 		uint32_t height() const { return m_height; }
 
-		std::unique_ptr<GpuModel> upload(const scene::Model& model, const AssetResolver& assets, const AssetLocation& modelLocation);
+		// decalOverride replaces the model's decal maps (runtime civilization flags); its owner
+		// must keep the image alive while the uploaded model is used.
+		std::unique_ptr<GpuModel> upload(const scene::Model& model, const AssetResolver& assets, const AssetLocation& modelLocation,
+			const GpuImage* decalOverride = nullptr);
 
 		void beginFrame(const Camera& camera, Vec3 clearColor = { 0.18f, 0.22f, 0.27f });
 		// world / visible: one entry per model node (scene::Model::worldTransforms / visibility).
@@ -196,19 +227,33 @@ float3 globeBend(float3 p)
 		// Particles: camera-facing quads (six vertices each, in the world, their colour in the
 		// vertices') of a model's particle system in its material; drawn with the blended items.
 		void drawParticles(const GpuModel& model, size_t system, const scene::Material& material, std::vector<scene::Vertex>&& vertices);
+		// What draw lights the models with from now on: the units' own light (true; the original's
+		// Art/Terrain/Lights/UnitLight.nif, LIGHTING_UNITS) or the scene's (false, the default).
+		void setUnitLight(bool on) { m_unitLight = on; }
 		// Draws the blended items of this frame's instances, back to front, then the particles.
 		void endFrame();
+		// Draws now the blended items laid on the ground (rivers' water, roads) queued so far, back
+		// to front, so that what is drawn next (the sea's water) goes over them.
+		void drawGroundBlended();
 		// Draws models into a target of its own (made width x height), as a camera of its own
 		// sees them: viewProj is its view * projection (DirectXMath's row vectors, p * M), at eye;
 		// no ground, no fog. endView draws its blended items and goes back to the frame's own
 		// target and camera.
-		// (clearAlpha 0: on nothing, what is under the picture shows through)
+		// (clearAlpha 0: on nothing, what is under the picture shows through; alphaTwice: its
+		// blended items cover it as the original's widgets' pictures do, their alpha counted twice,
+		// colour times alpha cubed over what is under it times 1 - alpha squared: a flag's fringe)
 		void beginView(OffscreenTarget& target, uint32_t width, uint32_t height, std::span<const float, 16> viewProj, Vec3 eye, const ViewLight& light,
-			Vec3 clearColor, float clearAlpha = 1.0f);
+			Vec3 clearColor, float clearAlpha = 1.0f, bool alphaTwice = false);
 		void endView();
 		// In a view: what was drawn so far (its blended items too) becomes the backdrop of what
 		// comes next, which nothing of it hides (a leader in front of the scene behind him).
 		void viewLayer();
+		// What is drawn from now on without a shader of its own (fixed function: no leader
+		// shading) is lit by these lights, as Direct3D's fixed-function pipeline lights it (up to
+		// 8; the vertex normal as it is, back faces too), plus the ambient lights' sum; until
+		// clearFixedLights.
+		void setFixedLights(std::span<const PointLight> lights, Vec3 ambient);
+		void clearFixedLights();
 		const GpuImage* targetImage(OffscreenTarget& target) { return target.color.get(); }
 		void present();
 
@@ -226,6 +271,9 @@ float3 globeBend(float3 p)
 		// Textures: subresources layer by layer, each layer's mips from the largest, rows tightly packed.
 		std::shared_ptr<GpuImage> createTexture(uint32_t width, uint32_t height, uint32_t layers, uint32_t mips, TextureFormat format,
 			std::span<const std::span<const uint8_t>> subresources);
+		// A BGRA picture made here (a flag's composed cloth) with its mips, each the mean of four
+		// texels of the one above, as a DDS file has them.
+		std::shared_ptr<GpuImage> createMipmapped(uint32_t width, uint32_t height, std::span<const uint8_t> bgra);
 		void updateTexture(GpuImage& image, uint32_t layer, uint32_t mip, uint32_t x, uint32_t y, uint32_t width, uint32_t height, const void* pixels);
 		std::shared_ptr<GpuBuffer> createBuffer(SDL_GPUBufferUsageFlags usage, const void* data, uint32_t size);
 
@@ -294,8 +342,9 @@ float3 globeBend(float3 p)
 		void upload(SDL_GPUTexture* texture, uint32_t layer, uint32_t mip, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const void* data,
 			uint32_t bytes);
 		void upload(SDL_GPUBuffer* buffer, uint32_t offset, const void* data, uint32_t bytes);
-		void drawMesh(const GpuModel::Mesh& mesh, const scene::Material& material, std::span<const Affine> world, Vec3 teamColor, bool onGround);
-		void bindModelTextures(const GpuImage* base, const GpuImage* decal, const scene::Material& m, const GpuImage* const* leader);
+		void drawMesh(const GpuModel::Mesh& mesh, const scene::Material& material, std::span<const Affine> world, Vec3 teamColor, bool onGround, bool unitLight);
+		void bindModelTextures(const GpuImage* base, const GpuImage* decal, const scene::Material& m, const GpuImage* const* leader,
+			bool onGround = false);
 		SDL_GPUSampler* sampler(int clamp) const { return m_samplers[clamp]; }
 
 		SDL_Window* m_window = nullptr;
@@ -318,6 +367,7 @@ float3 globeBend(float3 p)
 		SDL_GPUShader* m_overlayPs = nullptr;
 		std::map<PipelineKey, SDL_GPUGraphicsPipeline*> m_pipelines;
 		SDL_GPUSampler* m_samplers[4]{}; // by scene::TexClamp
+		SDL_GPUSampler* m_trilinearSamplers[4]{}; // the same without anisotropy
 		SDL_GPUSampler* m_linearClamp = nullptr;
 		std::shared_ptr<GpuImage> m_white, m_noHeights, m_noPlots;
 		const GpuImage* m_ground = nullptr;
@@ -329,11 +379,15 @@ float3 globeBend(float3 p)
 		std::map<std::string, std::shared_ptr<GpuImage>> m_textures; // by asset key
 
 		Camera m_camera;
-		float m_frame[44]{}; // the frame constants pushed with each pass
+		float m_frame[56]{}; // the frame constants pushed with each pass
 		float m_viewProj[16]{};
 		float m_globe[4]{};
 		bool m_inView = false;        // between beginView and endView
+		bool m_fixedLit = false;      // setFixedLights: m_fixedLights hold the lights
+		float m_fixedLights[8 * 4 * 2 + 4]{};
 		bool m_viewOnNothing = false; // ... a view on nothing: what is not blended covers it (alpha 1)
+		bool m_viewAlphaTwice = false; // ... its blended items' alpha counted twice (beginView)
+		bool m_unitLight = false;     // setUnitLight
 		Vec3 m_viewEye;
 
 		// Blended items of the current frame, drawn by endFrame.
@@ -345,6 +399,7 @@ float3 globeBend(float3 p)
 			size_t material; // into m_deferredMaterials
 			Vec3 teamColor;
 			bool onGround;
+			bool unitLight;
 		};
 		std::vector<Deferred> m_deferred;
 		struct ParticleDraw

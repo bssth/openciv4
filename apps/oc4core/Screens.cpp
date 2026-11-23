@@ -2,6 +2,7 @@
 
 #include "GameFont.h"
 #include "Interface.h"
+#include "MapCapture.h"
 #include "Utility.h"
 #include "Sounds.h"
 
@@ -177,6 +178,15 @@ namespace oc4::host
 					sizes.push_back(era.attr("getCitySoundscapeSciptId")(s).cast<int>());
 				places.city.push_back(std::move(sizes));
 			}
+			const int leaders = gc.attr("getNumLeaderHeadInfos")().cast<int>();
+			for (int l = 0; l < leaders; ++l)
+			{
+				py::object leader = gc.attr("getLeaderHeadInfo")(l);
+				std::vector<int> music;
+				for (int e = 0; e < eras; ++e)
+					music.push_back(leader.attr("getDiploPeaceMusicScriptIds")(e).cast<int>());
+				places.leaderPeaceMusic.push_back(std::move(music));
+			}
 		}
 		catch (py::error_already_set& e)
 		{
@@ -271,6 +281,8 @@ namespace oc4::host
 		host.def("set_edge_scroll", [&utility](bool on) { utility.setEdgeScroll(on); });
 		host.def("choose_edge_scroll", [&utility](bool on) { utility.chooseEdgeScroll(on); });
 		host.def("edge_scroll", [&utility] { return utility.edgeScroll(); });
+		host.def("set_keep_attacker", [&utility](bool on) { utility.setKeepAttacker(on); });
+		host.def("keep_attacker", [&utility] { return utility.keepAttacker(); });
 		host.def("ui_size_at", [](int percent) {
 			const float scale = render::uiScaleFor(percent, g_display.density, g_display.width, g_display.height);
 			return std::pair{ render::uiUnits(g_display.width, scale), render::uiUnits(g_display.height, scale) };
@@ -333,6 +345,17 @@ namespace oc4::host
 		});
 		// (CyCamera's looks: a point of the map, as CvPlot::getPoint gives it)
 		host.def("camera_look_at", [&ui](float x, float y) { ui.lookAt(NiPoint3(x, y, 0), CAMERALOOKAT_NORMAL, NiPoint3(0, 0, 0)); });
+		// (CyCamera's base turn and pitch, in degrees: the game's turn and tilt of the view)
+		host.def("camera_base_turn", [&engine] { return float(engine.baseTurn); });
+		host.def("camera_set_base_turn", [&engine](float degrees) { engine.setBaseTurn(degrees); });
+		host.def("camera_move_base_turn", [&engine](float degrees) {
+			if (degrees < 0)
+				engine.MoveBaseTurnLeft(-degrees);
+			else
+				engine.MoveBaseTurnRight(degrees);
+		});
+		host.def("camera_base_pitch", [&engine] { return float(engine.basePitch); });
+		host.def("camera_set_base_pitch", [&engine](float degrees) { engine.setBasePitch(degrees); });
 		host.def("ui_orders", [&ui] {
 			const CvCity* c = ui.getHeadSelectedCity();
 			return c ? c->getNumOrdersQueued() : 0;
@@ -710,6 +733,7 @@ if _walls:
 			m_utility.gameInterface().techSplash = true;
 			m_active = true;
 			m_laidOut = m_seenSize = { width, height };
+			m_nextMainUpdate = {};
 		}
 		catch (py::error_already_set& e)
 		{
@@ -796,6 +820,41 @@ if _walls:
 				text("leader", choice.game.leader);
 				if (d.contains("seed"))
 					choice.game.seed = d["seed"].cast<unsigned>();
+				if (d.contains("players"))
+					choice.game.players = d["players"].cast<int>();
+				if (d.contains("advancedStartPoints"))
+					choice.game.advancedStartPoints = d["advancedStartPoints"].cast<int>();
+				// {GAMEOPTION_...: on}, [VICTORY_...], {option: value}, {slot: {status, civ, leader, team}}
+				if (d.contains("options"))
+					for (const auto& [name, on] : d["options"].cast<py::dict>())
+						choice.game.options.emplace_back(name.cast<std::string>(), on.cast<bool>());
+				if (d.contains("victories"))
+				{
+					for (const py::handle v : d["victories"])
+						choice.game.victories.push_back(v.cast<std::string>());
+					if (choice.game.victories.empty())
+						choice.game.victories.push_back("NONE");
+				}
+				if (d.contains("mapOptions"))
+					for (const auto& [option, value] : d["mapOptions"].cast<py::dict>())
+						choice.game.mapOptions[option.cast<int>()] = value.cast<int>();
+				if (d.contains("slots"))
+					for (const auto& [slot, value] : d["slots"].cast<py::dict>())
+					{
+						const py::dict v = value.cast<py::dict>();
+						SlotSetting set;
+						const std::string status = v.contains("status") ? v["status"].cast<std::string>() : "ai";
+						set.status = status == "human" ? SlotSetting::Status::Human
+							: status == "closed"       ? SlotSetting::Status::Closed
+													   : SlotSetting::Status::AI;
+						if (v.contains("civ"))
+							set.civilization = v["civ"].cast<std::string>();
+						if (v.contains("leader"))
+							set.leader = v["leader"].cast<std::string>();
+						if (v.contains("team"))
+							set.team = v["team"].cast<int>();
+						choice.game.slots[slot.cast<int>()] = std::move(set);
+					}
 				if (d.contains("host"))
 					choice.host = d["host"].cast<int>();
 			}
@@ -821,7 +880,6 @@ if _walls:
 			printPythonError(e);
 		}
 		m_active = m_menu = false;
-		m_edit.reset();
 		m_items.clear();
 		m_version = -1;
 	}
@@ -947,12 +1005,22 @@ if _walls:
 				py::module_::import("CvScreensInterface").attr("showMainInterface")();
 				py::module_::import("oc4options").attr("resized")();
 				m_utility.gameInterface().makeInterfaceDirty();
+				m_nextMainUpdate = {};
 			}
 			screens.attr("setResolution")(m_laidOut.first, m_laidOut.second);
 			const auto [mouseX, mouseY] = window.mousePosition();
 			screens.attr("setMouse")(std::max(mouseX, 0), std::max(mouseY, 0));
 			py::module_ entry = py::module_::import("CvScreensInterface");
-			entry.attr("forceScreenUpdate")(py::make_tuple(m_mainId));
+			// The main interface, four times a second as the original engine updates it (its script
+			// counts so: BUG's clock takes 250 ms off its alternate period at each update). What
+			// changes in it is redrawn below, every frame, as the game marks it dirty.
+			constexpr auto kMainUpdate = std::chrono::milliseconds(250);
+			if (now >= m_nextMainUpdate)
+			{
+				// (a frame late now and then keeps the beat; a long stall starts it again)
+				m_nextMainUpdate = now - m_nextMainUpdate < kMainUpdate ? m_nextMainUpdate + kMainUpdate : now + kMainUpdate;
+				entry.attr("forceScreenUpdate")(py::make_tuple(m_mainId));
+			}
 			// The turn log, as the game core asks for it.
 			switch (ui.turnLogRequest.exchange(Interface::TurnLog::None))
 			{
@@ -1161,7 +1229,6 @@ if _walls:
 			info.name = narrow(key[1]);
 			info.part = key[2].cast<int>();
 			info.kind = kindName;
-			info.editable = item.kind == Kind::Edit && item.enabled && hitTest != HITTEST_NOHIT && item.x1 > item.x0 && item.y1 > item.y0;
 			info.widget = t[17].cast<int>();
 			info.data1 = t[18].cast<int>();
 			info.data2 = t[19].cast<int>();
@@ -1194,6 +1261,21 @@ if _walls:
 				std::sscanf(item.text.c_str(), "%d %d %d", &item.attitude, &item.action, &item.actionSerial);
 				item.text.clear();
 			}
+			if (item.kind == Kind::Flag)
+			{
+				// (the player's: the map's flag model of its era, its colours)
+				const FlagArt flag = flagArt(std::atoi(item.text.c_str()));
+				if (flag.model && flag.model->getNIF())
+				{
+					item.flagNif = flag.model->getNIF();
+					item.flagKfm = flag.model->getKFM() ? flag.model->getKFM() : "";
+					item.texture = (flag.white ? "opaque:" : "") + flag.decal;
+					item.hasColor = true;
+					item.color = flag.primary;
+					item.flagSecondary = flag.secondary;
+				}
+				item.text.clear();
+			}
 			if (item.kind == Kind::Model)
 			{
 				// ("tilt turn scale animated|button", "...|button|layers")
@@ -1212,7 +1294,8 @@ if _walls:
 				item.text.clear();
 			}
 			const bool buttonLike = item.kind == Kind::ImageButton || item.kind == Kind::Button || item.kind == Kind::CheckBox ||
-				item.kind == Kind::Dropdown || item.kind == Kind::Edit || item.kind == Kind::EndTurnButton || item.kind == Kind::Cell || item.kind == Kind::Scrollbar;
+				item.kind == Kind::Dropdown || item.kind == Kind::EndTurnButton || item.kind == Kind::Cell || item.kind == Kind::Scrollbar ||
+				item.kind == Kind::Edit;
 			// (a text, setText, is clicked as a button is: the scripts' "EXIT"s are texts)
 			item.mainInterface = !m_menu && info.screen == m_mainId;
 			item.interactive = hitTest != HITTEST_NOHIT && (buttonLike || item.kind == Kind::Text || item.kind == Kind::Movie || (info.widget >= 0 && info.widget != WIDGET_GENERAL) ||
@@ -1223,11 +1306,6 @@ if _walls:
 			items.push_back(std::move(item));
 			m_items.push_back(std::move(info));
 		}
-		if (m_edit && std::ranges::none_of(m_items, [&](const Item& item) {
-			return item.editable && item.screen == m_edit->screen && item.name == m_edit->name;
-		}))
-			m_edit.reset();
-		window.setEditing(m_edit.has_value());
 		window.setUi(std::move(items));
 		m_hovered = -2; // (the help again, the items are new)
 	}
@@ -1239,70 +1317,54 @@ if _walls:
 		m_mouse = window.mousePosition();
 		// A movie at its end: its screen hears NOTIFY_MOVIE_DONE.
 		constexpr int kMovieDone = 17;
+		const auto type = [](const std::wstring& typed)
+		{
+			if (typed.empty())
+				return;
+			try
+			{
+				py::module_::import("oc4screens").attr("typeIntoEdit")(typed);
+			}
+			catch (py::error_already_set& e)
+			{
+				printPythonError(e);
+			}
+		};
 		for (const std::string& file : window.takeMoviesDone())
 			if (const auto it = std::ranges::find(m_items, file, &Item::movie); it != m_items.end())
 				scriptInput(*it, kMovieDone, 0, 0, false, false, false, false);
 		for (const auto& click : window.takeUiClicks())
-			if (click.item >= 0 && size_t(click.item) < m_items.size())
+		{
+			type(click.typedBefore);
+			if (click.item < 0)
+			{
+				// (a click on none of the widgets closes an open pull down's list, ends typing)
+				try
+				{
+					py::module_::import("oc4screens").attr("closeDropdown")();
+					py::module_::import("oc4screens").attr("focusEdit")(-1, "");
+				}
+				catch (py::error_already_set& e)
+				{
+					printPythonError(e);
+				}
+			}
+			else if (size_t(click.item) < m_items.size())
 			{
 				if (std::getenv("OC4_PLAY_LOG"))
 					std::printf("  mouse on %d/%s/%d\n", m_items[size_t(click.item)].screen, m_items[size_t(click.item)].name.c_str(), m_items[size_t(click.item)].part);
 				this->click(m_items[size_t(click.item)], click.right, click.shift, click.ctrl, click.alt);
 			}
+		}
+		type(window.takeUiTyped());
 		try
 		{
-			auto screens = py::module_::import("oc4screens");
-			using Kind = render::MapWindow::TextInput::Kind;
-			for (const auto& input : window.takeTextInput())
-			{
-				if (!m_edit)
-					break;
-				if (input.kind == Kind::SelectAll)
-				{
-					m_editSelectAll = true;
-					continue;
-				}
-				if (input.kind == Kind::Finish)
-				{
-					m_edit.reset();
-					break;
-				}
-				if (input.kind == Kind::Tab)
-				{
-					m_editSelectAll = false;
-					const auto at = std::ranges::find_if(m_items, [&](const Item& i) { return i.screen == m_edit->screen && i.name == m_edit->name; });
-					if (at != m_items.end())
-						for (size_t n = 1; n <= m_items.size(); ++n)
-						{
-							const size_t index = size_t(at - m_items.begin());
-							const auto& next = m_items[(index + (input.shift ? m_items.size() - n : n)) % m_items.size()];
-							if (next.editable && next.screen == m_edit->screen) { m_edit = next; break; }
-						}
-					continue;
-				}
-				auto screen = screens.attr("CyGInterfaceScreen")("", m_edit->screen);
-				std::wstring text = toWide(screen.attr("getEditBoxString")(m_edit->name));
-				if (m_editSelectAll) { text.clear(); m_editSelectAll = false; }
-				if (input.kind == Kind::Backspace && !text.empty())
-				{
-					const wchar_t last = text.back();
-					text.pop_back();
-					if constexpr (sizeof(wchar_t) == 2)
-						if (last >= 0xDC00 && last <= 0xDFFF && !text.empty() && text.back() >= 0xD800 && text.back() <= 0xDBFF)
-							text.pop_back(); // delete a complete UTF-16 character on Windows
-				}
-				if (input.kind == Kind::Text)
-					for (wchar_t c : input.text)
-						if (c >= 32 && c != 127 && text.size() < 1024)
-							text += c; // pasted control characters are never editing commands
-				if constexpr (sizeof(wchar_t) == 2)
-					if (!text.empty() && text.back() >= 0xD800 && text.back() <= 0xDBFF)
-						text.pop_back(); // the size limit must not split a surrogate pair
-				screen.attr("setEditBoxString")(m_edit->name, wide(text));
-			}
+			window.setUiTextFocus(py::module_::import("oc4screens").attr("editFocused")().cast<bool>());
 		}
-		catch (py::error_already_set& e) { printPythonError(e); m_edit.reset(); }
-		window.setEditing(m_edit.has_value());
+		catch (py::error_already_set& e)
+		{
+			printPythonError(e);
+		}
 	}
 
 	bool Screens::click(const std::string& name, int part, bool shift, bool ctrl, bool alt)
@@ -1331,10 +1393,6 @@ if _walls:
 
 	void Screens::click(const Item& it, bool right, bool shift, bool ctrl, bool alt)
 	{
-		m_edit.reset();
-		m_editSelectAll = false;
-		if (it.editable && !right)
-			m_edit = it; // focus also keeps the ordinary NOTIFY_CLICKED path below
 		// What the script hears: a click (NOTIFY_CLICKED, the part), or an item of a list
 		// chosen (NOTIFY_LISTBOX_ITEM_SELECTED, its index; a table's column as the mouse's x).
 		constexpr int kClicked = 0, kListItem = 11;
@@ -1345,6 +1403,8 @@ if _walls:
 			// (a button's click is heard, as the original's interface plays it)
 			if (it.kind == "button" || it.kind == "imagebutton" || it.kind == "checkbox" || it.kind == "endbutton" || it.kind == "dropdown" || it.kind == "option")
 				m_utility.sounds().play(it.kind == "checkbox" ? "AS2D_IF_CHECKBOX" : "AS2D_IF_SELECT");
+			// (a click on an edit box types into it; on anything else, into none)
+			screens.attr("focusEdit")(it.kind == "edit" && !right ? it.screen : -1, it.name);
 			if (it.kind == "header")
 			{
 				// A sorting table's header: its rows by that column (the engine's own; the script hears nothing).
@@ -1527,19 +1587,12 @@ if _walls:
 				return true;
 			if (m_menu)
 				return py::module_::import("oc4menu").attr("escape")().cast<bool>();
-			// (a talk: its way out, when it has one)
+			// (a talk: its way out, when it has one, even with an advisor opened over it: the
+			// original's Esc answers the talk under it, seen in Wine)
 			if (m_utility.diplomacy().active())
 				return screens.attr("diploEscape")().cast<bool>();
-			for (auto entry : py::reinterpret_borrow<py::dict>(screens.attr("_screens")))
-			{
-				const int id = entry.first.cast<int>();
-				if (screens.attr("closeOnEscape")(id).cast<bool>())
-				{
-					screens.attr("hide")(id);
-					py::module_::import("CvScreensInterface").attr("onClose")(py::make_tuple(id));
-					return true;
-				}
-			}
+			// The newest screen up that closes so (the Civilopedia over an advisor: back to it).
+			return screens.attr("escapeTop")().cast<bool>();
 		}
 		catch (py::error_already_set& e)
 		{

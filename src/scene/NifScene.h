@@ -78,6 +78,9 @@ namespace oc4::scene
 		size_t baseSlot = 0;     // TexSlot the base texture came from (mech units: detail)
 		UvTransform baseUv;
 		TexClamp baseClamp = TexClamp::WrapWrap;
+		// The base map's NiTexturingProperty filter mode: 2 trilinear, 6 anisotropic (Gamebryo's
+		// TexFilterMode).
+		uint32_t baseFilter = 2;
 		// Civ4 units put a "TeamColor" placeholder in the base slot and the real
 		// texture in decal 0; the decal's alpha reveals the player colour. Mech
 		// units put a damage atlas there instead, windowed by animated UVs.
@@ -99,6 +102,15 @@ namespace oc4::scene
 
 		bool zTest = true;
 		bool zWrite = true;
+		// Blended, and its depth written all the same (the leaders' shader: what it draws hides
+		// what comes after it, its see-through parts too).
+		bool blendWritesDepth = false;
+		// Blended, but drawn where its model has it, not sorted by distance with the scene's
+		// other blended things (Gamebryo's alpha property's "no sorter", or no such property).
+		bool blendUnsorted = false;
+		// The alpha property's "no sorter" (Gamebryo draws such a blended mesh where its model has
+		// it, not sorted by distance with the rest).
+		bool alphaNoSorter = false;
 		Cull cull = Cull::Back;
 
 		// NiVertexColorProperty: 0 ignore, 1 emissive, 2 ambient+diffuse
@@ -139,6 +151,11 @@ namespace oc4::scene
 		std::vector<Affine> skinToBone;
 
 		Bounds bindBounds; // world space, bind pose
+
+		// Laid on the terrain where it stands ("ContourGeometry" / "ContourGeometryUseZ" text on it
+		// or a node over it: the original's ContourShader.fx adds the ground's height to its
+		// heights): a mine's ground patch, a resource's piles.
+		bool contour = false;
 
 		// A forest piece: where its trees stand (its node's space), tree i (the red of its
 		// vertices' colour) at [i - 1]; not a number where there is none.

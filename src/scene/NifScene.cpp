@@ -24,8 +24,14 @@ namespace oc4::scene
 	{
 		if (!enabled)
 			return uv;
+		// Max's transform works in 3ds Max's texture space, where V goes up: the file's V
+		// flipped (a ship's damage atlas moves along U by +0.5 to its lightly damaged left half;
+		// a flag's medallions along V by -0.2 a row, up the strip from its empty bottom row).
+		const bool max = method == 1;
+		if (max)
+			uv.y = 1 - uv.y;
 		Vec2 p;
-		if (method == 1)
+		if (max)
 			p = { (uv.x - translation.x - center.x) * tiling.x, (uv.y - translation.y - center.y) * tiling.y };
 		else
 			p = { (uv.x - center.x) * tiling.x + translation.x, (uv.y - center.y) * tiling.y + translation.y };
@@ -34,7 +40,8 @@ namespace oc4::scene
 			const float c = std::cos(rotation), s = std::sin(rotation);
 			p = { p.x * c - p.y * s, p.x * s + p.y * c };
 		}
-		return { p.x + center.x, p.y + center.y };
+		p = { p.x + center.x, p.y + center.y };
+		return max ? Vec2{ p.x, 1 - p.y } : p;
 	}
 
 	std::vector<uint8_t> Model::bindHidden() const
@@ -114,6 +121,7 @@ namespace oc4::scene
 			const NiZBufferProperty* zbuffer = nullptr;
 			const NiStencilProperty* stencil = nullptr;
 			int materialOwner = -1, texturingOwner = -1;
+			bool contour = false; // under (or on) an object marked "ContourGeometry..."
 
 			void apply(const File& f, const std::vector<Ref>& props, int node)
 			{
@@ -188,6 +196,9 @@ namespace oc4::scene
 				if (obj->hidden())
 					++m_model.hiddenNodes;
 				props.apply(m_file, obj->properties, m_nodeOf.at(ref));
+				for (const Ref e : obj->extraData)
+					if (const auto* s = m_file.get<NiStringExtraData>(e); s && s->value.starts_with("ContourGeometry"))
+						props.contour = true;
 
 				if (const auto* ps = dynamic_cast<const NiParticleSystem*>(obj))
 				{
@@ -382,6 +393,7 @@ namespace oc4::scene
 					m.baseSlot = baseSlot;
 					m.baseUv = toUv(baseDesc);
 					m.baseClamp = static_cast<TexClamp>(std::min<uint32_t>(baseDesc.clampMode, 3));
+					m.baseFilter = baseDesc.filterMode;
 					if (const auto* src = m_file.get<NiSourceTexture>(baseDesc.source); src && named(*src))
 					{
 						m.baseTexture = src->fileName;
@@ -414,6 +426,7 @@ namespace oc4::scene
 					m.alphaTest = p.alpha->testEnabled();
 					m.alphaFunc = static_cast<Compare>(p.alpha->testFunc());
 					m.alphaRef = p.alpha->threshold;
+					m.alphaNoSorter = p.alpha->noSorter();
 				}
 				// A forest piece numbers each tree's vertices in the red of their colour (green and
 				// blue 1): no colour, the game's trees keep the texture's own.
@@ -434,23 +447,23 @@ namespace oc4::scene
 					m.zWrite = false;
 				if (p.stencil)
 					m.cull = p.stencil->drawMode == 3 ? Cull::None : p.stencil->drawMode == 2 ? Cull::Front : Cull::Back;
-				// The leaderheads' skin shaders (TLeaderheadShader*) draw it opaque: the alpha of
-				// their colour map is a mask of their own, not where the skin is.
-				// Their see-through parts (brows, moustaches: "..._trans") keep their alpha. The
-				// shader sets the depth state itself: what it draws hides what is behind it (Pacal's
+				// The leaders' shaders (TLeaderheadShader*) set their own state, whatever the
+				// properties say (Civ4LeaderheadShader.fx's pass): every mesh blended by its colour
+				// map's alpha (SrcAlpha, InvSrcAlpha), no alpha test, depth tested and written (Pacal's
 				// face has the property's "no depth writes", and drawn so its lips and teeth showed
-				// through it).
+				// through it). Their skin's alpha is 1; brows, beards and fringes fade into it (Zara
+				// Yaqob's "zara_hair", Louis XIV's "hair_jobber"). Which order they go in is still the
+				// alpha property's: as the model has them (its "no sorter", or none), or sorted by
+				// distance with the rest.
 				if (m.shaderName.starts_with("TLeaderheadShader"))
 				{
-					std::string name = geom.name;
-					for (char& c : name)
-						c = char(std::tolower(static_cast<unsigned char>(c)));
-					if (name.find("trans") == std::string::npos)
-					{
-						m.alphaBlend = false;
-						m.alphaTest = false;
-					}
+					m.blendUnsorted = !(m.alphaBlend && !p.alpha->noSorter());
+					m.alphaBlend = true;
+					m.srcBlend = Blend::SrcAlpha;
+					m.dstBlend = Blend::InvSrcAlpha;
+					m.alphaTest = false;
 					m.zTest = m.zWrite = true;
+					m.blendWritesDepth = true;
 				}
 				return m;
 			}
@@ -495,6 +508,7 @@ namespace oc4::scene
 				item.material = makeMaterial(geom, props, uvSet);
 				item.materialOwner = props.materialOwner;
 				item.texturingOwner = props.texturingOwner;
+				item.contour = props.contour;
 
 				const size_t n = data->vertices.size();
 				item.vertices.resize(n);

@@ -581,6 +581,11 @@ namespace oc4::anim
 		}
 	}
 
+	bool Sequence::drivesVisibility(int node) const
+	{
+		return std::ranges::any_of(m_visibility, [&](const VisibilityChannel& v) { return v.node == node; });
+	}
+
 	void Sequence::apply(float time, Pose& pose) const
 	{
 		const float t = localTime(time);

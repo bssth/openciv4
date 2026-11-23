@@ -73,7 +73,7 @@ cbuffer Object : register(b1, UNIFORMS)
 	float4 world[3];    // rigid items: 3x4 rows, p' = (dot(row0,p), dot(row1,p), dot(row2,p))
 	float4 baseUv[2];   // 2x3 rows: uv' = (dot(row0.xyz, (u,v,1)), dot(row1.xyz, (u,v,1)))
 	float4 decalUv[2];
-	uint flags;         // bit0 base map, bit1 alpha test, bits2-3 vertex color mode, bit4 lit, bit5 decal, bit6 team colour base, bit7 skinned, bit8 on the ground, bit11 a leader's shading
+	uint flags;         // bit0 base map, bit1 alpha test, bits2-3 vertex color mode, bit4 lit, bit5 decal, bit6 team colour base, bit7 skinned, bit8 on the ground, bit11 a leader's shading, bit12 flag, bit13 alpha twice, bit14 the units' light
 	uint alphaFunc;
 	float alphaRef;
 	uint treesCut;      // a forest piece (its vertices' red: the tree, 1-based): trees 1..32 by bit not drawn
@@ -82,6 +82,15 @@ cbuffer Object : register(b1, UNIFORMS)
 cbuffer Bones : register(b2, UNIFORMS)
 {
 	float4 bones[128 * 3]; // world(bone) * skinToBone, 3x4 rows each
+};
+
+// A model's own lights (flags bit 15: a leader's parts without its shader), as Direct3D's
+// fixed-function pipeline lights them: point lights without falloff, the ambient lights' sum.
+cbuffer FixedLights : register(b3, UNIFORMS)
+{
+	float4 fixedLightPos[8];   // world position; w 1: a light
+	float4 fixedLightColor[8]; // diffuse * dimmer
+	float4 fixedAmbient;
 };
 
 Texture2D<float> groundHeights : register(t0, space0); // vertex shader: the terrain's heights
@@ -181,6 +190,12 @@ PSIn VSMain(VSIn i)
 	PSIn o;
 	o.flat = p.xy;
 	p = globeBend(p);
+	// (laid on the terrain: a few units towards the eye, which moves it nowhere on screen. Its
+	// points follow the terrain, but between them a hill bulges over its straight edges: roads
+	// had holes on hills.)
+	const float3 toEye = eyePos - p;
+	if ((flags & 256) && dot(toEye, toEye) > 1)
+		p += normalize(toEye) * 6;
 	o.pos = mul(float4(p, 1), viewProj);
 	o.nrm = n;
 	o.uv = i.uv;
@@ -225,7 +240,9 @@ float4 PSMain(PSIn i, bool front : SV_IsFrontFace) : SV_Target
 	float3 n = normalize(i.nrm);
 	if (!front)
 		n = -n;
-	float ndl = saturate(dot(n, -lightDir));
+	// (a unit: the units' own light)
+	const bool unitLit = (flags & 16384) != 0;
+	float ndl = saturate(dot(n, -(unitLit ? unitLightDir : lightDir)));
 
 	float3 amb = matAmbient.rgb;
 	float3 dif = matDiffuse.rgb;
@@ -241,7 +258,17 @@ float4 PSMain(PSIn i, bool front : SV_IsFrontFace) : SV_Target
 		alpha *= i.col.a;
 	}
 
-	float3 lit = (flags & 16) ? emi + amb * ambientLight + dif * lightColor * ndl : emi;
+	float3 lit = (flags & 16) ? emi + amb * (unitLit ? unitAmbientLight : ambientLight) + dif * (unitLit ? unitLightColor : lightColor) * ndl : emi;
+	if ((flags & 32768) && (flags & 16))
+	{
+		// (Direct3D's lighting has no back face's normal: the vertex's, as it is)
+		const float3 vn = normalize(i.nrm);
+		float3 d = 0;
+		[unroll] for (int k = 0; k < 8; ++k)
+			if (fixedLightPos[k].w > 0)
+				d += saturate(dot(vn, normalize(fixedLightPos[k].xyz - i.world))) * fixedLightColor[k].rgb;
+		lit = emi + amb * fixedAmbient.rgb + dif * d;
+	}
 	float4 c = float4(saturate(lit), alpha);
 	if (flags & 2048)
 	{
@@ -294,14 +321,18 @@ float4 PSMain(PSIn i, bool front : SV_IsFrontFace) : SV_Target
 	if (flags & 32)
 	{
 		float4 decal = decalMap.Sample(decalSampler, uvXform(decalUv, i.uv));
-		base.rgb = lerp(base.rgb, decal.rgb, decal.a);
+		// Flags keep the cloth's shading and cutout alpha; their decal is the composed
+		// civilization colours. Other models use their usual decal-over-base blend.
+		base.rgb = (flags & 4096) ? base.rgb * decal.rgb : lerp(base.rgb, decal.rgb, decal.a);
 	}
 	c *= base;
 	if ((flags & 2) && !passes(alphaFunc, round(c.a * 255.0), alphaRef))
 		discard;
-	c.rgb *= fogAt(i.world.xy);
+	c.rgb *= fogAt(i.world.xy) * distanceFog(i.world);
 	if (flags & 1024)
 		c.a = 1; // (opaque on a picture on nothing: its texture's alpha is no coverage)
+	if (flags & 8192)
+		c = float4(c.rgb * c.a, c.a * c.a); // (blended by its alpha squared: colour times alpha cubed)
 	return c;
 }
 )hlsl";
@@ -342,11 +373,30 @@ float4 PSOverlay(Out p) : SV_Target
 			XMFLOAT3 ambientLight;
 			float pad2;
 			XMFLOAT3 eyePos;
-			float pad3;
+			float fogDistance;
 			XMFLOAT4 groundGrid;
 			XMFLOAT4 fogGrid;
 			XMFLOAT4 globe;
+			XMFLOAT3 unitLightDir;
+			float pad4;
+			XMFLOAT3 unitLightColor;
+			float pad5;
+			XMFLOAT3 unitAmbientLight;
+			float pad6;
 		};
+
+		// The units' light, as the original lights them (Art/Terrain/Lights/UnitLight.nif, the
+		// art define LIGHTING_UNITS): a directional light from the south, a little east and low
+		// (its node at (21529, -50212, 15940), shining at the origin), diffuse (1, 1, 0.863) at
+		// dimmer 0.8, and an ambient light (0.431, 0.431, 0.353). The scene's light comes from
+		// the north-east: the side of a unit the camera sees (from the south) was in its shade.
+		void writeUnitLight(FrameConstants& fc)
+		{
+			const Vec3 dir = normalize(Vec3{ -21529.342f, 50212.477f, -15940.541f });
+			fc.unitLightDir = { dir.x, dir.y, dir.z };
+			fc.unitLightColor = { 0.8f, 0.8f, 0.8f * 0.86275f };
+			fc.unitAmbientLight = { 0.43137f, 0.43137f, 0.35294f };
+		}
 
 		struct ObjectConstants
 		{
@@ -416,6 +466,7 @@ float4 PSOverlay(Out p) : SV_Target
 			case TextureFormat::BC2: return SDL_GPU_TEXTUREFORMAT_BC2_RGBA_UNORM;
 			case TextureFormat::BC3: return SDL_GPU_TEXTUREFORMAT_BC3_RGBA_UNORM;
 			case TextureFormat::R8: return SDL_GPU_TEXTUREFORMAT_R8_UNORM;
+			case TextureFormat::RG8: return SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
 			case TextureFormat::R32Float: return SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
 			case TextureFormat::RGBA16: return SDL_GPU_TEXTUREFORMAT_R16G16B16A16_UNORM;
 			}
@@ -447,6 +498,13 @@ float4 PSOverlay(Out p) : SV_Target
 	{
 		const float sp = std::sin(pitch);
 		return { -sp * std::cos(yaw), -sp * std::sin(yaw), std::cos(pitch) };
+	}
+
+	DirectX::XMMATRIX Camera::projection(float aspect, float nearZ, float farZ) const
+	{
+		using namespace DirectX;
+		// (y + 2 * (centreUp - 0.5) * w: a shift on the screen that does not change with depth)
+		return XMMatrixPerspectiveFovRH(fovY, aspect, nearZ, farZ) * XMMatrixSet(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 2 * (centreUp - 0.5f), 0, 1);
 	}
 
 	Renderer::Renderer(SDL_Window* window, uint32_t width, uint32_t height) : m_window(window), m_width(width), m_height(height)
@@ -495,6 +553,8 @@ float4 PSOverlay(Out p) : SV_Target
 		for (SDL_GPUShader* s : { m_vs, m_ps, m_overlayVs, m_overlayPs })
 			SDL_ReleaseGPUShader(m_device, s);
 		for (SDL_GPUSampler* s : m_samplers)
+			SDL_ReleaseGPUSampler(m_device, s);
+		for (SDL_GPUSampler* s : m_trilinearSamplers)
 			SDL_ReleaseGPUSampler(m_device, s);
 		SDL_ReleaseGPUSampler(m_device, m_linearClamp);
 		m_textures.clear();
@@ -621,7 +681,7 @@ float4 PSOverlay(Out p) : SV_Target
 	{
 		const std::string source = std::string(kFrameConstantsHlsl) + kShaderBody;
 		m_vs = compile(source, "model.hlsl", "VSMain", SDL_GPU_SHADERSTAGE_VERTEX, 1, 0, 3);
-		m_ps = compile(source, "model.hlsl", "PSMain", SDL_GPU_SHADERSTAGE_FRAGMENT, 7, 0, 2);
+		m_ps = compile(source, "model.hlsl", "PSMain", SDL_GPU_SHADERSTAGE_FRAGMENT, 7, 0, 4);
 		m_overlayVs = compile(kOverlayHlsl, "overlay.hlsl", "VSOverlay", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
 		m_overlayPs = compile(kOverlayHlsl, "overlay.hlsl", "PSOverlay", SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0, 2);
 
@@ -634,9 +694,11 @@ float4 PSOverlay(Out p) : SV_Target
 			sd.address_mode_u = (clamp & 2) ? SDL_GPU_SAMPLERADDRESSMODE_REPEAT : SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
 			sd.address_mode_v = (clamp & 1) ? SDL_GPU_SAMPLERADDRESSMODE_REPEAT : SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
 			sd.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+			sd.max_lod = 1000;
+			if (!(m_trilinearSamplers[clamp] = SDL_CreateGPUSampler(m_device, &sd)))
+				fail("SDL_CreateGPUSampler");
 			sd.enable_anisotropy = true;
 			sd.max_anisotropy = 8;
-			sd.max_lod = 1000;
 			if (!(m_samplers[clamp] = SDL_CreateGPUSampler(m_device, &sd)))
 				fail("SDL_CreateGPUSampler");
 		}
@@ -725,7 +787,7 @@ float4 PSOverlay(Out p) : SV_Target
 		key.src = int(toSdl(m.alphaBlend ? m.srcBlend : scene::Blend::SrcAlpha));
 		key.dst = int(toSdl(m.alphaBlend ? m.dstBlend : scene::Blend::InvSrcAlpha));
 		key.zTest = m.zTest;
-		key.zWrite = !particles && m.zWrite && (!blended(m) || m.alphaTest);
+		key.zWrite = !particles && m.zWrite && (!blended(m) || m.alphaTest || m.blendWritesDepth);
 		key.cull = particles ? int(scene::Cull::None) : int(m.cull);
 		return pipeline(key);
 	}
@@ -799,6 +861,29 @@ float4 PSOverlay(Out p) : SV_Target
 	{
 		SDL_PushGPUVertexUniformData(commands(), 0, m_frame, sizeof(m_frame));
 		SDL_PushGPUFragmentUniformData(commands(), 0, m_frame, sizeof(m_frame));
+		SDL_PushGPUFragmentUniformData(commands(), 3, m_fixedLights, sizeof(m_fixedLights));
+	}
+
+	void Renderer::setFixedLights(std::span<const PointLight> lights, Vec3 ambient)
+	{
+		std::fill(std::begin(m_fixedLights), std::end(m_fixedLights), 0.0f);
+		for (size_t k = 0; k < lights.size() && k < 8; ++k)
+		{
+			const PointLight& l = lights[k];
+			float* pos = m_fixedLights + k * 4;
+			float* color = m_fixedLights + 32 + k * 4;
+			pos[0] = l.position.x, pos[1] = l.position.y, pos[2] = l.position.z, pos[3] = 1;
+			color[0] = l.color.x, color[1] = l.color.y, color[2] = l.color.z;
+		}
+		m_fixedLights[64] = ambient.x, m_fixedLights[65] = ambient.y, m_fixedLights[66] = ambient.z;
+		m_fixedLit = true;
+		if (m_cmd)
+			SDL_PushGPUFragmentUniformData(m_cmd, 3, m_fixedLights, sizeof(m_fixedLights));
+	}
+
+	void Renderer::clearFixedLights()
+	{
+		m_fixedLit = false;
 	}
 
 	void Renderer::upload(SDL_GPUTexture* texture, uint32_t layer, uint32_t mip, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const void* data,
@@ -835,6 +920,33 @@ float4 PSOverlay(Out p) : SV_Target
 		SDL_UploadToGPUBuffer(copy, &src, &dst, offset == 0);
 		SDL_EndGPUCopyPass(copy);
 		SDL_ReleaseGPUTransferBuffer(m_device, tb);
+	}
+
+	std::shared_ptr<GpuImage> Renderer::createMipmapped(uint32_t width, uint32_t height, std::span<const uint8_t> bgra)
+	{
+		if (width == 0 || height == 0 || bgra.size() < size_t(width) * height * 4)
+			return nullptr;
+		std::vector<std::vector<uint8_t>> levels{ std::vector<uint8_t>(bgra.begin(), bgra.begin() + ptrdiff_t(width) * height * 4) };
+		for (uint32_t w = width, h = height; w > 1 || h > 1;)
+		{
+			const uint32_t nw = std::max(w / 2, 1u), nh = std::max(h / 2, 1u);
+			const std::vector<uint8_t>& above = levels.back();
+			std::vector<uint8_t> next(size_t(nw) * nh * 4);
+			for (uint32_t y = 0; y < nh; ++y)
+				for (uint32_t x = 0; x < nw; ++x)
+					for (uint32_t c = 0; c < 4; ++c)
+					{
+						const uint32_t x0 = std::min(x * 2, w - 1), x1 = std::min(x * 2 + 1, w - 1), y0 = std::min(y * 2, h - 1), y1 = std::min(y * 2 + 1, h - 1);
+						const auto at = [&](uint32_t px, uint32_t py) { return unsigned(above[(size_t(py) * w + px) * 4 + c]); };
+						next[(size_t(y) * nw + x) * 4 + c] = uint8_t((at(x0, y0) + at(x1, y0) + at(x0, y1) + at(x1, y1) + 2) / 4);
+					}
+			levels.push_back(std::move(next));
+			w = nw, h = nh;
+		}
+		std::vector<std::span<const uint8_t>> spans;
+		for (const auto& l : levels)
+			spans.emplace_back(l);
+		return createTexture(width, height, 1, uint32_t(levels.size()), TextureFormat::BGRA8, spans);
 	}
 
 	std::shared_ptr<GpuImage> Renderer::createTexture(uint32_t width, uint32_t height, uint32_t layers, uint32_t mips, TextureFormat format,
@@ -970,7 +1082,8 @@ float4 PSOverlay(Out p) : SV_Target
 		return texture(assets, *loc, stats);
 	}
 
-	std::unique_ptr<GpuModel> Renderer::upload(const scene::Model& model, const AssetResolver& assets, const AssetLocation& modelLocation)
+	std::unique_ptr<GpuModel> Renderer::upload(const scene::Model& model, const AssetResolver& assets, const AssetLocation& modelLocation,
+		const GpuImage* decalOverride)
 	{
 		auto gpu = std::make_unique<GpuModel>();
 		RenderStats& stats = gpu->m_stats;
@@ -995,7 +1108,7 @@ float4 PSOverlay(Out p) : SV_Target
 			if (!item.material.baseTexture.empty() && !item.material.baseIsTeamColor)
 				mesh.texture = texture(assets, modelLocation, item.material.baseTexture, &stats);
 			if (!item.material.decalTexture.empty())
-				mesh.decal = texture(assets, modelLocation, item.material.decalTexture, &stats);
+				mesh.decal = decalOverride ? decalOverride : texture(assets, modelLocation, item.material.decalTexture, &stats);
 			// (a leader's maps: all four, or its usual look)
 			const std::string* maps[] = { &item.material.envMap, &item.material.normalMap, &item.material.specularMap, &item.material.envMask };
 			if (std::ranges::all_of(maps, [](const std::string* s) { return !s->empty(); }))
@@ -1015,9 +1128,15 @@ float4 PSOverlay(Out p) : SV_Target
 		return gpu;
 	}
 
-	void Renderer::bindModelTextures(const GpuImage* base, const GpuImage* decal, const scene::Material& m, const GpuImage* const* leader)
+	void Renderer::bindModelTextures(const GpuImage* base, const GpuImage* decal, const scene::Material& m, const GpuImage* const* leader,
+		bool onGround)
 	{
-		SDL_GPUSampler* baseSampler = sampler(int(m.baseClamp));
+		// A piece laid on the ground (a road, a river) is sampled as its file asks: the road
+		// pieces' trilinear, without anisotropy. Their texture runs along the road, squeezed 4:1
+		// across it, and its hand-painted mips go darker and yellower: the original, sampling
+		// without anisotropy, shows those mips, an olive road with soft edges; anisotropic
+		// sampling showed the top level, a pale grey road with a black outline.
+		SDL_GPUSampler* baseSampler = onGround && m.baseFilter != 6 ? m_trilinearSamplers[int(m.baseClamp)] : sampler(int(m.baseClamp));
 		const auto tex = [&](const GpuImage* i) { return (i ? i : m_white.get())->texture; };
 		const SDL_GPUTextureSamplerBinding fragment[7] = {
 			{ tex(base), baseSampler },
@@ -1033,7 +1152,7 @@ float4 PSOverlay(Out p) : SV_Target
 		SDL_BindGPUVertexSamplers(m_pass, 0, &vertex, 1);
 	}
 
-	void Renderer::drawMesh(const GpuModel::Mesh& mesh, const scene::Material& m, std::span<const Affine> world, Vec3 teamColor, bool onGround)
+	void Renderer::drawMesh(const GpuModel::Mesh& mesh, const scene::Material& m, std::span<const Affine> world, Vec3 teamColor, bool onGround, bool unitLight)
 	{
 		reserveSamplers(8);
 		pass();
@@ -1042,12 +1161,17 @@ float4 PSOverlay(Out p) : SV_Target
 		writeUvRows(m.decalUv, oc.decalUv);
 		oc.diffuse = { m.diffuse.r, m.diffuse.g, m.diffuse.b, m.alpha };
 		oc.ambient = { m.ambient.r, m.ambient.g, m.ambient.b, 1 };
-		oc.emissive = { m.emissive.r, m.emissive.g, m.emissive.b, 1 };
+		// A civilization flag's cloth as Civ4FlagDecal.fx draws it (TFlagShader): unlit, its
+		// colours times the cloth's base map, no material or light on it.
+		const bool clothFlag = m.shaderName.starts_with("TFlagShader");
+		oc.emissive = clothFlag ? XMFLOAT4{ 1, 1, 1, 1 } : XMFLOAT4{ m.emissive.r, m.emissive.g, m.emissive.b, 1 };
 		oc.teamColor = { teamColor.x, teamColor.y, teamColor.z, 1 };
 		writeRows(mesh.node >= 0 && size_t(mesh.node) < world.size() ? world[size_t(mesh.node)] : Affine{}, oc.world);
-		oc.flags = (mesh.texture ? 1u : 0u) | (m.alphaTest ? 2u : 0u) | ((m.vertexColorMode & 3u) << 2) | (m.lightingMode ? 16u : 0u) |
+		const bool alphaTwice = m_inView && m_viewAlphaTwice && m.alphaBlend && m.srcBlend == scene::Blend::SrcAlpha && m.dstBlend == scene::Blend::InvSrcAlpha;
+		oc.flags = (mesh.texture ? 1u : 0u) | (m.alphaTest ? 2u : 0u) | (clothFlag ? 0u : (m.vertexColorMode & 3u) << 2) | (m.lightingMode && !clothFlag ? 16u : 0u) |
 			(mesh.decal ? 32u : 0u) | (m.baseIsTeamColor ? 64u : 0u) | (mesh.skinned ? 128u : 0u) | (onGround ? 256u : 0u) |
-			(m_inView && m_viewOnNothing && !m.alphaBlend ? 1024u : 0u) | (mesh.leader[0] ? 2048u : 0u);
+			(m_inView && m_viewOnNothing && !m.alphaBlend ? 1024u : 0u) | (mesh.leader[0] ? 2048u : 0u) | (unitLight ? 16384u : 0u) | (clothFlag ? 4096u : 0u) | (alphaTwice ? 8192u : 0u) |
+			(m_fixedLit && !mesh.leader[0] ? 32768u : 0u);
 		oc.alphaFunc = static_cast<uint32_t>(m.alphaFunc);
 		oc.alphaRef = m.alphaRef;
 		oc.treesCut = m.treesCut;
@@ -1066,7 +1190,7 @@ float4 PSOverlay(Out p) : SV_Target
 		}
 		if (SDL_GPUGraphicsPipeline* p = modelPipeline(m); p != m_bound)
 			SDL_BindGPUGraphicsPipeline(m_pass, m_bound = p);
-		bindModelTextures(mesh.texture, mesh.decal, m, mesh.leader[0] ? mesh.leader : nullptr);
+		bindModelTextures(mesh.texture, mesh.decal, m, mesh.leader[0] ? mesh.leader : nullptr, onGround);
 		const SDL_GPUBufferBinding vb{ mesh.vb->buffer, 0 }, ib{ mesh.ib->buffer, 0 };
 		SDL_BindGPUVertexBuffers(m_pass, 0, &vb, 1);
 		SDL_BindGPUIndexBuffer(m_pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
@@ -1096,7 +1220,7 @@ float4 PSOverlay(Out p) : SV_Target
 		const Vec3 up = camera.up();
 		const XMMATRIX view = XMMatrixLookAtRH(XMVectorSet(eye.x, eye.y, eye.z, 1),
 			XMVectorSet(camera.target.x, camera.target.y, camera.target.z, 1), XMVectorSet(up.x, up.y, up.z, 0));
-		const XMMATRIX proj = XMMatrixPerspectiveFovRH(camera.fovY, float(m_width) / float(m_height), nearZ, camera.distance * 20 + 1000);
+		const XMMATRIX proj = camera.projection(float(m_width) / float(m_height), nearZ, camera.distance * 20 + 1000);
 
 		FrameConstants fc{};
 		XMStoreFloat4x4(&fc.viewProj, XMMatrixTranspose(view * proj));
@@ -1105,7 +1229,9 @@ float4 PSOverlay(Out p) : SV_Target
 		fc.lightDir = { light.x, light.y, light.z };
 		fc.lightColor = { 0.85f, 0.82f, 0.75f };
 		fc.ambientLight = { 0.45f, 0.47f, 0.52f };
+		writeUnitLight(fc);
 		fc.eyePos = { eye.x, eye.y, eye.z };
+		fc.fogDistance = camera.distance;
 		fc.globe = { m_globe[0], m_globe[1], m_globe[2], m_globe[3] };
 		fc.groundGrid = m_ground ? XMFLOAT4{ 1.0f / m_groundCell, float(m_groundColumns), float(m_groundRows), m_groundWrap } : XMFLOAT4{ 0, 0, 0, 0 };
 		fc.fogGrid = m_fog ? XMFLOAT4{ m_fogPlot, float(m_fogColumns), float(m_fogRows), float(m_fogWrap) } : XMFLOAT4{ 0, 0, 0, 0 };
@@ -1159,9 +1285,9 @@ float4 PSOverlay(Out p) : SV_Target
 			const scene::Material& material = i < materials.size() ? materials[i] : mesh.material;
 			if (material.alphaAnimated && material.alpha <= 0.001f)
 				continue;
-			if (!blended(material))
+			if (!blended(material) || material.blendUnsorted)
 			{
-				drawMesh(mesh, material, world, teamColor, onGround);
+				drawMesh(mesh, material, world, teamColor, onGround, m_unitLight);
 				continue;
 			}
 			if (deferredWorld == SIZE_MAX)
@@ -1171,7 +1297,7 @@ float4 PSOverlay(Out p) : SV_Target
 			}
 			if (onGround && groundDistance < 0)
 				groundDistance = length(centerOf(mesh) - eye);
-			m_deferred.push_back({ onGround ? groundDistance : length(centerOf(mesh) - eye), &mesh, deferredWorld, m_deferredMaterials.size(), teamColor, onGround });
+			m_deferred.push_back({ onGround ? groundDistance : length(centerOf(mesh) - eye), &mesh, deferredWorld, m_deferredMaterials.size(), teamColor, onGround, m_unitLight });
 			m_deferredMaterials.push_back(material);
 		}
 	}
@@ -1185,6 +1311,19 @@ float4 PSOverlay(Out p) : SV_Target
 		d.material = material;
 		d.vertices = std::move(vertices);
 		m_particleDraws.push_back(std::move(d));
+	}
+
+	void Renderer::drawGroundBlended()
+	{
+		std::vector<Deferred> ground;
+		std::erase_if(m_deferred, [&](const Deferred& d) {
+			if (d.onGround)
+				ground.push_back(d);
+			return d.onGround;
+		});
+		std::ranges::stable_sort(ground, std::greater<>(), &Deferred::distance);
+		for (const auto& d : ground)
+			drawMesh(*d.mesh, m_deferredMaterials[d.material], m_deferredWorlds[d.world], d.teamColor, d.onGround, d.unitLight);
 	}
 
 	void Renderer::endFrame()
@@ -1202,7 +1341,7 @@ float4 PSOverlay(Out p) : SV_Target
 		}
 		std::ranges::stable_sort(m_deferred, std::greater<>(), &Deferred::distance);
 		for (const auto& d : m_deferred)
-			drawMesh(*d.mesh, m_deferredMaterials[d.material], m_deferredWorlds[d.world], d.teamColor, d.onGround);
+			drawMesh(*d.mesh, m_deferredMaterials[d.material], m_deferredWorlds[d.world], d.teamColor, d.onGround, d.unitLight);
 		m_deferred.clear();
 		// The particles, last: unlit, their texture by their colour, without writing depth.
 		uint32_t first = 0;
@@ -1243,7 +1382,7 @@ float4 PSOverlay(Out p) : SV_Target
 	}
 
 	void Renderer::beginView(OffscreenTarget& t, uint32_t width, uint32_t height, std::span<const float, 16> viewProj, Vec3 eye, const ViewLight& light,
-		Vec3 clearColor, float clearAlpha)
+		Vec3 clearColor, float clearAlpha, bool alphaTwice)
 	{
 		width = std::max(width, 1u);
 		height = std::max(height, 1u);
@@ -1280,6 +1419,7 @@ float4 PSOverlay(Out p) : SV_Target
 		m_deferredMaterials.clear();
 		m_particleDraws.clear();
 		m_viewOnNothing = clearAlpha < 1;
+		m_viewAlphaTwice = alphaTwice;
 		m_target = { t.color->texture, t.depth->texture, width, height };
 		m_clearColor = m_clearDepth = true;
 		m_clear[0] = clearColor.x * clearAlpha, m_clear[1] = clearColor.y * clearAlpha, m_clear[2] = clearColor.z * clearAlpha, m_clear[3] = clearAlpha;
@@ -1292,6 +1432,7 @@ float4 PSOverlay(Out p) : SV_Target
 		fc.lightDir = { dir.x, dir.y, dir.z };
 		fc.lightColor = { light.color.x, light.color.y, light.color.z };
 		fc.ambientLight = { light.ambient.x, light.ambient.y, light.ambient.z };
+		writeUnitLight(fc);
 		fc.eyePos = { eye.x, eye.y, eye.z };
 		std::memcpy(m_frame, &fc, sizeof(fc));
 	}
@@ -1312,6 +1453,7 @@ float4 PSOverlay(Out p) : SV_Target
 		pass(); // (a view with nothing drawn is still cleared)
 		endPass();
 		m_inView = false;
+		m_fixedLit = false;
 		m_target = { m_color->texture, m_depth->texture, m_width, m_height };
 		uploadFrameConstants();
 	}

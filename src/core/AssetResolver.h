@@ -64,6 +64,11 @@ namespace oc4
 
 		// Every asset key with the given extension (".nif"), loose and packed, highest layer wins.
 		std::vector<AssetLocation> list(std::string_view extension) const;
+		// The same assets, lowest layer first (vanilla, Warlords, Beyond the Sword, the mod), each
+		// layer's in key order: the order in which a later file overrides an earlier one. Civ4 reads
+		// xml/text this way, so BtS's "Techs" replaces the base game's "Technologies" and a mod's
+		// texts replace both.
+		std::vector<AssetLocation> listByLayer(std::string_view extension) const;
 
 	private:
 		struct Layer

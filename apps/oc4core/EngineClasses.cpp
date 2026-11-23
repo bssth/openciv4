@@ -5,6 +5,7 @@
 #include "Utility.h"
 
 #include "CvGameCoreDLL.h"
+#include "CvEventReporter.h"
 #include "CvFractal.h"
 #include "CvRandom.h"
 
@@ -101,6 +102,24 @@ namespace oc4::host
 		});
 		host.def("get_object_text", [&utility](py::handle key, int form) {
 			return fromWide(std::wstring(utility.getObjectText(CvWString(toWide(key)), static_cast<uint>(form), false)));
+		});
+		// A player's game statistics (CyStatistics in oc4engine.py): the records the game core keeps
+		// from its events and saves with the game, through its exported report, in its order (victory,
+		// time played, leader, cities built, razed, golden ages; built, killed, lost for each unit;
+		// built for each building; founded for each religion). Its per-type keys are empty (they are
+		// made with the static CvString::format), so the order is what tells them apart.
+		host.def("player_statistics", [](int player) {
+			py::list values;
+			if (player < 0 || player >= MAX_PLAYERS)
+				return values;
+			std::vector<CvStatBase*> stats;
+			CvEventReporter::getInstance().getPlayerStatistics(static_cast<PlayerTypes>(player), stats);
+			for (CvStatBase* stat : stats)
+			{
+				values.append(static_cast<CvStatInt*>(stat)->m_iValue); // a player's statistics are all CvStatInt
+				delete stat;
+			}
+			return values;
 		});
 		host.def("unimplemented", [](const std::string& what) { unimplemented(what.c_str()); });
 		host.def("log", [&utility](const std::string& file, py::handle text) {

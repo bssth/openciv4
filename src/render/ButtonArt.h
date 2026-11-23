@@ -13,10 +13,13 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace oc4::render
 {
+	struct Color;
+
 	class ButtonArt
 	{
 	public:
@@ -31,6 +34,8 @@ namespace oc4::render
 
 		// nullptr when there is none.
 		const Icon* icon(const std::string& art);
+		// A flag decal's alpha blends the player's two colours; white flags use their own RGB.
+		const Icon* flag(const std::string& art, const Color& primary, const Color& secondary, bool whiteFlag);
 		// The DLL's groups of the font's icons (CvGameTextMgr::getFontSymbols): their
 		// characters and how many rows of 25 cells each group takes in the font.
 		struct FontGroup
@@ -58,6 +63,7 @@ namespace oc4::render
 
 		const AssetResolver& m_assets;
 		std::map<std::string, Icon> m_icons;
+		std::map<std::tuple<std::string, uint32_t, uint32_t, bool>, Icon> m_flags;
 		std::map<std::string, Picture> m_pictures; // decoded DDS files (the atlases)
 		uint64_t m_next = 0;
 	};

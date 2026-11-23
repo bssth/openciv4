@@ -46,6 +46,13 @@ namespace oc4::render
 		void lookAt(int x, int y, float distanceInPlots = -1);
 		// Moves the camera over the plot, keeping its distance.
 		void centerOn(int x, int y);
+		// The same over a point of the map, in plots (10.5: the middle of the plot 10): a battle's,
+		// between the attacker's plot and the defender's.
+		void centerOnPoint(float x, float y);
+		// Combat Zoom: the camera glides in close over a battle's point (in plots), turned towards the
+		// attack (dirX: its east-west share, -1..1), and back out to where it was at the battle's end.
+		void enterBattleView(float x, float y, float dirX);
+		void leaveBattleView();
 		// The city screen: the camera flies down to look straight down at the city (again for
 		// another city's screen), and back to where it was when the screen closes.
 		void enterCityView(int x, int y);
@@ -58,6 +65,12 @@ namespace oc4::render
 		// arrows choose instead of moving the map and Return and Space use what they chose. With
 		// no map behind it (the main menu) the arrows choose at once.
 		void setUiTakesKeys(bool takes, bool mapBehind = true);
+		// An edit box of the screens has the keys: what is typed (Backspace '\b', Enter '\r',
+		// Esc '\x1b') waits for takeUiTyped, and the game's hotkeys are left alone.
+		void setUiTextFocus(bool focus);
+		std::wstring takeUiTyped();
+		// Text typed as the keyboard types it (a scripted menu's 'text').
+		void typeText(const std::string& utf8);
 		// The keyboard's choice ends (a talk's answers changed: Return is the talk's again).
 		void clearKeyChoice();
 		void pressKey(unsigned key); // (as if typed)
@@ -111,16 +124,6 @@ namespace oc4::render
 			bool shift = false, ctrl = false, alt = false;
 		};
 		std::vector<KeyPress> takeKeys();
-		// A screen's edit box has text input until it loses focus.
-		struct TextInput
-		{
-			enum class Kind { Text, Backspace, SelectAll, Tab, Finish };
-			Kind kind = Kind::Text;
-			std::wstring text;
-			bool shift = false;
-		};
-		void setEditing(bool editing);
-		std::vector<TextInput> takeTextInput();
 
 		// The selected units' actions (the game's action buttons): their icons along the bottom,
 		// dimmed when they cannot be done now. A click on one is the host's to take; the help for
@@ -196,6 +199,7 @@ namespace oc4::render
 		struct Look
 		{
 			float x = 0, y = 0, distance = 0;
+			float eyeX = 0, eyeY = 0, eyeZ = 0; // where the camera is (plot units, its height too)
 		};
 		Look look() const;
 
@@ -240,6 +244,10 @@ namespace oc4::render
 			// ... or its KFM's clips as layers ("camera=<node>;<event code>:<e|l|o>;...", see
 			// ModelView): the spaceship screen's launch pad.
 			std::string modelLayers;
+			// A player's flag (Flag): its era's flag model and KFM, waving, its cloth the decal
+			// (texture; "opaque:" a white flag's) in the item's colour and this one.
+			std::string flagNif, flagKfm;
+			Color flagSecondary{};
 		};
 		void setUi(std::vector<UiItem> items);
 		// A screen's own minimap (a UiItem::Minimap of style "__screenmap": the military advisor's,
@@ -283,6 +291,10 @@ namespace oc4::render
 		void setFullscreen(bool on);
 		// The globe view: the camera back over the whole map (on), where it was (off).
 		void setGlobeView(bool up);
+		// The game's turn and tilt of the view, in the original's degrees (CyCamera's base turn,
+		// Ctrl+Left/Right; its base pitch, which tilts the view up) and its satellite view (Alt+F:
+		// straight down, north up). The camera glides there.
+		void setCameraAngles(float turnDegrees, float pitchDegrees, bool satellite);
 		void setYieldSymbols(std::array<std::string, 3> symbols);
 		void setWorldBuilder(bool on);
 
@@ -298,6 +310,7 @@ namespace oc4::render
 				float alpha = 1;
 				bool border = false;
 				bool fill = false; // the whole plot coloured (a globe layer's)
+				bool hatched = false; // (borders) as the original's AreaBorder texture: rounded, a glow inside, hatched
 			};
 			struct Sign
 			{
@@ -312,7 +325,11 @@ namespace oc4::render
 
 		// Playing, the right button held (Ctrl+right drag still turns the camera): the plot under
 		// the mouse, where the selected units would go when it is let go (a right click there).
+		// In the go-to mode (G, setGoingTo) the same without the button: the left click sends them.
 		std::optional<std::pair<int, int>> pathTarget() const;
+		// The go-to mode on while playing, set each frame (false out of the turn): the way to the plot
+		// under the mouse shown without the button, and the plot help gives the odds of an attack there.
+		void setGoingTo(bool goingTo);
 		// The way there, drawn while the button is held: the plots from the units' to it, each with
 		// the turn the units are there in (1 this turn); reachable false: they cannot go there.
 		struct PathView
@@ -330,8 +347,9 @@ namespace oc4::render
 		bool uiActive() const;
 		struct UiClick
 		{
-			int item = -1;
+			int item = -1; // -1: on the screens but on none of their widgets
 			bool right = false, shift = false, ctrl = false, alt = false;
+			std::wstring typedBefore;
 		};
 		std::vector<UiClick> takeUiClicks();
 		// How wide a text with the screens' markup is, in the theme's font (size 2 outside its

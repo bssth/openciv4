@@ -100,6 +100,8 @@ namespace oc4::anim
 		float localTime(float time) const;
 
 		void apply(float time, Pose& pose) const;
+		// Whether it shows and hides the node (a visibility channel on it).
+		bool drivesVisibility(int node) const;
 
 	private:
 		struct TransformChannel

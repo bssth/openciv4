@@ -47,7 +47,7 @@ _profile = {
 	'clock': False, 'hours24': False,
 	'graphicsLevel': 0, 'renderQuality': 0, 'globeView': 0, 'movieQuality': 0, 'mainMenu': 0, 'antiAliasing': 0, 'uiScale': 0,
 	'speakers': '', 'musicPath': '', 'voice': False,
-	'wasdPan': False, 'autoEndTurn': False, 'edgeScroll': True,
+	'wasdPan': False, 'autoEndTurn': False, 'edgeScroll': True, 'keepAttacker': False,
 }
 
 
@@ -79,7 +79,7 @@ def _load():
 					_profile['nosound'][parts[1]] = value == '1'
 				elif parts[0] in ('graphic', 'player'):
 					_profile[parts[0]][int(parts[1])] = value == '1'
-				elif parts[0] in ('clock', 'hours24', 'voice', 'wasdPan', 'autoEndTurn', 'edgeScroll'):
+				elif parts[0] in ('clock', 'hours24', 'voice', 'wasdPan', 'autoEndTurn', 'edgeScroll', 'keepAttacker'):
 					_profile[parts[0]] = value == '1'
 				elif parts[0] in ('graphicsLevel', 'renderQuality', 'globeView', 'movieQuality', 'mainMenu', 'antiAliasing', 'uiScale'):
 					_profile[parts[0]] = int(value)
@@ -98,7 +98,7 @@ def _save():
 	lines = []
 	for key in ('name', 'speakers', 'musicPath'):
 		lines.append('%s=%s' % (key, _profile[key]))
-	for key in ('clock', 'hours24', 'voice', 'wasdPan', 'autoEndTurn', 'edgeScroll'):
+	for key in ('clock', 'hours24', 'voice', 'wasdPan', 'autoEndTurn', 'edgeScroll', 'keepAttacker'):
 		lines.append('%s=%d' % (key, 1 if _profile[key] else 0))
 	for key in ('graphicsLevel', 'renderQuality', 'globeView', 'movieQuality', 'mainMenu', 'antiAliasing', 'uiScale'):
 		lines.append('%s=%d' % (key, _profile[key]))
@@ -126,6 +126,7 @@ def _applyGraphics():
 		oc4host.set_wasd_pan(_profile['wasdPan'])
 		oc4host.set_auto_end_turn(_profile['autoEndTurn'])
 		oc4host.set_edge_scroll(_profile['edgeScroll'])
+		oc4host.set_keep_attacker(_profile['keepAttacker'])
 	except Exception:
 		pass
 
@@ -215,6 +216,30 @@ def _edgeScrollOn():
 		return bool(oc4host.edge_scroll())
 	except Exception:
 		return _profile['edgeScroll']
+
+
+# After an attack, the camera and the selection stay on the unit that attacked (openciv4's own
+# option, off by default: the original selects the next unit and looks at it as soon as the
+# battle ends): its check box under edge scrolling.
+KEEP_ATTACKER_CHECKBOX = 'Oc4KeepAttackerCheckBox'
+
+
+def handleKeepAttackerClicked(args):
+	on = bool(args[0])
+	_profile['keepAttacker'] = on
+	_save()
+	try:
+		oc4host.set_keep_attacker(on)
+	except Exception:
+		pass
+	return 1
+
+
+def _keepAttackerOn():
+	try:
+		return bool(oc4host.keep_attacker())
+	except Exception:
+		return _profile['keepAttacker']
 
 
 def _graphicDefault(i):
@@ -468,6 +493,11 @@ class CyGTabCtrl(object):
 				EDGE_SCROLL_CHECKBOX, _edgeScrollOn())
 			self.setToolTip(EDGE_SCROLL_CHECKBOX, u'Moving the mouse to the edge of the screen or window moves the map that way. '
 				u'Turn it off to pan only with the arrow keys (or W A S D) and the mouse.')
+			self.attachCheckBox(parent, KEEP_ATTACKER_CHECKBOX, u'Keep the camera on a unit after it attacks', 'oc4options', 'handleKeepAttackerClicked',
+				KEEP_ATTACKER_CHECKBOX, _keepAttackerOn())
+			self.setToolTip(KEEP_ATTACKER_CHECKBOX, u'After your unit attacks, the camera stays on it and it stays selected until you '
+				u'click or press a key, so you see how the battle ended. Off, as in the original game, the next unit that needs '
+				u'orders is selected and the camera goes to it as soon as the battle is over.')
 		self._node('hbox', parent, name)
 	def attachPanel(self, parent, name): self._node('panel', parent, name)
 	def attachScrollPanel(self, parent, name): self._node('vbox', parent, name)

@@ -177,6 +177,7 @@ add_library(oc4_render STATIC
 	src/render/ButtonArt.cpp
 	src/render/Cursor.cpp
 	$<IF:$<BOOL:${OC4_FREETYPE}>,src/render/FontFreeType.cpp,src/render/Font.cpp>
+	src/render/FontVdmx.cpp
 	src/render/Input.cpp
 	src/render/Leaderhead.cpp
 	src/render/ModelView.cpp
@@ -356,6 +357,12 @@ target_link_libraries(key_nav_test PRIVATE oc4_options)
 add_test(NAME key_nav COMMAND key_nav_test)
 set_target_properties(key_nav_test PROPERTIES FOLDER "tests")
 
+add_executable(new_game_settings_test tests/new_game_settings_test.cpp)
+target_include_directories(new_game_settings_test PRIVATE apps/oc4core)
+target_link_libraries(new_game_settings_test PRIVATE oc4_options)
+add_test(NAME new_game_settings COMMAND new_game_settings_test)
+set_target_properties(new_game_settings_test PROPERTIES FOLDER "tests")
+
 add_executable(wasd_pan_test tests/wasd_pan_test.cpp)
 target_include_directories(wasd_pan_test PRIVATE src)
 target_link_libraries(wasd_pan_test PRIVATE oc4_options)
@@ -379,6 +386,12 @@ target_link_libraries(xml_decode_test PRIVATE oc4_options)
 add_test(NAME xml_decode COMMAND xml_decode_test)
 set_target_properties(xml_decode_test PROPERTIES FOLDER "tests")
 
+add_executable(asset_layers_test tests/asset_layers_test.cpp)
+target_include_directories(asset_layers_test PRIVATE src)
+target_link_libraries(asset_layers_test PRIVATE oc4_options oc4_core)
+add_test(NAME asset_layers COMMAND asset_layers_test)
+set_target_properties(asset_layers_test PROPERTIES FOLDER "tests")
+
 add_executable(pad_map_test tests/pad_map_test.cpp)
 target_include_directories(pad_map_test PRIVATE src)
 add_test(NAME pad_map COMMAND pad_map_test)
@@ -396,8 +409,14 @@ target_link_libraries(theme_combine_test PRIVATE oc4_options oc4_render)
 add_test(NAME theme_combine COMMAND theme_combine_test)
 set_target_properties(theme_combine_test PROPERTIES FOLDER "tests")
 
+add_executable(flag_art_test tests/flag_art_test.cpp)
+target_include_directories(flag_art_test PRIVATE src)
+target_link_libraries(flag_art_test PRIVATE oc4_options oc4_render)
+add_test(NAME flag_art COMMAND flag_art_test)
+set_target_properties(flag_art_test PROPERTIES FOLDER "tests")
+
 if(WIN32 AND TARGET freetype)
-	add_executable(text_layout_freetype_test tests/text_layout_test.cpp src/render/TextLayout.cpp src/render/FontFreeType.cpp)
+	add_executable(text_layout_freetype_test tests/text_layout_test.cpp src/render/TextLayout.cpp src/render/FontFreeType.cpp src/render/FontVdmx.cpp)
 	target_include_directories(text_layout_freetype_test PRIVATE src)
 	target_link_libraries(text_layout_freetype_test PRIVATE oc4_options freetype dwrite)
 	add_test(NAME text_layout_freetype COMMAND text_layout_freetype_test)

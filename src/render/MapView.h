@@ -31,6 +31,9 @@ namespace oc4::render
 			bool fog = false;  // as the active team sees the map
 			bool flags = true; // the units' flags
 			bool healthBars = true, frozen = false, effects = true; // (the game's graphic options: health under the flags, idle figures still, no particles)
+			// A city's screen is up: as the original, no units (nor their flags and health) and no
+			// city bars on the map; the cities, signs and plots stay.
+			bool cityScreen = false;
 		};
 
 		MapView(Renderer& renderer, const AssetResolver& assets);
@@ -74,8 +77,20 @@ namespace oc4::render
 		Vec3 worldSize() const;
 		float groundHeight(float x, float y) const;
 		std::optional<std::pair<int, int>> plotAt(Vec3 world) const;
+		// The plot of the city whose bar (drawOverlay's last) is at the point, in the overlay's units.
+		std::optional<std::pair<int, int>> cityBarAt(float x, float y) const;
 		// The plot of the unit whose figure the ray from a to b meets first, as last drawn.
 		std::optional<std::pair<int, int>> figureAt(Vec3 a, Vec3 b) const;
+
+		// The plots the game colours in the circle style (PLOT_STYLE_CIRCLE), drawn on the ground
+		// under the units from now on.
+		struct GroundCircle
+		{
+			int x = 0, y = 0;
+			Color color;
+			float alpha = 1;
+		};
+		void setGroundCircles(std::vector<GroundCircle> circles);
 
 		// Art that could not be loaded, once per asset.
 		const std::vector<std::string>& problems() const;
