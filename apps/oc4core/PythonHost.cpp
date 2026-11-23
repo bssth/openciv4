@@ -95,6 +95,22 @@ if not hasattr(sys, 'argv'):
     sys.argv = ['']
 )py";
 
+#ifndef _WIN32
+		// Windows reads a file opened in text mode ('r') with its CRLF line ends as LF.
+		// Mods ship such files and rely on it: BUG's Domestic Advisor pickles its pages
+		// into UserSettings/CustomDomAdv/CustomDomAdv.txt with CRLF ends, and pickle.load
+		// fails on the '\r' elsewhere, so BUG fell back to its built-in pages.
+		constexpr const char* kTextModeOpen = R"py(
+import __builtin__
+def _oc4_text_open(name, mode='r', buffering=-1, _open=__builtin__.open):
+    if mode in ('r', 'rt'):
+        mode = 'rU'
+    return _open(name, mode, buffering)
+__builtin__.open = _oc4_text_open
+del _oc4_text_open
+)py";
+#endif
+
 		template <class T, class Convert>
 		bool toList(PyObject* o, std::vector<T>& out, Convert convert)
 		{
@@ -209,6 +225,10 @@ if not hasattr(sys, 'argv'):
 		PyRun_SimpleString("import sys, os\nsys.stdout = sys.__stdout__ = os.fdopen(1, 'w', 0)\nsys.stderr = sys.__stderr__ = os.fdopen(2, 'w', 0)\n");
 		if (PyRun_SimpleString(kImporter) != 0)
 			throw std::runtime_error("failed to install the asset importer");
+#ifndef _WIN32
+		if (PyRun_SimpleString(kTextModeOpen) != 0)
+			throw std::runtime_error("failed to install the text-mode open");
+#endif
 
 		// The DLL publishes its classes into CvPythonExtensions.
 		PyImport_AddModule("CvPythonExtensions");

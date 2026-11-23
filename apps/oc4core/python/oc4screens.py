@@ -17,11 +17,14 @@
 ## screens; a click on a row of a table or a list box selects it (Ctrl adds or takes one,
 ## Shift a range) and the script hears NOTIFY_LISTBOX_ITEM_SELECTED.
 
+import re
 import time
 import oc4host
 import CvPythonExtensions as _cpe
 
 _FONT_LEFT, _FONT_RIGHT, _FONT_CENTER = 1 << 0, 1 << 1, 1 << 2
+_SORT_UP, _SORT_DOWN = 1 << 8, 1 << 9  # (a header's flags: its table is sorted by it, up or down)
+_markup = re.compile(u'<[^<>]*>')
 
 _version = [1]          # bumped on every change the display list shows
 _screens = {}           # python file id -> _Screen
@@ -31,15 +34,41 @@ _logged = set()
 _citySelection = [()]   # the cities a table's rows selected last
 _drop = [None, 0]       # the pull down whose list is open (file id, name), and how far that list is scrolled
 _areas = []             # what scrolls under the mouse, back to front: (x0, y0, x1, y1, file id, name, step, down, sideways)
-_bars = {}              # the scroll bars: (file id, name, part) -> (x0, y0, x1, y1)
+_bars = {}              # the scroll bars: (file id, name, part) -> (x0, y0, x1, y1, a line's step)
+_sliders = {}           # the sliders: (file id, name) -> (x0, y0, x1, y1)
 _dropRects = {}         # where each pull down is: (file id, name) -> (x0, y0, x1, y1)
 _editFocus = [None]     # the edit box typed into: (file id, name), or None
+
+
+def _setToggle(i):
+	"""A minimap toggle switched from a script (CyInterface's toggle...): as its control does."""
+	t = list(oc4host.map_toggles())
+	t[i] = not t[i]
+	oc4host.set_map_toggles(*t)
 
 
 def _changed():
 	_version[0] += 1
 
 
+def researchState():
+	"""The active player's research as a string that changes when the tech advisor should be told
+	(the tech researched, its progress, the rate, the queue's places, the techs known, the turn); ''
+	with no active player."""
+	gc = _cpe.CyGlobalContext()
+	game = _cpe.CyGame()
+	iPlayer = game.getActivePlayer()
+	if iPlayer < 0:
+		return ''
+	player = gc.getPlayer(iPlayer)
+	team = gc.getTeam(player.getTeam())
+	current = player.getCurrentResearch()
+	places = [team.isHasTech(i) and -1 or player.getQueuePosition(i) for i in range(gc.getNumTechInfos())]
+	return repr((game.getGameTurn(), current, current >= 0 and team.getResearchProgress(current) or 0,
+		player.calculateResearchRate(-1), places))
+
+
+editTyped = [] # (called with an edit box after keys were typed into it: oc4options keeps its numbers)
 beforeDisplay = [] # (called before the display list is made: oc4options lays its window out)
 
 
@@ -87,9 +116,12 @@ def _int(value, default=-1):
 
 class _Widget(object):
 	__slots__ = ('name', 'kind', 'parent', 'mode', 'x', 'y', 'z', 'w', 'h', 'style', 'pstyle', 'text', 'help', 'tex', 'tex2',
-		'wt', 'd1', 'd2', 'opt', 'flags', 'font', 'shown', 'enabled', 'state', 'hittest', 'seq', 'vertical', 'scroll', 'children',
+		'wt', 'd1', 'd2', 'opt', 'flags', 'font', 'shown', 'enabled', 'state', 'hittest', 'seq',
+		'vertical', 'scroll', 'clipRect', 'children', 'sideways',
 		'bars', 'lists', 'columns', 'rows', 'headers', 'iconw', 'iconh', 'items', 'selected', 'color', 'size', 'defw', 'defh', 'points',
-		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed')
+		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars',
+		'allowed', 'minimum', 'maximum', 'value', 'upright', 'fill', 'grow', 'grid', 'helpWidget',
+		'selectable')
 
 	def __init__(self, name, kind):
 		self.name = name
@@ -102,6 +134,7 @@ class _Widget(object):
 		self.pstyle = 0
 		self.text = u''
 		self.help = u''
+		self.helpWidget = None  # (type, data1, data2): its help the game core's for these (oc4wb)
 		self.tex = self.tex2 = ''
 		self.wt, self.d1, self.d2, self.opt = -1, -1, -1, False
 		self.flags = _FONT_LEFT
@@ -112,13 +145,17 @@ class _Widget(object):
 		self.hittest = 0
 		self.seq = 0
 		self.vertical = True
+		self.sideways = True   # (a scrolling panel: also scrolls sideways (addScrollPanel); not one laid out top to bottom)
 		self.scroll = False
+		self.clipRect = None   # (x0, y0, x1, y1) on the screen: it drawn and clicked only there (oc4wb's partly shown tab)
 		self.children = []
 		self.maxChars = 0      # an edit box's: at most this many characters (0: any)
 		self.allowed = None    # ... and only these (None: any)
+		self.minimum, self.maximum, self.value, self.upright, self.fill = 0, 0, 0, False, '' # a slider's stops, where it is, its fill's side
 		self.bars = None       # stacked bars: [[percent, (r, g, b, a)], ...]
 		self.lists = None      # multi lists: [[(texture, wt, d1, d2, option, disabledTexture), ...], ...]
 		self.columns = None    # tables: [[header, width, right], ...]
+		self.grid = False      # ... drawn with the theme's grid (bDrawGrid)
 		self.rows = None       # tables: [{column: (text, icon, wt, d1, d2, justify)}, ...]
 		self.headers = True
 		self.iconw = self.iconh = 0
@@ -135,7 +172,9 @@ class _Widget(object):
 		self.points = None     # lines
 		self.cells = None      # tables: {(row, column): the name of the control attached there}
 		self.sort = None       # tables that sort: (column, descending) the rows are shown by, or (-1, False)
+		self.selectable = False  # tables: enableSelect(True): with no row selected, the first shown has the selected look
 		self.inset = 0         # scroll panels (addScrollPanel): where what is placed in them (attach...At) starts
+		self.grow = 0          # panels in a vertical panel's flow: higher by this, their share of its free height
 
 
 class _Screen(object):
@@ -148,10 +187,11 @@ class _Screen(object):
 		self.shown = False
 		self.main = False
 		self.dims = None
-		self.helpArea = None   # (x, y, width, minWidth, expandRight, expandDown)
+		self.helpArea = None   # (x, y, width, minWidth, expandRight, expandDown, framed, floating)
 		self.helpText = u''
 		self.minimap = None
 		self.mm = None         # its own minimap's layers (not the main interface's): see _Minimap
+		self.mmSeq = 0         # its own minimap's place among its widgets (initMinimap, bringMinimapToFront)
 		self.hideLists = {}
 		self.endTurn = None    # (text, shown)
 		self.closeOnEscape = True
@@ -613,11 +653,17 @@ class CyGInterfaceScreen(object):
 		w = self._s.add(szName, 'panel')
 		w.text, w.help, w.vertical, w.scroll = _text(title), _text(helpText), bool(bVerticalLayout), bool(bScrollable)
 		w.x, w.y, w.w, w.h, w.pstyle = int(iX), int(iY), int(iWidth), int(iHeight), _style(_cpe.PanelStyles, eStyle)
+		# (one laid out top to bottom scrolls only down: in the original the espionage advisor's
+		# leader list shows no sideways scroll bar though its icons reach past the rows' right edge)
+		w.sideways = not w.vertical
 
 	def addScrollPanel(self, szName, title, iX, iY, iWidth, iHeight, eStyle):
 		w = self._s.add(szName, 'panel')
 		w.text, w.scroll = _text(title), True
-		w.x, w.y, w.w, w.h, w.pstyle = int(iX), int(iY), int(iWidth), int(iHeight), _style(_cpe.PanelStyles, eStyle)
+		# (drawn as nothing whatever its style: the engine's GScrollPanel is transparent,
+		# GFC_CF_TRANSPARENT in Civ4Theme_ScrollPanel.thm; the tech advisor's techs lie on its
+		# parchment, SCREEN_BG_OPAQUE under the panel, not on the external style's blue)
+		w.x, w.y, w.w, w.h, w.pstyle = int(iX), int(iY), int(iWidth), int(iHeight), 'PANEL_STYLE_EMPTY'
 		# (inside the theme's layout margin, GFC_Control_Layout's Size_OuterMargin of 8: the
 		# WorldBuilder's load/save buttons, at 0 in their panel at 70, line up with its landmark and
 		# erase buttons at 8 and 43; the city screen's resource names fit their columns)
@@ -691,6 +737,9 @@ class CyGInterfaceScreen(object):
 		size = {0: 46, 1: 32, 2: 24, 3: 16}.get(_int(eSize, 1), 32)
 		w = self._image('imagebutton', szName, szAttachTo, szTexture, 0, 0, size, size, eWidgetType, iData1, iData2, 'flow')
 		w.opt = bool(bOption)
+		# (BUTTON_SIZE_CUSTOM: as high as the row it is in, square; the foreign advisor's ACTIVE tab
+		# leaders, 58 in a row of 66)
+		w.size = -1 if _int(eSize, 1) == 4 else 0
 
 	def setButtonGFC(self, szName, szText, szTexture, iX, iY, iWidth, iHeight, eWidgetType=-1, iData1=-1, iData2=-1, eStyle=0):
 		w = self._image('button', szName, None, szTexture, iX, iY, iWidth, iHeight, eWidgetType, iData1, iData2, 'abs')
@@ -927,14 +976,17 @@ class CyGInterfaceScreen(object):
 		w = self._s.add(szName, 'text', szAttachTo, 'flow')
 		w.text, w.font, w.wt, w.d1, w.d2 = _text(text), _int(eFont, 1), _int(eType), _int(iData1), _int(iData2)
 
+	# A multiline text is in the theme's normal font (Civ4Theme_Common.thm's .Normal: size 3, Sylfaen
+	# 16), as a setText is; font 3 (the menus') draws and measures it so. Dawn of Man's body, for one,
+	# is 16 px in the original.
 	def addMultilineText(self, szName, szText, iX, iY, iWidth, iHeight, eType=-1, iData1=-1, iData2=-1, iJustify=_FONT_LEFT):
 		w = self._s.add(szName, 'multiline')
 		w.text, w.x, w.y, w.w, w.h = _text(szText), int(iX), int(iY), int(iWidth), int(iHeight)
-		w.wt, w.d1, w.d2, w.flags = _int(eType), _int(iData1), _int(iData2), _int(iJustify, _FONT_LEFT)
+		w.wt, w.d1, w.d2, w.flags, w.font = _int(eType), _int(iData1), _int(iData2), _int(iJustify, _FONT_LEFT), 3
 
 	def attachMultilineText(self, szAttachTo, szName, szText, eType=-1, iData1=-1, iData2=-1, iJustify=_FONT_LEFT):
 		w = self._s.add(szName, 'multiline', szAttachTo, 'flow')
-		w.text, w.wt, w.d1, w.d2, w.flags = _text(szText), _int(eType), _int(iData1), _int(iData2), _int(iJustify, _FONT_LEFT)
+		w.text, w.wt, w.d1, w.d2, w.flags, w.font = _text(szText), _int(eType), _int(iData1), _int(iData2), _int(iJustify, _FONT_LEFT), 3
 
 	# The engine's own: the end of turn message ("EndTurnText") and the end turn button
 	# ("EndTurnButton", its state "Red" or "Green").
@@ -958,7 +1010,9 @@ class CyGInterfaceScreen(object):
 			_set(w, 'shown', False)
 
 	def setHelpTextArea(self, fWidth, eFont, fX, fY, fZ, bFloating, szArtFile, bExpandRight, bExpandDown, uiFlags, iMinWidth):
-		self._s.helpArea = (int(fX), int(fY), int(fWidth), int(iMinWidth), bool(bExpandRight), bool(bExpandDown))
+		# (with art, the city screen's, it is framed; without, the main interface's, see-through;
+		# floating, the city screen's, it goes beside the widget under the mouse, not at x, y)
+		self._s.helpArea = (int(fX), int(fY), int(fWidth), int(iMinWidth), bool(bExpandRight), bool(bExpandDown), bool(szArtFile), bool(bFloating))
 
 	def setHelpTextString(self, szString):
 		self._s.helpText = _text(szString)
@@ -1037,7 +1091,7 @@ class CyGInterfaceScreen(object):
 			return
 		while len(w.lists) <= int(listId):
 			w.lists.append([])
-		w.lists[int(listId)].append([_str(szTexture), _int(eWidgetType), _int(iData1), _int(iData2), bool(bOption), None])
+		w.lists[int(listId)].append([_str(szTexture), _int(eWidgetType), _int(iData1), _int(iData2), bool(bOption), None, False])
 		_changed()
 
 	def clearMultiList(self, szName):
@@ -1055,7 +1109,18 @@ class CyGInterfaceScreen(object):
 			pass
 
 	def selectMultiList(self, szName, iListID): pass
-	def enableMultiListPulse(self, szName, bEnable, listId, iIndexId): pass
+
+	def enableMultiListPulse(self, szName, bEnable, listId, iIndexId):
+		"""The button glows on and off (the main interface's: the action recommended for the unit
+		where it is, or where the held right button points)."""
+		w = self._s.get(szName)
+		try:
+			b = w.lists[int(listId)][int(iIndexId)]
+			if b[6] != bool(bEnable):
+				b[6] = bool(bEnable)
+				_changed()
+		except (AttributeError, IndexError, TypeError):
+			pass
 
 	# ---------------------------------------------------------------- tables
 
@@ -1065,6 +1130,7 @@ class CyGInterfaceScreen(object):
 		w.columns = [[u'', 0, False] for _ in range(max(1, int(numColumns)))]
 		w.rows = []
 		w.headers, w.iconw, w.iconh, w.pstyle = bool(bIncludeHeaders), int(iconWidth), int(iconHeight), _style(_cpe.TableStyles, style)
+		w.grid = bool(bDrawGrid)
 
 	def addTableControlGFCWithHelp(self, szName, numColumns, iX, iY, iWidth, iHeight, bIncludeHeaders, bDrawGrid, iconWidth, iconHeight, style,
 			szHelpText):
@@ -1130,9 +1196,10 @@ class CyGInterfaceScreen(object):
 		self.setTableText(szName, iColumn, iRow, text, szIcon, eWidgetType, iData1, iData2, iJustify)
 
 	def getTableText(self, szName, iColumn, iRow):
+		# (the cell's text without its markup, as the original gives it back: BUG's red "-1" is "-1")
 		w = self._s.get(szName)
 		try:
-			return w.rows[int(iRow)][int(iColumn)][0]
+			return _markup.sub(u'', w.rows[int(iRow)][int(iColumn)][0])
 		except (AttributeError, IndexError, KeyError, TypeError):
 			return u''
 
@@ -1151,7 +1218,11 @@ class CyGInterfaceScreen(object):
 		if w is not None and w.rows is not None and w.sort is None:
 			w.sort = (-1, False)
 			_changed()
-	def enableSelect(self, szName, bSelect): pass
+	def enableSelect(self, szName, bSelect):
+		w = self._s.get(szName)
+		if w is not None and w.rows is not None and w.selectable != bool(bSelect):
+			w.selectable = bool(bSelect)
+			_changed()
 	def enableGridlines(self, *args): pass
 
 	def selectRow(self, szName, iRow, bSelected):
@@ -1179,10 +1250,12 @@ class CyGInterfaceScreen(object):
 	def addListBoxGFC(self, szName, helpText, iX, iY, iWidth, iHeight, eStyle=0):
 		w = self._s.add(szName, 'listbox')
 		w.help, w.x, w.y, w.w, w.h, w.items = _text(helpText), int(iX), int(iY), int(iWidth), int(iHeight), []
+		w.pstyle = _style(_cpe.TableStyles, eStyle)
 
 	def attachListBoxGFC(self, szAttachTo, szName, helpText, eStyle=0):
 		w = self._s.add(szName, 'listbox', szAttachTo, 'flow')
 		w.help, w.items = _text(helpText), []
+		w.pstyle = _style(_cpe.TableStyles, eStyle)
 
 	def appendListBoxString(self, szAttachTo, item, eType=-1, iData1=-1, iData2=-1, iJustify=_FONT_LEFT):
 		w = self._s.get(szAttachTo)
@@ -1281,6 +1354,15 @@ class CyGInterfaceScreen(object):
 	def addSlider(self, szName, iX, iY, iWidth, iHeight, iDefault, iMin, iMax, eWidgetType=-1, iData1=-1, iData2=-1, bIsVertical=False):
 		w = self._s.add(szName, 'slider')
 		w.x, w.y, w.w, w.h, w.size = int(iX), int(iY), int(iWidth), int(iHeight), int(iDefault)
+		w.minimum, w.maximum, w.value, w.upright, w.fill = int(iMin), int(iMax), int(iDefault), bool(bIsVertical), ''
+		w.wt, w.d1, w.d2 = int(eWidgetType), int(iData1), int(iData2)
+
+	def setSliderFill(self, szName, szFill):
+		"""(openciv4's: the side of its grip the slider's fill is on, as the CF_SLIDER_FILL_UP /
+		_DOWN control flags: 'up' the top or left, 'down' the bottom or right, '' none)"""
+		w = self._s.get(szName)
+		if w is not None:
+			_set(w, 'fill', _str(szFill))
 
 	# ---------------------------------------------------------------- lines
 
@@ -1298,6 +1380,17 @@ class CyGInterfaceScreen(object):
 		r = (int(iLeft), int(iTop), int(iRight), int(iBottom))
 		if self._s.minimap != r:
 			self._s.minimap = r
+			_changed()
+		self._placeMinimap()
+
+	def _placeMinimap(self):
+		# (a screen's own minimap is drawn in its widgets' order, where it was made or brought to
+		# the front: a widget made after it covers it, as the military advisor's SIT-REP panel does
+		# in the original, which BUG never hides the DEPLOYMENT tab's map under)
+		s = self._s
+		if not s.main:
+			s.seq += 1
+			s.mmSeq = s.seq
 			_changed()
 
 	def _mm(self):
@@ -1350,7 +1443,7 @@ class CyGInterfaceScreen(object):
 
 	def setMinimapNoRender(self, *args): pass
 	def setMinimapSectionOverride(self, *args): pass
-	def bringMinimapToFront(self): pass
+	def bringMinimapToFront(self): self._placeMinimap()
 
 	def minimapClearAllFlashingTiles(self):
 		mm = self._s.mm
@@ -1440,9 +1533,46 @@ def version():
 	return _version[0]
 
 
-_LIST_ROW = 20   # a list box's row, and a step of the wheel in what scrolls by pixels
+_LIST_ROW = 20   # a step of the wheel in what scrolls by pixels
+_LIST_GAP = 2    # between a multi list's buttons, across and down (the original's)
 _DROP_ROW = 22   # a row of a pull down's open list
+_DROP_BAR = 18   # its scroll bar's width (the combo box's: a 7 wide rail in the middle)
 _heights = {}    # (text, width, font) -> how high it is
+_tableRows = {}  # a table style -> (least row height, room above, room below a cell's content, header height), the theme's
+
+
+def _tableRow(style):
+	row = _tableRows.get(style)
+	if row is None:
+		try:
+			row = tuple(oc4host.ui_table_row(style))
+		except Exception:
+			row = (24, 2, 2, 22)
+		_tableRows[style] = row
+	return row
+
+
+def _headerHeight(style, rowHeight):
+	"""A table's header row: the theme's Size_Header (22), a row's height if the theme has none."""
+	row = _tableRow(style)
+	return int(row[3]) if len(row) > 3 and row[3] > 0 else rowHeight
+
+
+def _rowHeight(style, size, least=0):
+	"""A table's or list box's row: the style's cell height (GFC_Control_Size_ListItem, 24), or
+	taller for a line of its text (font size: a table's 2, a list box's 3) and the room the style
+	leaves above and below it (Size_CellContentMargin: BUG's Table_StandardCiv_Style 1 and 2, its
+	military advisor's list 25 high), or for its pictures."""
+	row = _tableRow(style)
+	line = _textHeight(u'<font=%d>Ag</font>' % size, 4096)
+	return int(max(row[0], least, line + row[1] + row[2]))
+
+
+def _tableInner(base, x, y, width, height, clip, style, w, out):
+	"""A table's or list box's own background under its rows (the theme's Inner skin: the standard
+	table's blue gradient; none for the Empty styles)."""
+	out.append((base + (-199,), 'row', x, y, x + width, y + height, clip, style, u'', '', '', 0, 2, False, True, 0, None, -1, -1, -1, False,
+		w.z, w.seq))
 
 
 def _origin(s):
@@ -1494,12 +1624,12 @@ def _scrolls(w, x0, y0, x1, y1, fileId, step, out, sideways=False):
 		_areas.append((x0, y0, x1, y1, fileId, w.name, step, down, across))
 	# (over what the widget holds: nearer than anything of its screen)
 	if down:
-		_bars[(fileId, w.name, -2)] = (x1 - _BAR, y0, x1, y1)
+		_bars[(fileId, w.name, -2)] = (x1 - _BAR, y0, x1, y1, step)
 		out.append(((fileId, w.name, -2), 'scrollbar', x1 - _BAR, y0, x1, y1, None, '', u'', '', '', 0, 0, False, True, 0, None, -1, -1, -1, False,
 			-1000.0, w.seq, float(offset) / w.extent, float(high) / w.extent))
 	if across:
 		right = x1 - (_BAR if down else 0)
-		_bars[(fileId, w.name, -3)] = (x0, y1 - _BAR, right, y1)
+		_bars[(fileId, w.name, -3)] = (x0, y1 - _BAR, right, y1, step)
 		out.append(((fileId, w.name, -3), 'scrollbar', x0, y1 - _BAR, right, y1, None, '', u'', '', '', 0, 0, False, True, 0, None, -1, -1, -1, False,
 			-1000.0, w.seq, float(hoffset) / w.hextent, float(wide) / w.hextent))
 
@@ -1509,8 +1639,12 @@ def _size(s, w):
 	if w.mode == 'full':
 		return _resolution[0], _resolution[1]
 	if w.kind in ('label', 'text'):
-		# (a text, setText, is in the theme's size 3 whatever font it names; a label in its own)
-		return max(w.w, _textWidth(w.text, 3 if w.kind == 'text' else w.font)), _TEXT_HEIGHT.get(w.font, 18)
+		# (a text, setText, is in the theme's size 3 whatever font it names; a label in its own;
+		# one of spaces as wide as they are: the foreign advisor's "   " before a leader)
+		width = _textWidth(w.text, 3 if w.kind == 'text' else w.font)
+		if not width and w.text and not w.text.strip():
+			width = len(w.text) * _SPACE
+		return max(w.w, width), _TEXT_HEIGHT.get(w.font, 18)
 	if w.kind == 'multiline':
 		# (one placed with a height, addMultilineText, is that high: a longer text scrolls in it)
 		if w.mode != 'flow' and w.h > 0:
@@ -1525,14 +1659,45 @@ def _size(s, w):
 		# placed in it, attachXAt, down to its lowest)
 		held = [cw for cw in [s.widgets.get(c) for c in w.children] if cw is not None and cw.shown]
 		heights = [_size(s, cw)[1] for cw in held if cw.mode == 'flow']
+		if [cw for cw in held if cw.kind == 'separator' and cw.mode == 'flow']:
+			# (a separator sets the height of the panel it is in: the espionage advisor's leader
+			# rows, a separator 30 long and the leader's texts placed in it, are 32 high in the
+			# original, 34 apart; what is placed in it doesn't make it higher)
+			return w.w, 2 + (sum(heights) + 2 * (len(heights) - 1) if w.vertical else max(heights))
 		height = 8 + (sum([h + 2 for h in heights]) if w.vertical else max(heights + [0]))
 		for cw in held:
 			if cw.mode == 'rel':
 				height = max(height, cw.y + _size(s, cw)[1] + 4)
-		return w.w, height
+		return w.w, height + _title(w) + w.grow
 	if w.kind == 'button' and not w.w:
 		return len(w.text) * 8 + 16, w.h or 24
 	return w.w, w.h
+
+
+_SPACE = 4    # a space's width in the theme's normal font
+_TITLE = 28   # a panel's title: over its box, in a strip this high (the original's panels with a title)
+
+
+def _title(w):
+	"""How much higher than its box a panel is for its title."""
+	return _TITLE if w.kind == 'panel' and w.text else 0
+
+
+# The theme's grid of a table drawn with one (bDrawGrid): SF_CtrlTheme_Civ4_Control_Color's Grid,
+# GColor(105, 97, 86, 128), one pixel at each column's right and each row's bottom, as the
+# original's (BUG's Religion Advisor: Wine's rows (57, 80, 134) show (82, 89, 110) lines).
+_GRID_COLOR = (105 / 255.0, 97 / 255.0, 86 / 255.0, 128 / 255.0)
+
+def _gridLines(base, ri, x, cy, columns, rowHeight, clip, w, out):
+	cx = x
+	for ci, c in enumerate(columns):
+		cx += c[1]
+		if c[1] > 0:
+			out.append((base + (-(0x1000000 | (ri << 8) | ci),), 'line', cx - 0.5, cy, cx - 0.5, cy + rowHeight, clip, '__grid', u'', '', '', 0, 0, False, True, 4,
+				_GRID_COLOR, -1, -1, -1, False, w.z, w.seq))
+	if cx > x:
+		out.append((base + (-(0x2000000 | ri),), 'line', x, cy + rowHeight - 0.5, cx, cy + rowHeight - 0.5, clip, '__grid', u'', '', '', 0, 0, False, True, 4,
+			_GRID_COLOR, -1, -1, -1, False, w.z, w.seq))
 
 
 def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
@@ -1540,6 +1705,8 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 	table's cell only there (cell: that cell's corner)."""
 	if not w.shown or (w.mode == 'cell') != (cell is not None):
 		return
+	if w.clipRect is not None:
+		clip = _clipTo(clip, w.clipRect)
 	if cell is not None:
 		x, y = cell
 	elif w.mode == 'abs':
@@ -1554,13 +1721,27 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 		x, y = flow[0], flow[1]
 	width, height = _size(s, w)
 	if w.mode == 'flow':
-		# (one of no width of its own takes the rest of its parent's; a text then wraps there)
-		if not width:
+		# (one of no width of its own takes the rest of its parent's; a text then wraps there; a
+		# label or text is as wide as it is)
+		if w.kind == 'imagebutton' and w.size == -1 and len(flow) > 5 and flow[5] > 0:
+			width = height = flow[5]
+		if not width and w.kind not in ('label', 'text'):
 			width = max(0, flow[3] - (x - flow[4]))
 		if w.kind == 'multiline' and width:
 			height = max(w.h, _textHeight(w.text, width, w.font))
+		if not flow[2] and len(flow) > 5 and flow[5] > height and w.kind != 'panel':
+			# (in a row as high as its panel, in the middle of its height, as the original's: the
+			# foreign advisor's INFO rows, their leaders, civics and numbers)
+			y += (flow[5] - height) / 2
 		if flow[2]:
 			flow[1] += height + 2
+		elif w.kind == 'text' or (w.kind == 'imagebutton' and w.size != -1 and width == 46):
+			# (in a row, attachTextGFC's texts and the 46 pixel buttons each in a cell at least 46
+			# wide, a text in its middle, 18 apart: the foreign advisor's INFO tab, its columns under
+			# their headers, measured in the original)
+			cell = max(width, 46)
+			x += (cell - width) / 2
+			flow[0] += cell + 18
 		else:
 			flow[0] += width + 4
 	# (a text attached at a place in its parent, setTextAt, starts there whatever its justification:
@@ -1574,46 +1755,54 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 	kind = w.kind
 	if kind == 'multilist':
 		bw, bh = max(1, w.defw), max(1, w.defh)
+		# (the original's buttons are 2 apart, across and down: 48 wide, one every 50, measured in Wine)
+		pw, ph = bw + _LIST_GAP, bh + _LIST_GAP
 		row = 0
 		placed = []
 		for listId, buttons in enumerate(w.lists or []):
 			col = 0
 			for index, b in enumerate(buttons):
-				if width and col and (col + 1) * bw > width:
+				if width and col and col * pw + bw > width:
 					col, row = 0, row + 1
-				placed.append((listId, index, b, col * bw, row * bh))
+				placed.append((listId, index, b, col * pw, row * ph))
 				col += 1
 			if buttons:
 				row += 1
 		box, top = clip, y
 		if height:
 			box = _clipTo(clip, (x, y, x + width, y + height))
-			w.extent = row * bh
+			w.extent = row * ph
 			# (a row a notch of the wheel)
-			_scrolls(w, x, y, x + width, y + height, s.id, max(1, bh / 3), out)
+			_scrolls(w, x, y, x + width, y + height, s.id, max(1, ph / 3), out)
 			top = y - w.offset
 		for listId, index, b, dx, dy in placed:
 			bx, by = x + dx, top + dy
 			if height and (by + bh <= y or by >= y + height):
 				continue
 			out.append((base + ((listId << 16) | index,), 'imagebutton', bx, by, bx + bw, by + bh, box, w.style, u'', b[5] if b[5] and b[5] != '-' else b[0],
-				'', 1, 0, False, b[5] is None and w.enabled, 0, None, b[1], b[2], b[3], b[4], w.z, w.seq))
+				'', 1, 0, False, b[5] is None and w.enabled, 0, None, b[1], b[2], b[3], b[4], w.z, w.seq, b[6], True))
 		return
 	if kind == 'table':
 		# (the theme's cell height, GFC_Control_Size_ListItem; taller for a table whose cells have pictures)
 		pictures = [1 for row in w.rows for cell in row.values() if cell and cell[1]]
-		rowHeight = max(24, w.iconh) if pictures else 24
+		style = w.style or w.pstyle
+		rowHeight = _rowHeight(style, 2, w.iconh if pictures else 0)
 		# (its rows scroll under its headers, in its box)
 		box = _clipTo(clip, (x, y, x + width, y + height)) if height else clip
+		headerHeight = _headerHeight(style, rowHeight) if w.headers else 0
+		_tableInner(base, x, y, width, height or len(w.rows) * rowHeight + headerHeight, box, style, w, out)
 		top = y
 		if w.headers:
 			cx = x
 			for ci, c in enumerate(w.columns):
 				# (a table that sorts: each header a part of its own, -100 - column, that a click sorts by)
-				out.append((base + (-100 - ci if w.sort is not None else -1,), 'header', cx, top, cx + c[1], top + rowHeight, box, w.style, c[0], '', '', 2, _FONT_RIGHT if c[2] else _FONT_LEFT,
+				sortFlags = 0
+				if w.sort is not None and w.sort[0] == ci:
+					sortFlags = _SORT_DOWN if w.sort[1] else _SORT_UP
+				out.append((base + (-100 - ci if w.sort is not None else -1,), 'header', cx, top, cx + c[1], top + headerHeight, box, style, c[0], '', '', 2, (_FONT_RIGHT if c[2] else _FONT_LEFT) | sortFlags,
 					False, True, 0, None, -1, -1, -1, False, w.z, w.seq))
 				cx += c[1]
-			top += rowHeight
+			top += headerHeight
 		body = _clipTo(box, (x, top, x + width, y + height)) if height else box
 		w.extent = len(w.rows) * rowHeight
 		_scrolls(w, x, top, x + width, y + height if height else top + w.extent, s.id, rowHeight, out)
@@ -1622,36 +1811,52 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 		if w.sort is not None and w.sort[0] >= 0:
 			column = w.sort[0]
 			order.sort(key=lambda ri: _sortKey(w.rows[ri].get(column)), reverse=w.sort[1])
-		for ri in order:
+		for at, ri in enumerate(order):
 			r = w.rows[ri]
 			if height and (cy + rowHeight <= top or cy >= y + height):
 				cy += rowHeight
 				continue
+			# (the row's look under its cells: every other one the theme's Alt_, selected; as wide
+			# as its columns, as in the original: BUG's domestic advisor's rows end with its last)
+			# (a table one selects rows of shows its first row selected while none is, as the original's
+			# GTable its current row: BUG's Domestic Advisor opens with its first city lit)
+			lit = ri in w.picked or (w.selectable and not w.picked and at == 0)
+			out.append((base + (-200 - ri,), 'row', x, cy, x + (sum(c[1] for c in w.columns) or width), cy + rowHeight, body, style, u'', '', '', 0, at & 1, lit, True, 0, None,
+				-1, -1, -1, False, w.z, w.seq))
 			cx = x
 			for ci, c in enumerate(w.columns):
 				cell = r.get(ci)
 				if cell is not None:
 					flags = _FONT_RIGHT if c[2] else cell[5]
-					out.append((base + ((ri << 8) | ci,), 'cell', cx, cy, cx + c[1], cy + rowHeight, body, w.style, cell[0], cell[1], '', 2, flags,
+					out.append((base + ((ri << 8) | ci,), 'cell', cx, cy, cx + c[1], cy + rowHeight, body, style, cell[0], cell[1], '', 2, flags,
 						ri in w.picked, True, 0, None, cell[2], cell[3], cell[4], len(cell) > 6 and cell[6], w.z, w.seq))
 				# (a control attached to the cell: there, scrolling with its row)
 				control = s.widgets.get(w.cells.get((ri, ci))) if w.cells else None
 				if control is not None:
 					_display_widget(s, control, cx, cy, body, [cx, cy, True, c[1], cx], out, (cx, cy))
 				cx += c[1]
+			if w.grid:
+				_gridLines(base, ri, x, cy, w.columns, rowHeight, body, w, out)
 			cy += rowHeight
 		return
 	if kind == 'listbox':
 		box = _clipTo(clip, (x, y, x + width, y + height)) if height else clip
 		items = w.items or []
-		w.extent = len(items) * _LIST_ROW
-		_scrolls(w, x, y, x + width, y + height if height else y + w.extent, s.id, _LIST_ROW, out)
+		# (a list box's text is in the theme's normal font, size 3: a row of BUG's military
+		# advisor's list is 25 high, a table's text size 2)
+		style = w.style or w.pstyle
+		rowHeight = _rowHeight(style, 3)
+		w.extent = len(items) * rowHeight
+		_tableInner(base, x, y, width, height or w.extent, box, style, w, out)
+		_scrolls(w, x, y, x + width, y + height if height else y + w.extent, s.id, rowHeight, out)
 		cy = y - w.offset
 		for i, item in enumerate(items):
-			if not height or (cy + _LIST_ROW > y and cy < y + height):
-				out.append((base + (i,), 'cell', x, cy, x + width, cy + _LIST_ROW, box, w.style, item[0], '', '', 2, item[4], w.selected == i, True, 0, None,
+			if not height or (cy + rowHeight > y and cy < y + height):
+				out.append((base + (-200 - i,), 'row', x, cy, x + width, cy + rowHeight, box, style, u'', '', '', 0, i & 1, w.selected == i, True, 0, None,
+					-1, -1, -1, False, w.z, w.seq))
+				out.append((base + (i,), 'cell', x, cy, x + width, cy + rowHeight, box, style, item[0], '', '', 3, item[4], w.selected == i, True, 0, None,
 					item[1], item[2], item[3], False, w.z, w.seq))
-			cy += _LIST_ROW
+			cy += rowHeight
 		return
 	if kind == 'multiline' and w.mode != 'flow' and width > 0 and height > 0:
 		# (in a box of its own: clipped there, and it scrolls when it is longer)
@@ -1668,9 +1873,21 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 			w.hittest, None, w.wt, w.d1, w.d2, w.opt, w.z, w.seq))
 		return
 	if kind == 'line':
+		# (drawn on its draw control, addLineGFC's: in its place among the others, under what came
+		# after it; the foreign advisor's relations run under the leaders' buttons, as the original)
 		x0, y0, x1, y1 = w.points
+		owner = s.widgets.get(w.parent) if w.parent else None
+		z, seq = (owner.z, owner.seq + w.seq * 1e-7) if owner is not None else (w.z, w.seq)
 		out.append((base + (-1,), 'line', ox + x0, oy + y0, ox + x1, oy + y1, clip, '', u'', '', '', 0, 0, False, True, 4, w.color, -1, -1, -1, False,
-			w.z, w.seq))
+			z, seq))
+		return
+	if kind == 'slider':
+		# (the theme's slider: its grip as far along it as its stop; it follows the mouse, sliderTo)
+		_sliders[(s.id, w.name)] = (x, y, x + width, y + height)
+		span = max(1, w.maximum - w.minimum)
+		at = float(max(w.minimum, min(w.maximum, w.value)) - w.minimum) / span
+		out.append((base + (-1,), 'slider', x, y, x + width, y + height, clip, ('v ' if w.upright else 'h ') + w.fill, u'', '', '', 0, 0, False,
+			w.enabled, w.hittest, None, w.wt, w.d1, w.d2, w.opt, w.z, w.seq, at, 0.0))
 		return
 	if kind == 'bar':
 		start = 0.0
@@ -1687,15 +1904,43 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 	text = w.text
 	if kind == 'edit' and _editFocus[0] == (s.id, w.name):
 		text = text + u'|' # (the caret: typed into)
-	out.append((base + (-1,), kind, x, y, x + width, y + height, clip, w.style if w.style else w.pstyle, text, w.tex, w.tex2, w.font, flags,
-		w.state, w.enabled, w.hittest, color, w.wt, w.d1, w.d2, w.opt, w.z, w.seq))
+	title = _title(w)
+	if title:
+		# (a panel's title over its box, at its left, in the theme's normal font: the foreign
+		# advisor's "Surplus Resources", its ACTIVE tab's leaders' names; measured in the original
+		# at 11 right of the box's edge, the box 28 down)
+		out.append((base + (-2,), 'text', x + 11, y + 3, x + 11 + _textWidth(text, 3), y + 3 + 18, clip, '', text, '', '', 1, _FONT_LEFT,
+			False, True, 0, None, -1, -1, -1, False, w.z, w.seq))
+		text = u''
+	owner = s.widgets.get(w.parent) if w.parent else None
+	if not (kind == 'panel' and w.mode == 'rel' and owner is not None and owner.mode == 'flow'):
+		# (a panel placed in a row of a list (attachPanelAt in an attachPanel's) isn't seen and
+		# takes no clicks: the espionage advisor's leader names' panels, made after the leaders'
+		# buttons, show nothing in the original, and the buttons are clicked)
+		out.append((base + (-1,), kind, x, y + title, x + width, y + height, clip, w.style if w.style else w.pstyle, text, w.tex, w.tex2, w.font, flags,
+			w.state, w.enabled, w.hittest, color, w.wt, w.d1, w.d2, w.opt, w.z, w.seq))
 	if w.children:
 		inner, left, top = clip, x, y
 		scrolls = kind == 'panel' and w.scroll and width > 0 and height > 0
 		if scrolls:
 			inner, left, top = _clipTo(clip, (x, y, x + width, y + height)), x - w.hoffset, y - w.offset
 		first = len(out)
-		childFlow = [left + 4, top + 4 + (18 if w.text else 0), w.vertical, max(0, width - 8), left + 4]
+		held = [cw for cw in [s.widgets.get(c) for c in w.children] if cw is not None and cw.shown and cw.mode == 'flow']
+		if kind == 'panel' and w.vertical:
+			# (the panels in a vertical panel's flow share what is left of its height, as the
+			# original lays them out: the foreign advisor's GLANCE, ACTIVE and INFO rows fill it)
+			for cw in held:
+				cw.grow = 0
+			grow = [cw for cw in held if cw.kind == 'panel' and not cw.h]
+			if grow and height > 0:
+				free = height - title - 8 - sum([_size(s, cw)[1] + 2 for cw in held])
+				for cw in grow:
+					cw.grow = max(0, free / len(grow))
+		# (and the rows of a horizontal one: as high as it is, inside its margins; a custom sized
+		# button is that high)
+		# (in a row a separator sets, 1 in: the espionage advisor's rows, 32 high)
+		edge = 1 if [cw for cw in held if cw.kind == 'separator'] else 4
+		childFlow = [left + edge, top + edge + title, w.vertical, max(0, width - 2 * edge), left + edge, 0 if w.vertical else max(0, height - title - 2 * edge)]
 		for c in w.children:
 			cw = s.widgets.get(c)
 			if cw is not None:
@@ -1704,19 +1949,22 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 			held = [i for i in out[first:] if i[1] != 'scrollbar']
 			# (the margin below and right of what it holds only once that overflows: a strip of
 			# buttons as big as its panel, the WorldBuilder's load/save one, has no scroll bars)
-			extent = max([i[5] for i in held] + [childFlow[1]]) - top
+			# (the gap after the last of a top to bottom flow isn't held: the espionage advisor's
+			# 17 rows end at its list's bottom edge, with no scroll bar in the original)
+			extent = max([i[5] for i in held] + [childFlow[1] - (2 if w.vertical and childFlow[1] > top + 4 else 0)]) - top
 			hextent = max([i[4] for i in held] + [left]) - left
 			w.extent = extent + 4 if extent > height else extent
 			w.hextent = hextent + 4 if hextent > width else hextent
-			_scrolls(w, x, y, x + width, y + height, s.id, _LIST_ROW, out, True)
+			_scrolls(w, x, y, x + width, y + height, s.id, _LIST_ROW, out, w.sideways)
 
 
 def dump(path):
 	"""Writes every widget of the shown screens (name, kind, place, style, art) to a file."""
 	f = open(path, 'w')
 	for item in display():
-		f.write('%s\t%s\t%s\t(%d,%d)-(%d,%d)\tstyle=%s\ttex=%s\ttext=%s\twidget=%d,%d,%d\n' % (item[0][0], item[0][1], item[1], item[2], item[3], item[4],
-			item[5], item[7], item[9], _text(item[8]).encode('utf-8')[:60], item[17], item[18], item[19]))
+		f.write('%s\t%s\t%s\t(%d,%d)-(%d,%d)\tstyle=%s\ttex=%s\ttext=%s\twidget=%d,%d,%d%s\n' % (item[0][0], item[0][1], item[1], item[2], item[3], item[4],
+			item[5], item[7], item[9], _text(item[8]).encode('utf-8')[:60], item[17], item[18], item[19],
+			'\tpulse' if item[1] == 'imagebutton' and len(item) > 23 and item[23] else ''))
 	f.close()
 
 
@@ -1725,7 +1973,7 @@ def display():
 
 	Each item: ((file id, widget name, part), kind, x0, y0, x1, y1, clip, style, text, texture,
 	texture2, font, flags, state, enabled, hit test, colour, widget type, data1, data2, option,
-	z, order[, bar start, bar percent]).
+	z, order[, bar start, bar percent][, a multi list's button: pulse]).
 	"""
 	for f in beforeDisplay:
 		try:
@@ -1737,6 +1985,7 @@ def display():
 	del _areas[:]
 	_dropRects.clear()
 	_bars.clear()
+	_sliders.clear()
 	# (the main interface first, then the screens in the order they were shown: the newest on top)
 	for s in sorted(_screens.values(), key=lambda s: (not s.main, s.shownAt, s.id)):
 		if not (s.main or s.shown):
@@ -1749,6 +1998,17 @@ def display():
 			w = s.widgets.get(name)
 			if w is not None:
 				_display_widget(s, w, ox, oy, None, [ox, oy, True, 0, 0], items)
+		# (a screen's own minimap, the military advisor's, the replay's: among its widgets, in the
+		# order it was placed (_placeMinimap), from the screen's corner as they are; a panel made
+		# after it that covers it whole hides it and takes its clicks: BUG's SIT-REP and STRATEGIC
+		# ADVANTAGES tabs lay their panel over the DEPLOYMENT tab's map, which they leave)
+		if s.minimap is not None and not s.main and s.mm is not None:
+			l, t, r, b = s.minimap
+			l, t, r, b = l + ox, t + oy, r + ox, b + oy
+			if not any(i[1] == 'panel' and i[22] > s.mmSeq and i[21] <= 0.0 and i[7] not in ('', 'PANEL_STYLE_EMPTY') and
+					i[2] <= l and i[3] <= t and i[4] >= r and i[5] >= b for i in items):
+				items.append(((s.id, '__minimap', -1), 'minimap', l, t, r, b, None, '__screenmap', u'', '', '', 0, 0, False, True, 0, None,
+					-1, -1, -1, False, 0.0, s.mmSeq))
 		# farther first (GFC's z: smaller is nearer), then in the order they came
 		items.sort(key=lambda i: (-i[21], i[22]))
 		out.extend(items)
@@ -1756,12 +2016,6 @@ def display():
 		if s.minimap is not None and s.main:
 			l, t, r, b = s.minimap
 			out.append(((s.id, '__minimap', -1), 'minimap', l, t, r, b, None, '', u'', '', '', 0, 0, False, True, 0, None, -1, -1, -1, False, 0, 0))
-		# (a screen's own, over what it shows: the military advisor's, the replay's; placed from
-		# the screen's corner as its widgets)
-		elif s.minimap is not None and s.mm is not None:
-			l, t, r, b = s.minimap
-			out.append(((s.id, '__minimap', -1), 'minimap', l + ox, t + oy, r + ox, b + oy, None, '__screenmap', u'', '', '', 0, 0, False, True, 0, None,
-				-1, -1, -1, False, 0, 0))
 	_dropList(out)
 	return out
 
@@ -1777,11 +2031,12 @@ def _dropList(out):
 		_drop[0] = None
 		return
 	n = len(w.items)
-	width = r[2] - r[0]
-	for item in w.items:
-		width = max(width, _textWidth(item[0]) + 24)
 	below, above = _resolution[1] - r[3] - 12, r[1] - 12
 	rows = min(n, max(1, max(below, above) // _DROP_ROW))
+	bar = _DROP_BAR if n > rows else 0
+	width = r[2] - r[0]
+	for item in w.items:
+		width = max(width, _textWidth(item[0]) + 24 + bar)
 	height = rows * _DROP_ROW + 8
 	y0 = r[3] if below >= height or below >= above else r[1] - height
 	x0 = max(0, min(r[0], _resolution[0] - width))
@@ -1795,9 +2050,14 @@ def _dropList(out):
 	cy = top - _drop[1]
 	for i, item in enumerate(w.items):
 		if cy + _DROP_ROW > top and cy < box[3]:
-			out.append(((s.id, w.name, i), 'option', x0, cy, x0 + width, cy + _DROP_ROW, box, '__option', item[0], '', '', 2, _FONT_LEFT, i == w.selected,
-				True, 0, None, -1, -1, -1, False, 0, 0))
+			out.append(((s.id, w.name, i), 'option', x0, cy, x0 + width - bar, cy + _DROP_ROW, box, '__option', item[0], '', '', 2, _FONT_LEFT,
+				i == w.selected, True, 0, None, -1, -1, -1, False, 0, 0))
 		cy += _DROP_ROW
+	if bar:
+		# (its scroll bar, the combo box's own: inside the list on its right, as the original's)
+		whole = n * _DROP_ROW
+		out.append(((s.id, w.name, -4), 'scrollbar', x0 + width - bar, top, x0 + width, box[3], None, '__combo', u'', '', '', 0, 0, False, True, 0,
+			None, -1, -1, -1, False, 0, 0, float(_drop[1]) / whole, float(rows * _DROP_ROW) / whole))
 
 
 _widths = {}    # (text, font) -> how wide it is
@@ -1856,6 +2116,57 @@ def scrollTo(fileId, name, part, x, y):
 		_set(w, 'hoffset', int(max(0, min(w.hextent - wide, at * w.hextent - wide / 2))))
 
 
+def sliderTo(fileId, name, x, y):
+	"""A slider pressed or dragged: set to the stop nearest the mouse (its grip, 14 long, kept
+	within it, as drawn); the stop when that is another one, else None."""
+	r = _sliders.get((int(fileId), _str(name)))
+	s = _screens.get(int(fileId))
+	w = s.get(name) if s is not None else None
+	if r is None or w is None or not w.enabled:
+		return None
+	start, length, at = (r[1], r[3] - r[1], y) if w.upright else (r[0], r[2] - r[0], x)
+	f = float(at - start - 7) / max(1, length - 14)
+	stop = w.minimum + int(round(max(0.0, min(1.0, f)) * (w.maximum - w.minimum)))
+	if stop == w.value:
+		return None
+	_set(w, 'value', stop)
+	return stop
+
+
+def scrollBar(fileId, name, part, to, step):
+	"""A scroll bar held: what it scrolls is put where its grip was dragged (`to`, how far along,
+	as a part of all it holds), or moved a line (`step` -1 back, 1 on: its arrows) or a page (-2,
+	2: its shaft). Part -4 is the open pull down list's bar; any other closes that list."""
+	fileId, name, part, to, step = int(fileId), _str(name), int(part), float(to), int(step)
+	if part == -4:
+		s = _screens.get(fileId)
+		w = s.get(name) if s is not None else None
+		r = [a for a in _areas if a[4] == -1]
+		if w is None or _drop[0] != (fileId, name) or not r:
+			return
+		shown = r[0][3] - r[0][1]
+		whole = len(w.items) * _DROP_ROW
+		at = to * whole if to >= 0 else _drop[1] + (_DROP_ROW if abs(step) == 1 else shown) * (1 if step > 0 else -1)
+		_drop[1] = int(max(0, min(whole - shown, round(at))))
+		_changed()
+		return
+	closeDropdown()
+	r = _bars.get((fileId, name, part))
+	s = _screens.get(fileId)
+	w = s.get(name) if s is not None else None
+	if r is None or w is None:
+		return
+	if part == -2:
+		key, shown, whole = 'offset', r[3] - r[1], w.extent
+	else:
+		key, shown, whole = 'hoffset', r[2] - r[0], w.hextent
+	if to >= 0:
+		at = to * whole
+	else:
+		at = getattr(w, key) + (r[4] if abs(step) == 1 else shown) * (1 if step > 0 else -1)
+	_set(w, key, int(max(0, min(whole - shown, round(at)))))
+
+
 def openDropdown(fileId, name):
 	"""A click on a pull down opens its list, or closes it when it is open."""
 	key = (int(fileId), _str(name))
@@ -1899,11 +2210,27 @@ def typeIntoEdit(text):
 			value = value[:-1]
 		elif c in (u'\r', u'\x1b'):
 			_editFocus[0] = None
+			if c == u'\r' and w.name.startswith('OC4WB'):
+				# (the World Builder's edit window: Enter tells the script, as the original's)
+				_set(w, 'text', value)
+				try:
+					import oc4wb
+					oc4wb.editDone(w.name, value)
+				except Exception:
+					import traceback
+					traceback.print_exc()
+				return
 			break # (the rest of the keys are not the edit box's)
 		elif c >= u' ' and (w.allowed is None or c in w.allowed) and (not w.maxChars or len(value) < w.maxChars):
 			value += c
 	_set(w, 'text', value)
 	_changed()
+	for f in editTyped:
+		try:
+			f(w)
+		except Exception:
+			import traceback
+			traceback.print_exc()
 
 
 def closeDropdown():
@@ -1985,17 +2312,67 @@ def rowClicked(fileId, name, part, shift, ctrl):
 
 
 def helpArea():
-	"""(x, y, width, min width, expand right, expand down) of the main interface's help, or None."""
+	"""(x, y, width, min width, expand right, expand down, framed) of the main interface's help, or None."""
 	for s in _screens.values():
 		if s.main and s.helpArea is not None:
 			return s.helpArea
 	return None
 
 
-def widgetText(fileId, name):
+def tooltipPlace(fileId, name, x0, y0, x1, y1, mx, my, width):
+	"""Where a widget's help goes when it is a tooltip, as the original's, or None (the help area):
+	(x, y, max width, expand right, expand down). In the World Builder the main interface and its
+	help area are hidden and the help is a small box at the widget: under the mouse in its tool
+	window (oc4wb's OC4WB... widgets: 12 px left of the mouse, 31 under it), else beside the
+	widget, on the side away from the screen's edge (the top right buttons': 3 px left of it,
+	3 down). Measured in Wine (BtS 3.19, BUG + BULL, 1600x900)."""
+	try:
+		if not oc4host.ui_world_builder():
+			return None
+	except Exception:
+		return None
+	name = _str(name)
+	if name.startswith('OC4WB'):
+		return (mx - 12, my + 31, 400, True, True)
+	if (x0 + x1) / 2.0 > width / 2.0:
+		return (x0 - 3, y0 + 3, 400, False, True)
+	return (x1 + 3, y0 + 3, 400, True, True)
+
+
+def widgetText(fileId, name, widget=-1, data1=-1, data2=-1, option=False):
+	"""A widget's help: the help text the script gave it, else, for a widget type the game core
+	has no help for (the World Builder's buttons), hostWidgetHelp's."""
 	s = _screens.get(fileId)
 	w = s.get(name) if s is not None else None
-	return w.help if w is not None else u''
+	text = w.help if w is not None else u''
+	if not text and w is not None and getattr(w, 'helpWidget', None):
+		# (the game core's help for another widget type than the widget's: the World Builder's
+		# palette, its items a unit's, a building's, ... help)
+		try:
+			text = oc4host.widget_help(*w.helpWidget)
+		except Exception:
+			import traceback
+			traceback.print_exc()
+	if not text and widget >= 0:
+		text = hostWidgetHelp(widget, data1, data2, option)
+	return text
+
+
+def hostWidgetHelp(widget, data1, data2, option=False):
+	"""What the original shows for a widget the game core has no help for: the World Builder's
+	own buttons (oc4wb, as seen in the running original under Wine), else the scripts' CvGameInterface.getWidgetHelp (BUG
+	answers its own widget types there: the great people bar, the options button, its advisors')."""
+	text = u''
+	try:
+		import oc4wb
+		text = oc4wb.widgetHelp(widget, data1, data2)
+		if not text:
+			import CvGameInterface
+			text = CvGameInterface.getWidgetHelp((int(widget), int(data1), int(data2), bool(option))) or u''
+	except Exception:
+		import traceback
+		traceback.print_exc()
+	return text
 
 
 def toggle(fileId, name):
@@ -2264,11 +2641,14 @@ class CyInterface(object):
 	def setCityTabSelectionRow(self, eIndex): self.__class__._cityTab = int(eIndex)
 
 	def getHelpString(self): return oc4host.ui_help_string()
-	def determineWidth(self, szBuffer): return _textWidth(_text(szBuffer))
+	# (the original measures untagged text at the size setText draws it, whatever its FontTypes:
+	# the theme's size 3, as <font=3>; Wine's "The Apostolic Palace" is 139, its <font=2> 121)
+	def determineWidth(self, szBuffer): return _textWidth(_text(szBuffer), 3)
 
 	def getEndTurnState(self): return _cpe.EndTurnButtonStates(oc4host.ui_end_turn_state())
 	def shouldDisplayEndTurn(self): return oc4host.ui_end_turn_message()
-	def shouldDisplayEndTurnButton(self): return True
+	# (the original hides the button while the other civilizations move)
+	def shouldDisplayEndTurnButton(self): return oc4host.ui_turn_active()
 	def shouldDisplayWaitingOthers(self): return not oc4host.ui_turn_active()
 	def shouldDisplayWaitingYou(self): return False
 	def shouldDisplayReturn(self): return False
@@ -2284,15 +2664,15 @@ class CyInterface(object):
 	def checkFlashUpdate(self): return False
 	def checkFlashReset(self, ePlayer): pass
 
-	def isScoresVisible(self): return True
+	def isScoresVisible(self): return bool(oc4host.map_toggles()[3])
 	def isScoresMinimized(self): return False
 	def toggleScoresMinimized(self): pass
-	def toggleScoresVisible(self): pass
+	def toggleScoresVisible(self): _setToggle(3)
 	def isOOSVisible(self): return False
 	def isNetStatsVisible(self): return False
-	def isYieldVisibleMode(self): return False
-	def toggleYieldVisibleMode(self): pass
-	def toggleBareMapMode(self): pass
+	def isYieldVisibleMode(self): return bool(oc4host.map_toggles()[2])
+	def toggleYieldVisibleMode(self): _setToggle(2)
+	def toggleBareMapMode(self): _setToggle(1)
 	def isFocused(self): return False
 	def isFocusedWidget(self): return False
 	def isInAdvancedStart(self): return False
@@ -2444,13 +2824,22 @@ class CyEngine(object):
 	def getSelectionCursorVisibility(self): return _engineFlags['cursor']
 	def setSelectionCursorVisibility(self, b): _engineFlags['cursor'] = bool(b)
 	# the plots it marks (oc4host keeps them, the window draws them): coloured, outlined
-	def addColoredPlot(self, iX, iY, color, ePlotStyle, eLayer):
-		oc4host.engine_mark(_int(iX), _int(iY), float(color.r), float(color.g), float(color.b), float(color.a), _int(eLayer, 0), False)
+	# (the Mac engine's has no style, addColoredPlot(iX, iY, color, eLayer): BUG calls it so where
+	# sys.platform is darwin, for its dot map's dots, which on Windows it draws as
+	# PLOT_STYLE_DOT_TARGET, its default icon: so drawn here too, as the Wine game shows them)
+	def addColoredPlot(self, iX, iY, color, ePlotStyle, eLayer=None):
+		if eLayer is None:
+			ePlotStyle, eLayer = _cpe.PlotStyles.PLOT_STYLE_DOT_TARGET, ePlotStyle
+		oc4host.engine_mark(_int(iX), _int(iY), float(color.r), float(color.g), float(color.b), float(color.a), _int(eLayer, 0), False,
+			_int(ePlotStyle, -1))
 
+	# (the Alt forms: a colour by its name, at the alpha given, which stands in for the colour's own,
+	# as the original's: BUG's dot map draws a city not yet given a colour in COLOR_CLEAR, white of
+	# alpha 0, at alpha 1, and the Wine game shows it white, full)
 	def addColoredPlotAlt(self, iX, iY, ePlotStyle, eLayer, szColor, fAlpha):
 		c = _namedColor(szColor)
 		if c is not None:
-			oc4host.engine_mark(_int(iX), _int(iY), c[0], c[1], c[2], c[3] * float(fAlpha), _int(eLayer, 0), False)
+			oc4host.engine_mark(_int(iX), _int(iY), c[0], c[1], c[2], float(fAlpha), _int(eLayer, 0), False, _int(ePlotStyle, -1))
 
 	def clearColoredPlots(self, eLayer): oc4host.engine_clear(_int(eLayer, -1), False)
 
@@ -2460,7 +2849,7 @@ class CyEngine(object):
 	def fillAreaBorderPlotAlt(self, iX, iY, eLayer, szColor, fAlpha):
 		c = _namedColor(szColor)
 		if c is not None:
-			oc4host.engine_mark(_int(iX), _int(iY), c[0], c[1], c[2], c[3] * float(fAlpha), _int(eLayer, 0), True)
+			oc4host.engine_mark(_int(iX), _int(iY), c[0], c[1], c[2], float(fAlpha), _int(eLayer, 0), True)
 
 	def clearAreaBorderPlots(self, eLayer): oc4host.engine_clear(_int(eLayer, -1), True)
 
@@ -2537,16 +2926,19 @@ _cpe.CyUserProfile.isClockOn = lambda self: False
 _cpe.CyUserProfile.wasClockJustTurnedOn = lambda self: False
 _cpe.CyUserProfile.setClockJustTurnedOn = lambda self, b: None
 _cpe.CyUserProfile.getGraphicOption = lambda self, i: False
-# (the map's toggles by the minimap, as they start: no grid, no bare map, no yields, the scores shown)
-_cpe.CyUserProfile.getGrid = lambda self: False
-_cpe.CyUserProfile.getMap = lambda self: False
-_cpe.CyUserProfile.getYields = lambda self: False
-_cpe.CyUserProfile.getScores = lambda self: True
+# (the map's toggles by the minimap, as they are: oc4options keeps them in the profile)
+_cpe.CyUserProfile.getGrid = lambda self: bool(oc4host.map_toggles()[0])
+_cpe.CyUserProfile.getMap = lambda self: bool(oc4host.map_toggles()[1])
+_cpe.CyUserProfile.getYields = lambda self: bool(oc4host.map_toggles()[2])
+_cpe.CyUserProfile.getScores = lambda self: bool(oc4host.map_toggles()[3])
+
+
+_clockText = [lambda: unicode(time.strftime('%H:%M'))] # (oc4options': the user's time format, the alarm's *)
 
 
 def getClockText():
 	"""The time of day for the interface's clock (the engine's, in CvPythonExtensions)."""
-	return unicode(time.strftime('%H:%M'))
+	return _clockText[0]()
 
 
 _cpe.getClockText = getClockText

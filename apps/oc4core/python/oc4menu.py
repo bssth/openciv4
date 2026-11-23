@@ -122,9 +122,24 @@ def _draw():
 	{'main': _mainPage, 'new': _newPage, 'custom': _customPage, 'load': _loadPage, 'multi': _multiPage, 'mods': _modsPage}[_state['page']](screen, W, H)
 
 
+def _openingMenu():
+	"""The opening menu the options chose (CyUserProfile.getMainMenu: CIV4MainMenus.xml), or None."""
+	try:
+		gc = _gc()
+		i = int(_cpe.CyUserProfile().getMainMenu())
+		if 0 <= i < gc.getNumMainMenus():
+			return gc.getMainMenus(i)
+	except Exception:
+		pass
+	return None
+
+
 def _background():
+	"""The chosen opening menu's loading picture (the original shows its 3D scene), else BtS's."""
 	afm = _cpe.CyArtFileMgr()
-	for tag in ('MAINMENU_LOAD_BTS', 'MAINMENU_LOAD'):
+	menu = _openingMenu()
+	tags = ((menu.getLoading(),) if menu else ()) + ('MAINMENU_LOAD_BTS', 'MAINMENU_LOAD')
+	for tag in tags:
 		try:
 			info = afm.getInterfaceArtInfo(tag)
 			if info and info.getPath():
@@ -132,6 +147,15 @@ def _background():
 		except Exception:
 			pass
 	return ''
+
+
+def soundtrack():
+	"""The chosen opening menu's music (its 2D sound script), for the host."""
+	menu = _openingMenu()
+	try:
+		return str(menu.getSoundtrack()) if menu and menu.getSoundtrack() else 'AS2D_OPENING_MENU'
+	except Exception:
+		return 'AS2D_OPENING_MENU'
 
 
 def _button(screen, name, text, x, y, w, h=40):

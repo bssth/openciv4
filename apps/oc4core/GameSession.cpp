@@ -421,7 +421,6 @@ namespace oc4::host
 	void GameSession::startScenario(const NewGameSettings& settings)
 	{
 		m_utility.setGameInitializing(true);
-		m_utility.setProfileOptionsFromPlayer(NO_PLAYER);
 		m_python.run(std::format("import random\nrandom.seed({})\n", settings.seed));
 		setupScenarioInitCore(settings);
 		CvInitCore& ic = GC.getInitCore();
@@ -477,7 +476,6 @@ namespace oc4::host
 			return;
 		}
 		m_utility.setGameInitializing(true);
-		m_utility.setProfileOptionsFromPlayer(NO_PLAYER);
 		setupInitCore(settings);
 		CvInitCore& ic = GC.getInitCore();
 		CvGame& game = GC.getGame();
@@ -624,7 +622,6 @@ namespace oc4::host
 			player(p).updateHuman();
 		}
 		GC.getGame().setActivePlayer(static_cast<PlayerTypes>(seat));
-		m_utility.setProfileOptionsFromPlayer(static_cast<PlayerTypes>(seat));
 		// (the mods' scripts draw from Python's random module too: the same numbers in every game)
 		m_python.run(std::format("import random\nrandom.seed({})\n", ic.getSyncRandSeed() ^ unsigned(GC.getGame().getGameTurn())));
 		setInterfaceTime(true); // (from now on, between frames)
@@ -805,9 +802,9 @@ namespace oc4::host
 			throw std::runtime_error(path.filename().string() + ": game data does not match this game core (wrong mod or DLL?)");
 
 		// CvGame::read picks the active player of single player games; for hotseat and
-		// other multiplayer types the engine does: the human whose turn it is. The saved
-		// options of the human at the seat stand in for the user profile (the DLL sends
-		// the profile's options to the new active player).
+		// other multiplayer types the engine does: the human whose turn it is. The DLL then
+		// sends the user profile's options to the active player, as in the original (the
+		// saved ones are overwritten: the profile's are the player's, in every game).
 		if (GC.getGame().getActivePlayer() == NO_PLAYER)
 		{
 			int chosen = NO_PLAYER;
@@ -818,13 +815,8 @@ namespace oc4::host
 				if (player(p).isHuman())
 					chosen = p;
 			if (chosen != NO_PLAYER)
-			{
-				m_utility.setProfileOptionsFromPlayer(static_cast<PlayerTypes>(chosen));
 				GC.getGame().setActivePlayer(static_cast<PlayerTypes>(chosen));
-			}
 		}
-		else
-			m_utility.setProfileOptionsFromPlayer(GC.getGame().getActivePlayer());
 
 		// Script data back to Python: CvAppInterface.onLoad((pickle,)).
 		void* args[] = { PyString_FromStringAndSize(save.pythonData.data(), Py_ssize_t(save.pythonData.size())) };

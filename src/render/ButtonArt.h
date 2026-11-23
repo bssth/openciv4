@@ -54,12 +54,17 @@ namespace oc4::render
 		const Picture* picture(const std::string& file);
 		// The game font's cell of the character: false without one.
 		bool fontGlyph(int code, Icon& icon);
-		const Picture* readFont();
+		// (sheet 0: GameFont.tga; 1: GameFont_75.tga)
+		const Picture* readFont(int sheet);
 
-		// The font's icon cells, by character: x0, y0, x1, y1 in its picture.
-		std::map<int, std::array<uint32_t, 4>> m_glyphs;
+		// The fonts' icon cells, by character: x0, y0, x1, y1 in its picture.
+		struct FontSheet
+		{
+			std::map<int, std::array<uint32_t, 4>> glyphs;
+			bool read = false;
+		};
+		std::array<FontSheet, 2> m_sheets;
 		std::vector<FontGroup> m_fontLayout;
-		bool m_glyphsRead = false;
 
 		const AssetResolver& m_assets;
 		std::map<std::string, Icon> m_icons;

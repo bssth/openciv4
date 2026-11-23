@@ -83,6 +83,18 @@ int main(int argc, char** argv)
 						int(b->image[i].x1), int(b->image[i].y1));
 			}
 		}
+		if (n.find("able") != std::string::npos && n.find('/') == std::string::npos)
+			if (const Theme::Table* t = theme.table(n))
+			{
+				// (a table style: its row's least height, the room round a cell's content, its rows)
+				std::printf("%s: table, cell height %g, content margin %g,%g,%g,%g\n", n.c_str(), t->cellHeight, t->content[0], t->content[1], t->content[2],
+					t->content[3]);
+				printSkin("inner", t->inner);
+				static const char* kRows[] = { "row", "row rollover", "row select", "row select rollover" };
+				for (size_t alt = 0; alt < 2; ++alt)
+					for (size_t i = 0; i < Theme::Table::RowCount; ++i)
+						printSkin((std::string(alt ? "alt " : "") + kRows[i]).c_str(), t->row[alt][i]);
+			}
 		if (const size_t at = n.find('/'); at != std::string::npos)
 		{
 			// "style/property": that skin (an empty style: the theme's own skin of that name)

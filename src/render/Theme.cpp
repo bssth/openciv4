@@ -262,6 +262,10 @@ namespace oc4::render
 				{ "BUTTON_STYLE_CITY_B03BC", "Button_CityBtn10_Style" }, { "BUTTON_STYLE_CITY_B03BR", "Button_CityBtn11_Style" },
 				{ "BUTTON_STYLE_CITY_PLUS", "Button_Plus_Style" }, { "BUTTON_STYLE_CITY_MINUS", "Button_Minus_Style" },
 				{ "BUTTON_STYLE_ARROW_LEFT", "Button_CityArrowL_Style" }, { "BUTTON_STYLE_ARROW_RIGHT", "Button_CityArrowR_Style" },
+				// (TableStyles, by their names: Civ4Theme_Custom.thm's custom tables)
+				{ "TABLE_STYLE_STANDARD", "GFC_Control_StandardTable_Style" }, { "TABLE_STYLE_EMPTY", "Table_Empty_Style" },
+				{ "TABLE_STYLE_ALTEMPTY", "Table_AltEmpty_Style" }, { "TABLE_STYLE_CITY", "Table_City_Style" },
+				{ "TABLE_STYLE_EMPTYSELECTINACTIVE", "Table_EmptySelectInactive_Style" }, { "TABLE_STYLE_ALTDEFAULT", "Table_AltStandard_Style" },
 			};
 			return m;
 		}
@@ -287,6 +291,7 @@ namespace oc4::render
 		std::map<std::string, std::unique_ptr<Panel>, std::less<>> panels;   // (null: the theme has none)
 		std::map<std::string, std::unique_ptr<Button>, std::less<>> buttons;
 		std::map<std::string, std::unique_ptr<Progress>, std::less<>> progresses;
+		std::map<std::string, std::unique_ptr<Table>, std::less<>> tables;
 		std::vector<std::string> problems;
 		std::set<std::string> told;
 		bool loaded = false;
@@ -725,7 +730,17 @@ namespace oc4::render
 			if (const Value* f = has("FactorColor"))
 				if (const Value* combine = resolve(s, has("FactorCombine"));
 					combine && combine->kind == Value::Kind::Call && !combine->args.empty() && combine->args[0].text == "Modulate")
+				{
 					tinted = colour(s, f, tint, tintAlpha);
+					l.panelColour = tinted && f->kind == Value::Kind::Name && f->text == "GFC_Control_Panel_Color_Inner";
+					l.tintAlpha = tintAlpha;
+				}
+			// (FactorCombine's second part is the alpha's: "Source" keeps the image's own, the colour
+			// tints only; PANEL_STYLE_MAIN's, opaque as in the original, so the military advisor's
+			// SIT-REP panel hides what is under it)
+			if (const Value* combine = resolve(s, has("FactorCombine"));
+				tinted && combine && combine->args.size() > 1 && combine->args[1].text == "Source")
+				tintAlpha = l.tintAlpha = 1;
 			if (const Value* v = has("Image"))
 				l.image = bitmap(s, v, tinted ? &tint : nullptr, tintAlpha);
 			if (const Value* v = has("Center"))
@@ -759,6 +774,12 @@ namespace oc4::render
 						l.middle = Layer::Middle::Fill;
 					else if (f.text == "GFC_BITMAPSKIN_SIDES_NOTVISIBLE")
 						l.sides = false;
+					else if (f.text == "GFC_BITMAPSKIN_SIDES_FILL")
+					{
+						l.sidesFill = true;
+						if (const Value* c = has("FactorColor"); c && l.fillAlpha == 0)
+							colour(s, c, l.fill, l.fillAlpha);
+					}
 					else if (f.text == "GFC_BITMAPSKIN_NOTVISIBLE")
 						l.image = l.center = {};
 				}
@@ -791,7 +812,7 @@ namespace oc4::render
 					next = end = 0;
 				}
 			}
-			std::erase_if(out, [](const Layer& l) { return !l.image && !l.center && l.middle != Layer::Middle::Fill; });
+			std::erase_if(out, [](const Layer& l) { return !l.image && !l.center && l.middle != Layer::Middle::Fill && !(l.sidesFill && l.fillAlpha > 0); });
 			return out;
 		}
 
@@ -846,6 +867,36 @@ namespace oc4::render
 	}
 
 	std::filesystem::path Theme::file() const { return m->base; }
+
+	std::vector<fs::path> Theme::fontFolders() const
+	{
+		std::vector<fs::path> out;
+		std::error_code ec;
+		const auto add = [&](const fs::path& p) {
+			if (fs::is_directory(p, ec) && std::ranges::find(out, p) == out.end())
+				out.push_back(p);
+		};
+		for (const fs::path& layer : m->roots) // (each layer's Assets folder's parent)
+		{
+			add(layer / "Resource" / "Civ4");
+			add(layer / "Resource" / "Fonts");
+			add(layer / "Assets" / "res" / "Fonts");
+		}
+		// A Wine prefix: .../drive_c/Program Files/... holds the Windows fonts the original had.
+		for (const fs::path& layer : m->roots)
+			for (fs::path p = layer; p.has_relative_path() && p != p.parent_path(); p = p.parent_path())
+				if (lower(utf8Path(p.filename())) == "drive_c")
+				{
+					for (const char* fonts : { "windows/Fonts", "Windows/Fonts", "windows/fonts" }) // (the first there: one folder)
+						if (fs::is_directory(p / fonts, ec))
+						{
+							add(p / fonts);
+							break;
+						}
+					break;
+				}
+		return out;
+	}
 
 	bool Theme::loaded() const { return m->loaded; }
 	const std::vector<std::string>& Theme::problems() const { return m->problems; }
@@ -925,6 +976,52 @@ namespace oc4::render
 		return (m->progresses[key] = std::move(p)).get();
 	}
 
+	const Theme::Table* Theme::table(std::string_view style)
+	{
+		if (const auto it = m->tables.find(style); it != m->tables.end())
+			return it->second.get();
+		std::unique_ptr<Table> t;
+		const Style* s = m->loaded ? m->styleFor(style) : nullptr;
+		if (!s && m->loaded)
+			s = m->findStyle("GFC_Control_StandardTable_Style");
+		if (s)
+		{
+			// (Civ4Theme_Table.thm: the standard table's rows are blank, every other one
+			// selection.tga in AltCell, a selected one in Select; Table_StandardCiv_Style adds the
+			// Rollover gold; GFC_Control_Size_ListItem, 24, is the cell's height)
+			t = std::make_unique<Table>();
+			static const char* const kRow[] = { "Default", "Rollover", "Select", "SelectRollover" };
+			for (size_t alt = 0; alt < 2; ++alt)
+				for (size_t i = 0; i < Table::RowCount; ++i)
+					t->row[alt][i] = m->skin(s, m->property(s, std::string("GFC_CtrlTheme_Bitmap_Control_Table_Skin_Row_") + (alt ? "Alt_" : "") + kRow[i]));
+			if (const Value* v = m->resolve(s, m->property(s, "GFC_Control_Table_Size_CellHeight")); v && v->kind == Value::Kind::Number && v->number > 0)
+				t->cellHeight = float(v->number);
+			if (const Value* v = m->resolve(s, m->property(s, "GFC_Control_Table_Size_Header"));
+				v && v->kind == Value::Kind::Call && v->args.size() >= 2 && v->args[1].kind == Value::Kind::Number && v->args[1].number > 0)
+				t->headerHeight = float(v->args[1].number);
+			if (const Value* h = m->resolve(s, m->property(s, "GFC_Control_Table_StyleId_HHeader"));
+				h && h->kind == Value::Kind::Call && h->text == "GPropertyId" && !h->args.empty())
+				if (const Style* hs = m->findStyle(h->args[0].text))
+				{
+					if (const Value* b = m->resolve(hs, m->property(hs, "GFC_Control_Header_StyleId_HButton"));
+						b && b->kind == Value::Kind::Call && b->text == "GPropertyId" && !b->args.empty())
+						t->header = button(b->args[0].text);
+					static const char* const kSort[] = { "GFC_Control_Header_StyleId_HSortAscendButton", "GFC_Control_Header_StyleId_HSortDescendButton" };
+					for (size_t d = 0; d < 2; ++d)
+						if (const Value* b = m->resolve(hs, m->property(hs, kSort[d]));
+							b && b->kind == Value::Kind::Call && b->text == "GPropertyId" && !b->args.empty())
+							if (const Button* arrow = button(b->args[0].text))
+								t->sortArrow[d] = arrow->image[size_t(State::Default)];
+				}
+			m->margins(s, m->property(s, "GFC_Control_Table_Size_CellContentMargin"), t->content);
+			// (the standard table's: table_innerTB.tga in the theme's BG; a GFlags(...) NoInnerFill none)
+			const Value* noFill = m->resolve(s, m->property(s, "GFC_Control_Table_Flag_NoInnerFill"));
+			if (!noFill || noFill->kind != Value::Kind::Call)
+				t->inner = m->skin(s, m->property(s, "GFC_CtrlTheme_Bitmap_Control_Table_Skin_Inner_Default"));
+		}
+		return (m->tables[std::string(style)] = std::move(t)).get();
+	}
+
 	Theme::Bitmap Theme::modulate(const Bitmap& b, Color c, float alpha)
 	{
 		if (!b)
@@ -935,6 +1032,27 @@ namespace oc4::render
 		Bitmap out = b;
 		if (const Picture* p = m->picture(b.picture->path, &q, level(alpha)))
 			out.picture = p;
+		return out;
+	}
+
+	Color Theme::colour(std::string_view name, Color fallback)
+	{
+		Color c = fallback;
+		float alpha = 1;
+		if (m->loaded && !m->colour(nullptr, m->anywhere(std::string(name)), c, alpha))
+			c = fallback;
+		return c;
+	}
+
+	Theme::Skin Theme::recoloured(const Skin& skin, Color colour)
+	{
+		Skin out = skin;
+		for (Layer& l : out)
+			if (l.panelColour)
+			{
+				l.image = modulate(l.image, colour, l.tintAlpha);
+				l.center = modulate(l.center, colour, l.tintAlpha);
+			}
 		return out;
 	}
 
@@ -957,6 +1075,34 @@ namespace oc4::render
 							const int straight = slot->bgra[i + k] * 255 / a; // (premultiplied: undo, add, again)
 							slot->bgra[i + k] = uint8_t(std::clamp(straight + add[k], 0, 255) * a / 255);
 						}
+				slot->key = (uint64_t(0x7E) << 56) | ++m->nextKey;
+			}
+		Bitmap out = b;
+		if (slot)
+			out.picture = slot.get();
+		return out;
+	}
+
+	Theme::Bitmap Theme::glow(const Bitmap& b, Color c)
+	{
+		if (!b)
+			return b;
+		const int r = std::clamp(int(c.r * 255), 0, 255), g = std::clamp(int(c.g * 255), 0, 255), bl = std::clamp(int(c.b * 255), 0, 255);
+		const std::string key = lower(b.picture->path) + "|glow" + std::to_string(r) + "," + std::to_string(g) + "," + std::to_string(bl);
+		auto& slot = m->pictures[key];
+		if (!slot)
+			if (const Picture* plain = m->picture(b.picture->path, nullptr, 1))
+			{
+				slot = std::make_unique<Picture>(*plain);
+				const int colour[3] = { bl, g, r }; // (BGRA)
+				for (size_t i = 0; i + 3 < slot->bgra.size(); i += 4)
+				{
+					// (its brightness the alpha: white is the colour, black nothing; premultiplied)
+					const int lum = std::max({ slot->bgra[i], slot->bgra[i + 1], slot->bgra[i + 2] }) * slot->bgra[i + 3] / 255;
+					for (int k = 0; k < 3; ++k)
+						slot->bgra[i + size_t(k)] = uint8_t(colour[k] * lum / 255);
+					slot->bgra[i + 3] = uint8_t(lum);
+				}
 				slot->key = (uint64_t(0x7E) << 56) | ++m->nextKey;
 			}
 		Bitmap out = b;
@@ -992,6 +1138,31 @@ namespace oc4::render
 			o.imagePart(b.picture->key, b.picture->bgra, b.picture->width, b.picture->height, 1, x0, y0, x1, y1, b.x0, b.y0, b.x1, b.y1, alpha);
 	}
 
+	bool Theme::covers(const Skin& skin, float rx0, float ry0, float rx1, float ry1, float x, float y)
+	{
+		for (const Layer& l : skin)
+		{
+			// (the layer's place and its nine pieces, as draw puts them)
+			const float x0 = rx0 + l.indent[0], y0 = ry0 + l.indent[1], x1 = rx1 - l.indent[2], y1 = ry1 - l.indent[3];
+			if (x1 <= x0 || y1 <= y0 || x < x0 || x >= x1 || y < y0 || y >= y1)
+				continue;
+			if (l.middle == Layer::Middle::Fill && l.fillAlpha > 0)
+				return true;
+			if (!l.image && !l.center)
+				continue;
+			if (l.middle != Layer::Middle::Empty || !l.image)
+				return true;
+			float ml = l.margin[0], mt = l.margin[1], mr = l.margin[2], mb = l.margin[3];
+			if (ml + mr > x1 - x0)
+				ml = mr = (x1 - x0) / 2;
+			if (mt + mb > y1 - y0)
+				mt = mb = (y1 - y0) / 2;
+			if (x < x0 + ml || x >= x1 - mr || y < y0 + mt || y >= y1 - mb)
+				return true;
+		}
+		return false;
+	}
+
 	void Theme::draw(Overlay& o, const Skin& skin, float rx0, float ry0, float rx1, float ry1, float alpha)
 	{
 		for (const Layer& l : skin)
@@ -1001,6 +1172,17 @@ namespace oc4::render
 				continue;
 			if (l.middle == Layer::Middle::Fill && l.fillAlpha > 0)
 				o.rect(x0, y0, x1, y1, l.fill, l.fillAlpha * alpha);
+			else if (l.sidesFill && l.fillAlpha > 0 && !l.image)
+			{
+				// The ring inside its margin (its middle the glass's, drawn by the window inside it).
+				const float ml = std::min(l.margin[0], (x1 - x0) / 2), mr = std::min(l.margin[2], (x1 - x0) / 2);
+				const float mt = std::min(l.margin[1], (y1 - y0) / 2), mb = std::min(l.margin[3], (y1 - y0) / 2);
+				const float a = l.fillAlpha * alpha;
+				o.rect(x0, y0, x1, y0 + mt, l.fill, a);
+				o.rect(x0, y1 - mb, x1, y1, l.fill, a);
+				o.rect(x0, y0 + mt, x0 + ml, y1 - mb, l.fill, a);
+				o.rect(x1 - mr, y0 + mt, x1, y1 - mb, l.fill, a);
+			}
 			if (const Bitmap& b = l.image)
 			{
 				if (l.middle == Layer::Middle::Fixed && l.margin[0] + l.margin[1] + l.margin[2] + l.margin[3] == 0)
