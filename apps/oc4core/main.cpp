@@ -865,6 +865,24 @@ namespace
 					}
 					return;
 				}
+			// On the city screen Left and Right go to the previous and the next city, as the
+			// original's do (seen in Wine on the TestMap: Left went from Roma to Antium, Right from
+			// Roma to Cumae, the core's Previous and Next City; Up and W A S D did nothing). No action
+			// has them as its hotkey (CIV4ControlInfos.xml: Home and End, the numpad's + and -), so
+			// they run those two here; Up and Down stay nothing.
+			if (ui.isCityScreenUp() && !k.shift && !k.ctrl && !k.alt && (k.key == render::key::Left || k.key == render::key::Right))
+			{
+				const ControlTypes control = k.key == render::key::Right ? CONTROL_NEXTCITY : CONTROL_PREVCITY;
+				for (int i = 0; i < GC.getNumActionInfos(); ++i)
+					if (GC.getActionInfo(i).getControlType() == control)
+					{
+						if (log)
+							std::printf("  key %u: action %d %s (the city screen)\n", k.key, i, host::gameText(GC.getActionInfo(i).getDescription()).c_str());
+						act(i, false, false, false);
+						break;
+					}
+				return;
+			}
 			const int best = hotkeyAction(k, code, false);
 			if (log)
 				std::printf("  key %u%s%s%s: action %d %s\n", k.key, k.shift ? "+shift" : "", k.ctrl ? "+ctrl" : "", k.alt ? "+alt" : "", best,
