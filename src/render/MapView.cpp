@@ -972,6 +972,76 @@ float4 PSWater(WaterOut i) : SV_Target
 		}
 
 		// Under each selected stack the game's ring (false: its art is missing).
+		// A selected unit's bubble, as the original draws it when the unit is down under the
+		// interface's action buttons (seen in Wine: testgames/shots/wine-batch3/s1-galley-low,
+		// s6-settler-low; from 2.95 plots below the camera's look-at on land, 2.85 at sea,
+		// wine-batch4/cut-*): the plot picker's art (CIV4ArtDefines_Interface: PickerBase, a white
+		// disc with a black rim; the button cut by PickerIconMask64, PickerBorderBevel64 over
+		// it; all three 80 points across, so the button shows 64 across in a thin white rim;
+		// PickerArrow turned to point down, its tip 20 points under the disc), over the unit,
+		// the tip at its flag's foot. Its size does not change with the zoom.
+		struct PickerArt
+		{
+			bool tried = false;
+			const ButtonArt::Icon *base = nullptr, *bevel = nullptr, *mask = nullptr;
+			ButtonArt::Icon arrow; // PickerArrow, turned to point down
+			std::unordered_map<uint64_t, ButtonArt::Icon> masked; // by the button's key
+		} picker;
+
+		void drawUnitBubble(Overlay& overlay, float tipX, float tipY, const std::string& button)
+		{
+			if (!picker.tried)
+			{
+				picker.tried = true;
+				picker.base = flagArt.icon("Art/Interface/PlotPicker/PickerBase.dds");
+				picker.bevel = flagArt.icon("Art/Interface/PlotPicker/PickerBorderBevel64.tga");
+				picker.mask = flagArt.icon("Art/Interface/PlotPicker/PickerIconMask64.tga");
+				// (it points right: a quarter turn clockwise)
+				if (const ButtonArt::Icon* a = flagArt.icon("Art/Interface/PlotPicker/PickerArrow.dds"))
+				{
+					picker.arrow = *a;
+					picker.arrow.key = a->key ^ 0x4172726f77446f77ull;
+					picker.arrow.width = a->height;
+					picker.arrow.height = a->width;
+					for (uint32_t y = 0; y < picker.arrow.height; ++y)
+						for (uint32_t x = 0; x < picker.arrow.width; ++x)
+							std::copy_n(&a->bgra[(size_t(a->height - 1 - x) * a->width + y) * 4], 4, &picker.arrow.bgra[(size_t(y) * picker.arrow.width + x) * 4]);
+				}
+			}
+			const ButtonArt::Icon* icon = flagArt.icon(button);
+			if (!picker.base || !icon)
+				return;
+			constexpr float kDisc = 80, kIcon = 80, kTip = 20, kArrow = 32;
+			const float cx = std::round(tipX), cy = std::round(tipY - kTip - kDisc / 2);
+			if (picker.arrow.width)
+				overlay.image(picker.arrow.key, picker.arrow.bgra, picker.arrow.width, picker.arrow.height, 1, cx - kArrow / 2, tipY - kArrow, cx + kArrow / 2,
+					tipY);
+			overlay.image(picker.base->key, picker.base->bgra, picker.base->width, picker.base->height, 1, cx - kDisc / 2, cy - kDisc / 2, cx + kDisc / 2,
+				cy + kDisc / 2);
+			// (the button through the mask's alpha, made once a button)
+			auto [it, added] = picker.masked.try_emplace(icon->key);
+			ButtonArt::Icon& cut = it->second;
+			if (added)
+			{
+				cut = *icon;
+				cut.key = icon->key ^ 0x5069636b65724d61ull;
+				if (picker.mask)
+					for (uint32_t y = 0; y < cut.height; ++y)
+						for (uint32_t x = 0; x < cut.width; ++x)
+						{
+							const uint32_t mx = x * picker.mask->width / cut.width, my = y * picker.mask->height / cut.height;
+							const float a = float(picker.mask->bgra[(size_t(my) * picker.mask->width + mx) * 4 + 3]) / 255;
+							uint8_t* px = &cut.bgra[(size_t(y) * cut.width + x) * 4];
+							for (int c = 0; c < 4; ++c) // (premultiplied: every channel)
+								px[c] = uint8_t(float(px[c]) * a + 0.5f);
+						}
+			}
+			overlay.image(cut.key, cut.bgra, cut.width, cut.height, 1, cx - kIcon / 2, cy - kIcon / 2, cx + kIcon / 2, cy + kIcon / 2);
+			if (picker.bevel)
+				overlay.image(picker.bevel->key, picker.bevel->bgra, picker.bevel->width, picker.bevel->height, 1, cx - kIcon / 2, cy - kIcon / 2,
+					cx + kIcon / 2, cy + kIcon / 2);
+		}
+
 		bool drawRings()
 		{
 			if (!ring.tried)
@@ -4999,6 +5069,8 @@ float4 PSWater(WaterOut i) : SV_Target
 			return x > -50 && x < W + 50 && y > -50 && y < H + 50;
 		};
 		// The units' flags: the visible owner's decal and colours, health, and stack count.
+		const UnitView* bubble = nullptr;
+		std::pair<float, float> bubbleTip;
 		if (options.flags && options.units && distance < 22 && m->renderer.camera().distance > m->map.cameraMinDistance + 0.5f)
 			for (const UnitView& u : m->map.units)
 			{
@@ -5029,10 +5101,20 @@ float4 PSWater(WaterOut i) : SV_Target
 					}
 				}
 				p.z = m->ground(p.x, p.y);
+				// (a selected unit whose plot's centre, on the ground, is under the top of the
+				// interface's action buttons: its bubble, pointing at it from above)
+				if (u.selected && !walking && options.bottomPanel > 0 && !u.button.empty())
+				{
+					float gx = 0, gy = 0;
+					if (toScreen(p, gx, gy) && gy > H - options.bottomPanel)
+						bubble = &u;
+				}
 				p.z += 0.3f * m->S() * m->figureZoom();
 				float x = 0, y = 0;
 				if (!toScreen(p, x, y))
 					continue;
+				if (bubble == &u)
+					bubbleTip = { x, y };
 				const PlayerView* owner = u.shownOwner >= 0 && size_t(u.shownOwner) < m->map.players.size() ? &m->map.players[size_t(u.shownOwner)] : nullptr;
 				const Color primary = owner ? owner->primary : Color{}, secondary = owner ? owner->secondary : Color{ 0, 0, 0 };
 				const float flagScale = scale * std::clamp(18 / std::max(distance, 1.0f), 0.8f, 2.0f);
@@ -5056,6 +5138,8 @@ float4 PSWater(WaterOut i) : SV_Target
 				if (u.count > 1 && (drawn == m->flagDraws.end() || !drawn->second.medallions))
 					overlay.text(std::to_wstring(u.count), x + fw / 2 + 2, topY - 1, 10 * scale, { 1, 1, 1 }, 0.95f, true);
 			}
+		if (bubble)
+			m->drawUnitBubble(overlay, bubbleTip.first, bubbleTip.second, bubble->button);
 		// The city bars, as the original's CityBar.nif lays them out (in its units: the banner
 		// 128 x 32 with its top at the origin, the population's circle at its left end, the
 		// production symbol at its right end, the icon line above), facing the screen.

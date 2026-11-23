@@ -34,6 +34,10 @@ namespace oc4::render
 			// A city's screen is up: as the original, no units (nor their flags and health) and no
 			// city bars on the map; the cities, signs and plots stay.
 			bool cityScreen = false;
+			// The main interface's action buttons: their top edge, in points from the screen's
+			// bottom (0: none shown). A selected unit whose plot's centre is under it gets its
+			// button's bubble over it, as the original's.
+			float bottomPanel = 0;
 		};
 
 		MapView(Renderer& renderer, const AssetResolver& assets);
