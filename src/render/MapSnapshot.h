@@ -106,7 +106,7 @@ namespace oc4::render
 	// holds a set of them ("1x1_01"), covering width x height lots of the city's layout.
 	struct CityHouseArt
 	{
-		std::string nif, node;
+		std::string nif, node; // (no node: the whole model)
 		int width = 1, height = 1;
 	};
 
@@ -255,6 +255,10 @@ namespace oc4::render
 		std::vector<CityWallView> walls;
 		int generics = 0;
 		int houseSet = -1; // into MapSnapshot::houseSets
+		int paving = -1;   // into MapSnapshot::cityHouses: the paving of its lots in pairs (2x2), for its era
+		// The effects the game core shows over it (CvCity::getVisibleEffects: an occupied city's
+		// fire, an angry one's smoke, an unhealthy one's fumes, fireworks): CIV4EffectInfos types.
+		std::vector<std::string> effects;
 	};
 
 	struct MapSnapshot
@@ -316,6 +320,7 @@ namespace oc4::render
 		// What the plot LSystem lays out on plots (PlotView::layout): farms.
 		std::vector<std::vector<PlotPiece>> plotLayouts;
 		float cityLayoutSize = 0.72f, cityTwist = -0.7853982f;
+		float cityTreeCut = 1.0f; // CITY_TREECUT_SCALE: the trees in a circle so many plots across round a city's middle go
 
 		// The map. World units as the game's (PLOT_SIZE per plot); heights of hills and peaks
 		// in plots (CvLandscapeInfo).
