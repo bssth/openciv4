@@ -29,6 +29,7 @@ namespace oc4::host
 			std::filesystem::create_directories(m_logDir);
 		m_text.setTagResolver(resolveTextTag);
 		m_interface.diplomacyWaiting = [this] { return m_diplomacy.active() || m_diplomacy.waiting(); };
+		m_interface.diplomacyUp = [this] { return m_diplomacy.active(); };
 		m_interface.diplomacyAsked = [this](CvDiploParameters* params, PlayerTypes p) { m_diplomacy.ask(params, p); };
 		m_interface.sounds = &m_sounds;
 	}

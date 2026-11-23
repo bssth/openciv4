@@ -171,6 +171,7 @@ namespace oc4::host
 		bool isDiploOrPopupWaiting() override { return isPopupUp() || isPopupQueued() || (diplomacyWaiting && diplomacyWaiting()); }
 		// A talk is up or waits (the host's diplomacy).
 		std::function<bool()> diplomacyWaiting;
+		std::function<bool()> diplomacyUp; // (a talk is up)
 		std::function<void(CvDiploParameters*, PlayerTypes)> diplomacyAsked; // (a talk the player asked for)
 		// The player's contact with a leader (CvPlayer::contact): the talk waits in the player's
 		// queue for the screen, as the AI's do.

@@ -1109,8 +1109,9 @@ namespace oc4::host
 			m_queued.push_front({ info, active });
 			next = m_queued.begin();
 		}
-		// (one wonder's movie after the other, each once the last is closed)
-		if (next->info && next->info->getButtonPopupType() == BUTTONPOPUP_PYTHON_SCREEN && screenUp && screenUp())
+		// (the game's queued popups wait while a screen of its own or a talk is up, as the original's: a tech's splash first)
+		if (next->info && (next->info->getButtonPopupType() == BUTTONPOPUP_PYTHON_SCREEN || !next->added) &&
+			((screenUp && screenUp()) || (diplomacyUp && diplomacyUp())))
 			return;
 		if (next->ready)
 		{

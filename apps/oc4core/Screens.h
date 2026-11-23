@@ -93,6 +93,11 @@ namespace oc4::host
 		void input(render::MapWindow& window);
 		// Esc: closes the screen on top that closes so (not the main interface); true if one did.
 		bool escape();
+		// The newest screen up that closes on Esc closes, stopping at a talk (none over it: false).
+		bool closeTop();
+		// A screen of its own is up that keeps the map's input (a new tech's splash, an advisor):
+		// the map takes no clicks and the units no keys; Enter closes it, as Esc does.
+		bool holdsInput();
 		bool diploKey(unsigned key); // a key while a talk is up: the talk's (Enter, 1 to 9, Esc)
 		// A left click on the widget so named (its part `part`, or the first), as from the
 		// window (a scripted game); false if no such widget is shown.

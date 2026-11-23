@@ -2102,6 +2102,15 @@ def _forget(s):
 		s.minimap, s.helpArea, s.endTurn = None, None, None
 
 
+def holdsInput():
+	"""The host: whether a screen of its own is up that keeps the map's input (showScreen without
+	bPassInput: a new tech's splash, an advisor): the map takes no clicks and the units no keys."""
+	for s in _screens.values():
+		if s.shown and not s.main and s.id != _DIPLO and not s.passInput:
+			return True
+	return False
+
+
 def modalUp():
 	"""The host: whether a screen of its own is up over the map (an advisor, a wonder's movie)."""
 	for s in _screens.values():
