@@ -420,6 +420,7 @@ namespace oc4::host
 
 	void GameSession::startScenario(const NewGameSettings& settings)
 	{
+		m_engineData.clear();
 		m_utility.setGameInitializing(true);
 		m_utility.setProfileOptionsFromPlayer(NO_PLAYER);
 		m_python.run(std::format("import random\nrandom.seed({})\n", settings.seed));
@@ -476,6 +477,7 @@ namespace oc4::host
 			startScenario(settings);
 			return;
 		}
+		m_engineData.clear();
 		m_utility.setGameInitializing(true);
 		m_utility.setProfileOptionsFromPlayer(NO_PLAYER);
 		setupInitCore(settings);
@@ -747,6 +749,7 @@ namespace oc4::host
 		if (m_python.callFunction("CvAppInterface", "onSave", nullptr, &pickled))
 			save.pythonData.assign(reinterpret_cast<const char*>(pickled.data()), pickled.size());
 
+		save.engineData = m_engineData;
 		save.write(path);
 	}
 
@@ -831,6 +834,7 @@ namespace oc4::host
 		m_python.callFunction("CvAppInterface", "onLoad", m_python.MakeFunctionArgs(args, 1));
 		m_python.callFunction("CvAppInterface", "preGameStart", nullptr); // after "OnLoad", as the original engine
 
+		m_engineData = save.engineData;
 		m_utility.setGameInitializing(false);
 		m_utility.setGameActive(true);
 	}

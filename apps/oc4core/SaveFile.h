@@ -11,7 +11,8 @@
 //   chunks  [int size][bytes] of one zlib stream (64 KB output buffers, ended by a
 //           sync flush instead of Z_FINISH), then int 0
 //   string  pickled Python data (CvAppInterface.onSave), narrow
-//   33 x 0
+//   bytes   the engine's own section: the map's signs and the lines it laid (the Great Wall);
+//           33 x 0 when there are none (SaveFile::engineData)
 //   string  32 hex digits of an MD5 (salted: it is not a plain hash of the file or of
 //           any part of it, so it is written over the save data and ignored on load)
 //
@@ -33,6 +34,7 @@ namespace oc4::host
 		std::vector<std::byte> initCore; // CvInitCore::write
 		std::vector<std::byte> gameData; // decompressed DLL data
 		std::string pythonData;          // pickle string
+		std::vector<std::byte> engineData; // the engine's section after the Python data
 		std::string md5;
 
 		// Throws std::runtime_error on malformed files.

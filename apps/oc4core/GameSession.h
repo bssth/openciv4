@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "NewGameSettings.h"
 
@@ -73,6 +74,9 @@ namespace oc4::host
 		Utility& m_utility;
 		PythonHost& m_python;
 		std::string m_modFolder;
+		// The engine's section of the save this game was loaded from (its signs and Great Wall lines,
+		// see SaveFile.h), written back as it was by saveGame; empty for a new game (33 zeros).
+		std::vector<std::byte> m_engineData;
 
 		struct AutoPlay
 		{

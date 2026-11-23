@@ -13,6 +13,7 @@
 #endif
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
@@ -126,6 +127,24 @@ namespace oc4::host
 			w.i32(0);
 		}
 
+		// The first MD5 string at or after `from`: int 32 and 32 hex digits. The engine's section before
+		// it can't hold one: its sign texts are UTF-16 and its numbers are ints and floats.
+		size_t findMd5(const std::vector<std::byte>& d, size_t from)
+		{
+			const auto isHex = [](std::byte b) {
+				const char c = char(b);
+				return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+			};
+			for (size_t q = from; q + 36 <= d.size(); ++q)
+			{
+				int n;
+				std::memcpy(&n, d.data() + q, 4);
+				if (n == 32 && std::all_of(d.begin() + std::ptrdiff_t(q + 4), d.begin() + std::ptrdiff_t(q + 36), isHex))
+					return q;
+			}
+			return std::string::npos;
+		}
+
 		std::string md5Hex(const std::vector<std::byte>& data)
 		{
 			unsigned char hash[16] = {};
@@ -175,7 +194,12 @@ namespace oc4::host
 		}
 		s.gameData = inflateStream(compressed);
 		s.pythonData = r.str();
-		r.bytes(kTrailerZeros);
+		// The engine's own section runs up to the MD5 string (int 32, then 32 hex digits), the save's
+		// last field. Its size isn't stored, so the reader finds the string by its form.
+		const size_t md5At = findMd5(file, r.p);
+		if (md5At == std::string::npos)
+			throw std::runtime_error("save file truncated");
+		s.engineData = r.bytes(md5At - r.p);
 		s.md5 = r.str();
 		return s;
 	}
@@ -192,8 +216,13 @@ namespace oc4::host
 		w.i32(0);
 		deflateChunks(gameData, w);
 		w.str(pythonData);
-		const std::byte zeros[kTrailerZeros] = {};
-		w.raw(zeros, sizeof zeros);
+		if (engineData.empty())
+		{
+			const std::byte zeros[kTrailerZeros] = {};
+			w.raw(zeros, sizeof zeros);
+		}
+		else
+			w.raw(engineData.data(), engineData.size());
 		w.str(md5Hex(gameData));
 
 		const auto tmp = std::filesystem::path(path).concat(".tmp");
