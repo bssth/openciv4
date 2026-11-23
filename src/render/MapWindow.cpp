@@ -1687,9 +1687,10 @@ namespace oc4::render
 			renderHeads();
 			if (!overlay->begin())
 				return;
-			view->drawOverlay(*overlay);
 			drawMarks();
 			drawLayers();
+			// Keep city banners legible over yield icons and resource pins.
+			view->drawOverlay(*overlay);
 			drawPath();
 			if (ui.active())
 			{
