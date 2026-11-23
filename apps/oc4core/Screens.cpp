@@ -1317,22 +1317,25 @@ if _walls:
 		m_mouse = window.mousePosition();
 		// A movie at its end: its screen hears NOTIFY_MOVIE_DONE.
 		constexpr int kMovieDone = 17;
-		// Keys typed into an edit box, and whether one takes them.
-		try
+		const auto type = [](const std::wstring& typed)
 		{
-			py::module_ screens = py::module_::import("oc4screens");
-			if (const std::wstring typed = window.takeUiTyped(); !typed.empty())
-				screens.attr("typeIntoEdit")(typed);
-			window.setUiTextFocus(screens.attr("editFocused")().cast<bool>());
-		}
-		catch (py::error_already_set& e)
-		{
-			printPythonError(e);
-		}
+			if (typed.empty())
+				return;
+			try
+			{
+				py::module_::import("oc4screens").attr("typeIntoEdit")(typed);
+			}
+			catch (py::error_already_set& e)
+			{
+				printPythonError(e);
+			}
+		};
 		for (const std::string& file : window.takeMoviesDone())
 			if (const auto it = std::ranges::find(m_items, file, &Item::movie); it != m_items.end())
 				scriptInput(*it, kMovieDone, 0, 0, false, false, false, false);
 		for (const auto& click : window.takeUiClicks())
+		{
+			type(click.typedBefore);
 			if (click.item < 0)
 			{
 				// (a click on none of the widgets closes an open pull down's list, ends typing)
@@ -1352,6 +1355,16 @@ if _walls:
 					std::printf("  mouse on %d/%s/%d\n", m_items[size_t(click.item)].screen, m_items[size_t(click.item)].name.c_str(), m_items[size_t(click.item)].part);
 				this->click(m_items[size_t(click.item)], click.right, click.shift, click.ctrl, click.alt);
 			}
+		}
+		type(window.takeUiTyped());
+		try
+		{
+			window.setUiTextFocus(py::module_::import("oc4screens").attr("editFocused")().cast<bool>());
+		}
+		catch (py::error_already_set& e)
+		{
+			printPythonError(e);
+		}
 	}
 
 	bool Screens::click(const std::string& name, int part, bool shift, bool ctrl, bool alt)

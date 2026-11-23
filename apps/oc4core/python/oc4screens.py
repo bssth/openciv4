@@ -33,6 +33,7 @@ _drop = [None, 0]       # the pull down whose list is open (file id, name), and 
 _areas = []             # what scrolls under the mouse, back to front: (x0, y0, x1, y1, file id, name, step, down, sideways)
 _bars = {}              # the scroll bars: (file id, name, part) -> (x0, y0, x1, y1)
 _dropRects = {}         # where each pull down is: (file id, name) -> (x0, y0, x1, y1)
+_editSelectAll = [False]
 _editFocus = [None]     # the edit box typed into: (file id, name), or None
 
 
@@ -89,7 +90,7 @@ class _Widget(object):
 	__slots__ = ('name', 'kind', 'parent', 'mode', 'x', 'y', 'z', 'w', 'h', 'style', 'pstyle', 'text', 'help', 'tex', 'tex2',
 		'wt', 'd1', 'd2', 'opt', 'flags', 'font', 'shown', 'enabled', 'state', 'hittest', 'seq', 'vertical', 'scroll', 'children',
 		'bars', 'lists', 'columns', 'rows', 'headers', 'iconw', 'iconh', 'items', 'selected', 'color', 'size', 'defw', 'defh', 'points',
-		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed')
+		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed', 'password')
 
 	def __init__(self, name, kind):
 		self.name = name
@@ -115,6 +116,7 @@ class _Widget(object):
 		self.scroll = False
 		self.children = []
 		self.maxChars = 0      # an edit box's: at most this many characters (0: any)
+		self.password = False
 		self.allowed = None    # ... and only these (None: any)
 		self.bars = None       # stacked bars: [[percent, (r, g, b, a)], ...]
 		self.lists = None      # multi lists: [[(texture, wt, d1, d2, option, disabledTexture), ...], ...]
@@ -1265,6 +1267,11 @@ class CyGInterfaceScreen(object):
 		w = self._s.get(szName)
 		return w.text if w is not None else u''
 
+	def setEditBoxPassword(self, szName):
+		w = self._s.get(szName)
+		if w is not None and w.kind == 'edit':
+			_set(w, 'password', True)
+
 	def setEditBoxMaxCharCount(self, szName, iMaxCharCount=0, *args):
 		w = self._s.get(szName)
 		if w is not None:
@@ -1684,7 +1691,7 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 	flags = w.flags
 	if kind == 'text' and w.mode == 'rel':
 		flags = (flags & ~(_FONT_CENTER | _FONT_RIGHT)) | _FONT_LEFT
-	text = w.text
+	text = u'*' * len(w.text) if kind == 'edit' and w.password else w.text
 	if kind == 'edit' and _editFocus[0] == (s.id, w.name):
 		text = text + u'|' # (the caret: typed into)
 	out.append((base + (-1,), kind, x, y, x + width, y + height, clip, w.style if w.style else w.pstyle, text, w.tex, w.tex2, w.font, flags,
@@ -1863,19 +1870,31 @@ def openDropdown(fileId, name):
 	_changed()
 
 
+def _availableEdit(screen, widget):
+	if widget is None or widget.kind != 'edit' or not widget.enabled or not screen.shown:
+		return False
+	while widget is not None:
+		if not widget.shown:
+			return False
+		widget = screen.get(widget.parent) if widget.parent is not None else None
+	return True
+
+
 def _focusedEdit():
 	if _editFocus[0] is None:
 		return None
-	s = _screens.get(_editFocus[0][0])
-	w = s.get(_editFocus[0][1]) if s is not None else None
-	return w if w is not None and w.kind == 'edit' and w.enabled and s.shown else None
+	fileId, name = _editFocus[0]
+	s = _screens.get(fileId)
+	w = s.get(name) if s is not None else None
+	return w if _availableEdit(s, w) else None
 
 
 def focusEdit(fileId, name):
 	"""A click on an edit box: the keys type into it (on anything else: into none)."""
 	s = _screens.get(int(fileId))
 	w = s.get(_str(name)) if s is not None else None
-	key = (int(fileId), _str(name)) if w is not None and w.kind == 'edit' and w.enabled else None
+	key = (int(fileId), _str(name)) if _availableEdit(s, w) else None
+	_editSelectAll[0] = False
 	if key != _editFocus[0]:
 		_editFocus[0] = key
 		_changed()
@@ -1883,27 +1902,38 @@ def focusEdit(fileId, name):
 
 def editFocused():
 	"""Whether an edit box takes the keys."""
-	return _focusedEdit() is not None
+	if _focusedEdit() is None:
+		focusEdit(-1, '')
+		return False
+	return True
 
 
 def typeIntoEdit(text):
-	"""Typed while an edit box has the keys: characters go in, Backspace takes the last out,
-	Enter or Esc ends the typing."""
+	"""Apply edit keys and text in the order they arrived."""
 	w = _focusedEdit()
 	if w is None:
-		_editFocus[0] = None
+		focusEdit(-1, '')
 		return
-	value = w.text
 	for c in _text(text):
-		if c == u'\b':
-			value = value[:-1]
+		if c == u'\x01':
+			_editSelectAll[0] = True
+		elif c in (u'\t', u'\x02'):
+			s = _screens[_editFocus[0][0]]
+			edits = sorted((item for item in s.widgets.values() if _availableEdit(s, item)), key=lambda item: item.seq)
+			step = 1 if c == u'\t' else -1
+			w = edits[(edits.index(w) + step) % len(edits)]
+			focusEdit(s.id, w.name)
 		elif c in (u'\r', u'\x1b'):
-			_editFocus[0] = None
-			break # (the rest of the keys are not the edit box's)
-		elif c >= u' ' and (w.allowed is None or c in w.allowed) and (not w.maxChars or len(value) < w.maxChars):
-			value += c
-	_set(w, 'text', value)
-	_changed()
+			focusEdit(-1, '')
+			break
+		elif c == u'\b':
+			_set(w, 'text', u'' if _editSelectAll[0] else w.text[:-1])
+			_editSelectAll[0] = False
+		elif c >= u' ' and (w.allowed is None or c in w.allowed):
+			value = u'' if _editSelectAll[0] else w.text
+			if not w.maxChars or len(value) < w.maxChars:
+				_set(w, 'text', value + c)
+				_editSelectAll[0] = False
 
 
 def closeDropdown():

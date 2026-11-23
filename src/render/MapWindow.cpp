@@ -19,6 +19,7 @@
 #include "render/Input.h"
 #include "media/Movie.h"
 
+#include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_hints.h>
@@ -759,7 +760,7 @@ namespace oc4::render
 			{
 				if (!ui.keyChoice())
 					return false;
-				uiClicks.push_back({ ui.useKeyChoice(), false, shift, false, false });
+				queueUiClick({ ui.useKeyChoice(), false, shift, false, false });
 				return true;
 			}
 			const auto direction = [&]() -> std::optional<NavDirection> {
@@ -1011,7 +1012,7 @@ namespace oc4::render
 				if (popup.active())
 					popup.key(key::Return);
 				else if (ui.keyChoice())
-					uiClicks.push_back({ ui.useKeyChoice(), false, false, false, false });
+					queueUiClick({ ui.useKeyChoice(), false, false, false, false });
 				break;
 			case Kind::Move:
 				padDirection = a.direction;
@@ -1206,7 +1207,14 @@ namespace oc4::render
 			overlay->quad(ix, iy, { 1, 1, 1 }, 1);
 		}
 
-		void onKey(unsigned k)
+		void queueUiClick(MapWindow::UiClick click)
+		{
+			click.typedBefore = std::exchange(uiTyped, {});
+			uiTextFocus = !click.right && click.item >= 0 && ui.items()[size_t(click.item)].kind == UiItem::Kind::Edit;
+			uiClicks.push_back(std::move(click));
+		}
+
+		void onKey(unsigned k, std::optional<SDL_Keymod> eventModifiers = {})
 		{
 			auto& o = view->options;
 			const auto [shift, ctrl, alt] = heldModifiers();
@@ -1223,9 +1231,28 @@ namespace oc4::render
 				return;
 			}
 			// An edit box of the screens: its keys (the characters come as text).
-			if (uiTextFocus && !ctrl && !alt)
+			const SDL_Keymod editModifiers = eventModifiers.value_or(SDL_GetModState());
+			const bool editShortcut = (editModifiers & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0;
+			const bool editShift = (editModifiers & SDL_KMOD_SHIFT) != 0;
+			const bool editAlt = (editModifiers & SDL_KMOD_ALT) != 0;
+			if (uiTextFocus && editShortcut && !editAlt && !editShift && (k == 'A' || k == 'V'))
 			{
-				if (k == key::Back || k == key::Return || k == key::Escape)
+				if (k == 'A')
+					uiTyped += L'\x01';
+				else if (char* clipboard = SDL_GetClipboardText())
+				{
+					for (wchar_t c : widen(clipboard))
+						if (c >= L' ' && c != L'\x7f')
+							uiTyped += c;
+					SDL_free(clipboard);
+				}
+				return;
+			}
+			if (uiTextFocus && !editShortcut && !editAlt)
+			{
+				if (k == key::Tab)
+					uiTyped += editShift ? L'\x02' : L'\t';
+				else if (k == key::Back || k == key::Return || k == key::Escape)
 					uiTyped += wchar_t(k == key::Back ? L'\b' : k == key::Return ? L'\r' : L'\x1b');
 				return;
 			}
@@ -1361,7 +1388,7 @@ namespace oc4::render
 			{
 				if (std::abs(x - downX) + std::abs(y - downY) < 5)
 					if (const auto click = ui.release(x, y, mods.shift, mods.ctrl, mods.alt))
-						uiClicks.push_back(*click);
+						queueUiClick(*click);
 				return;
 			}
 			// On the action bar: its buttons.
@@ -2524,7 +2551,7 @@ namespace oc4::render
 			case SDL_EVENT_KEY_DOWN:
 				// (Alt+F4 closes, through SDL's close request)
 				if (const unsigned k = keyOfSdl(e.key.key))
-					onKey(k);
+					onKey(k, e.key.mod);
 				break;
 			case SDL_EVENT_TEXT_INPUT: // (typed into a popup's edit box, or a screen's)
 				if (popup.active())

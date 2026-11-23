@@ -349,6 +349,7 @@ namespace oc4::render
 		{
 			int item = -1; // -1: on the screens but on none of their widgets
 			bool right = false, shift = false, ctrl = false, alt = false;
+			std::wstring typedBefore;
 		};
 		std::vector<UiClick> takeUiClicks();
 		// How wide a text with the screens' markup is, in the theme's font (size 2 outside its
