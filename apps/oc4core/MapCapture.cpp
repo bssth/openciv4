@@ -1298,14 +1298,30 @@ namespace oc4::host
 				int seenCount = 0;
 				for (int u = 0; u < count; ++u)
 					seenCount += seen(plot->getUnitByIndex(u)) ? 1 : 0;
-				// The unit standing for the stack: one of the plot's own domain, if any.
+				// The unit standing for the stack: the plot's centre unit, in the order of the game
+				// core's CvPlot::updateCenterUnit (which does nothing here: the host keeps the
+				// graphics flag off): the first selected one; else the active player's best
+				// defender that can still move, then any of its own; else the best defender against
+				// the active player (at war with it, then any), with the head selected unit as the
+				// attacker, then without it.
+				const PlayerTypes activePlayer = GC.getGame().getActivePlayer();
+				CvUnit* const head = selection ? const_cast<Interface*>(selection)->getHeadSelectedUnit() : nullptr;
 				CvUnit* shown = nullptr;
-				for (int u = 0; u < count && !shown; ++u)
-				{
-					CvUnit* unit = plot->getUnitByIndex(u);
-					if (seen(unit) && (unit->getDomainType() == DOMAIN_SEA) == plot->isWater())
+				for (int u = 0; selection && u < count && !shown; ++u)
+					if (CvUnit* unit = plot->getUnitByIndex(u); seen(unit) && selection->isSelected(unit))
 						shown = unit;
-				}
+				if (!shown)
+					shown = plot->getBestDefender(activePlayer, NO_PLAYER, nullptr, false, false, true);
+				if (!shown)
+					shown = plot->getBestDefender(activePlayer);
+				if (!shown)
+					shown = plot->getBestDefender(NO_PLAYER, activePlayer, head, true);
+				if (!shown)
+					shown = plot->getBestDefender(NO_PLAYER, activePlayer, head);
+				if (!shown)
+					shown = plot->getBestDefender(NO_PLAYER, activePlayer);
+				if (shown && !seen(shown))
+					shown = nullptr;
 				for (int u = 0; u < count && !shown; ++u)
 					if (CvUnit* unit = plot->getUnitByIndex(u); seen(unit))
 						shown = unit;
@@ -1367,6 +1383,10 @@ namespace oc4::host
 						if (const CvUnit* any = plot->getUnitByIndex(k); seen(any))
 							u.medallions.push_back(!selection || !selection->isSelected(any) || any->getOwner() != GC.getGame().getActivePlayer() ? 3
 								: !any->canMove() ? 2 : any->hasMoved() ? 4 : 1);
+					// (the stack's other units, hidden under it: they stay on its plot)
+					for (int k = 0; k < count; ++k)
+						if (const CvUnit* any = plot->getUnitByIndex(k); seen(any) && any != shown)
+							u.hidden.push_back({ any->getOwner(), any->getID(), Entities::resting(*any) });
 					u.health = shown->maxHitPoints() > 0 ? float(shown->currHitPoints()) / float(shown->maxHitPoints()) : 1.0f;
 					// (the health bar's length, as the engine asks the DLL for it: the unit's strength
 					// now times CvUnit::getHealthBarModifier, HEALTH_BAR_WIDTH over twice the best land

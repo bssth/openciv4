@@ -3332,6 +3332,18 @@ float4 PSWater(WaterOut i) : SV_Target
 				else if (!restingSince.contains(key))
 					restingSince[key] = unitPositions.contains(key) ? time : time - 1000;
 				unitPositions[key] = center;
+				// (the stack's hidden units are on its plot, as they are: one shown later stands
+				// there, fortified if it is, instead of walking in from where it was last shown)
+				for (const UnitView::Hidden& h : u.hidden)
+				{
+					const uint64_t hiddenKey = uint64_t(uint32_t(h.owner)) << 32 | uint32_t(h.id);
+					unitPositions[hiddenKey] = center;
+					motions.erase(hiddenKey);
+					if (!h.resting)
+						restingSince.erase(hiddenKey);
+					else if (!restingSince.contains(hiddenKey))
+						restingSince[hiddenKey] = time - 1000;
+				}
 				const size_t n = u.models.size();
 				const int columns = int(std::ceil(std::sqrt(double(n))));
 				const int rows = int((n + size_t(columns) - 1) / size_t(std::max(columns, 1)));

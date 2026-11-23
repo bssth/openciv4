@@ -171,6 +171,14 @@ namespace oc4::render
 		// attacker the game core gave a siege tower (walls, a city attack bonus), the tower before it.
 		int leader = -1, siegeTower = -1;
 		int count = 1;           // units on the plot
+		// The plot's other units, under the shown one (the original draws only its centre unit):
+		// they are on the plot when one of them is shown, not where they were last seen.
+		struct Hidden
+		{
+			int owner = -1, id = -1;
+			bool resting = false;
+		};
+		std::vector<Hidden> hidden;
 		float health = 1;
 		float healthBar = 0; // its health bar's length in the original's units (its strength now)
 		std::string button; // the shown unit's button art (the unit layer's icons)
