@@ -727,7 +727,6 @@ namespace
 		if (!opt.ownInterface && !screens.start(int(window.width()), int(window.height())))
 			std::printf("  the game's interface did not start: the host's own\n");
 		int preparedTurn = -1;
-		int askedResearch = -1; // the cities the player had at the turn's start, or when research was last asked for
 		uint64_t shownPopup = 0;
 		render::MapWindow::PopupView popupView;
 		std::vector<int> popupItems; // the popup's item for each one the window shows
@@ -1049,7 +1048,6 @@ namespace
 				if (preparedTurn != game.getGameTurn())
 				{
 					preparedTurn = game.getGameTurn();
-					askedResearch = player.getNumCities();
 					std::printf("  your turn %d: %d cities, %d units\n", game.getGameTurn(), player.getNumCities(), player.getNumUnits());
 					// (for scripted games: which of our units have an enemy next to them)
 					if (playLog)
@@ -1064,9 +1062,9 @@ namespace
 					changed = true;
 				}
 				// As the original's interface does a few times a second: the popups (the DLL's
-				// questions, and what to research when nothing is after a new city: not at a turn's
-				// start, as in the original a scenario begins without asking; the DLL asks at the
-				// turn's end, so the question comes with the next turn); once the units that moved are done, the next one that waits for orders (the
+				// questions; what to research is asked only by the DLL, at the turn's end, so the
+				// question comes with the next turn: as in the original, not at a turn's start nor
+				// after the first city); once the units that moved are done, the next one that waits for orders (the
 				// DLL holds it back with the cycle counter); then whether the turn is over (its "press
 				// Enter", or ending it).
 				// OpenCiv4's option (Keep the camera on a unit after it attacks): the active player's
@@ -1092,13 +1090,6 @@ namespace
 				if (const auto now = Clock::now(); now - ticked > std::chrono::milliseconds(150))
 				{
 					ticked = now;
-					if (const int cities = player.getNumCities(); player.getCurrentResearch() != NO_TECH || cities < askedResearch)
-						askedResearch = cities;
-					else if (cities > askedResearch && !ui.isDiploOrPopupWaiting())
-					{
-						askedResearch = cities;
-						player.chooseTech();
-					}
 					ui.updatePopups(me);
 					// (not while a popup waits, as the game core's own calls: a new city's name is
 					// asked with the camera on the city, not on the next unit; nor while the option keeps
