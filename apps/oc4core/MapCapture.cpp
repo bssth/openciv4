@@ -263,8 +263,8 @@ namespace oc4::host
 		m_haveArt = true;
 	}
 
-	// Flags have their own zoom-dependent scale, separate from UNIT_SCALE; the health bars their
-	// size and place. Mods may replace them.
+	// The units' figures' zoom-dependent scale (UNIT_SCALE), the flags' own (FLAG_SCALE); the health
+	// bars their size and place. Mods may replace them.
 	void MapCapture::loadFlagScale()
 	{
 		const auto loc = m_assets.locate("xml/misc/civ4detailmanager.xml");
@@ -274,7 +274,7 @@ namespace oc4::host
 		const auto doc = parseXml(m_assets.read(*loc), error);
 		if (!doc)
 			return;
-		const std::pair<const wchar_t*, std::vector<std::pair<float, float>>*> wanted[] = { { L"FLAG_SCALE", &m_snapshot.flagScale },
+		const std::pair<const wchar_t*, std::vector<std::pair<float, float>>*> wanted[] = { { L"UNIT_SCALE", &m_snapshot.unitScale }, { L"FLAG_SCALE", &m_snapshot.flagScale },
 			{ L"UNIT_HEALTH_BILLBOARD_SCALE", &m_snapshot.healthScale }, { L"UNIT_HEALTH_BILLBOARD_Z", &m_snapshot.healthZ },
 			{ L"UNIT_HEALTH_BILLBOARD_RADIUS", &m_snapshot.healthRadius } };
 		for (const auto& node : doc->children)
@@ -285,7 +285,7 @@ namespace oc4::host
 					const auto target = name ? std::ranges::find(wanted, name->text, [](const auto& w) { return std::wstring_view(w.first); }) : std::end(wanted);
 					if (target == std::end(wanted))
 						continue;
-					const bool scale = target->second == &m_snapshot.flagScale || target->second == &m_snapshot.healthScale;
+					const bool scale = target->second == &m_snapshot.unitScale || target->second == &m_snapshot.flagScale || target->second == &m_snapshot.healthScale;
 					std::vector<std::pair<float, float>> keys;
 					for (const auto& key : fader->children)
 						if (key->type == XmlNode::Type::Element && key->name == "Key")
@@ -1221,6 +1221,10 @@ namespace oc4::host
 		}
 		s.plots.assign(size_t(s.width) * size_t(s.height), {});
 		s.units.clear();
+		// (the single unit graphics option draws one figure a unit, larger: SINGLE_UNIT_GFX_EXTRA_SCALE;
+		// without it a unit of one figure is as large as each of a formation's, seen in Wine)
+		const float singleScale = GC.getDefineFLOAT("SINGLE_UNIT_GFX_EXTRA_SCALE");
+		s.singleUnitScale = gDLL->getGraphicOption(GRAPHICOPTION_SINGLE_UNIT_GRAPHICS) && singleScale > 0 ? singleScale : 1;
 		s.cities.clear();
 		// The battles on: their units stand for their plots while they fight.
 		const auto battles = Entities::battles();

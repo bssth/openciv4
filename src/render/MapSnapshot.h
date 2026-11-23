@@ -266,8 +266,14 @@ namespace oc4::render
 		// 7, white, or for the selected units how they can move; into models.
 		int flagMedallions = -1;
 		struct { float x = -0.667f, y = 0; } flagOffset; // GlobalDefines, relative to half a plot
+		// Each unit's figure's scale with the single unit graphics option on (GlobalDefines'
+		// SINGLE_UNIT_GFX_EXTRA_SCALE), else 1.
+		float singleUnitScale = 1;
 		// CIV4DetailManager's FLAG_SCALE: camera distance, model scale multiplier.
 		std::vector<std::pair<float, float>> flagScale{ { 700, 0.6f }, { 1500, 0.7f }, { 3000, 0.9f }, { 5000, 1.2f } };
+		// CIV4DetailManager's UNIT_SCALE: camera distance, the units' figures' scale multiplier (they
+		// grow as the camera moves away; GlobalDefines' ALLOW_UNIT_SCALE_ADJUST_ON_ZOOM).
+		std::vector<std::pair<float, float>> unitScale{ { 700, 1.0f }, { 1500, 1.3f }, { 3000, 1.6f }, { 5000, 2.0f } };
 		// A unit's health bar (CIV4DetailManager's UNIT_HEALTH_BILLBOARD_* by camera distance): its
 		// scale (how thick it is), its height over the ground, and how far from the plot's middle
 		// towards the camera it stands (less: behind it).

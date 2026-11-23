@@ -3364,8 +3364,9 @@ float4 PSWater(WaterOut i) : SV_Target
 					inst.anchor = center;
 					inst.offset = { ox * c - oy * s, ox * s + oy * c, 0 };
 					inst.yaw = yaw;
-					// The game draws a lone figure larger (SINGLE_UNIT_GFX_EXTRA_SCALE).
-					inst.scale = art.scale * (n == 1 ? 1.25f : 1.0f);
+					// (larger with the single unit graphics option only: a unit of one figure is as
+					// large as each of a formation's)
+					inst.scale = art.scale * map.singleUnitScale;
 					inst.center = center;
 					inst.radius = lm->bounds.radius() * inst.scale * 2.5f + spacing * float(columns);
 					inst.team = teamColor(u.shownOwner);
@@ -3783,8 +3784,9 @@ float4 PSWater(WaterOut i) : SV_Target
 		static constexpr float kShoreDepth = 0.042f;
 		static constexpr float kShoreWidth = 0.003f;
 
-		// Units grow as the camera moves away, as in the game (ALLOW_UNIT_SCALE_ADJUST_ON_ZOOM).
-		float figureZoom() const { return std::clamp(1 + (renderer.camera().distance / S() - 5) / 8, 1.0f, 2.2f); }
+		// Units grow as the camera moves away, as in the game (ALLOW_UNIT_SCALE_ADJUST_ON_ZOOM): by
+		// CIV4DetailManager's UNIT_SCALE at the camera's distance.
+		float figureZoom() const { return fader(map.unitScale, 1); }
 
 		// Hidden by the fog of war: units the active team does not see; the rest where nothing
 		// around has been seen (next to what has, it fades out with the ground: the shader
