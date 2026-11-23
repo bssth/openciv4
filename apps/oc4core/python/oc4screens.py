@@ -32,14 +32,23 @@ _citySelection = [()]   # the cities a table's rows selected last
 _drop = [None, 0]       # the pull down whose list is open (file id, name), and how far that list is scrolled
 _areas = []             # what scrolls under the mouse, back to front: (x0, y0, x1, y1, file id, name, step, down, sideways)
 _bars = {}              # the scroll bars: (file id, name, part) -> (x0, y0, x1, y1)
+_sliders = {}           # the sliders: (file id, name) -> (x0, y0, x1, y1)
 _dropRects = {}         # where each pull down is: (file id, name) -> (x0, y0, x1, y1)
 _editFocus = [None]     # the edit box typed into: (file id, name), or None
+
+
+def _setToggle(i):
+	"""A minimap toggle switched from a script (CyInterface's toggle...): as its control does."""
+	t = list(oc4host.map_toggles())
+	t[i] = not t[i]
+	oc4host.set_map_toggles(*t)
 
 
 def _changed():
 	_version[0] += 1
 
 
+editTyped = [] # (called with an edit box after keys were typed into it: oc4options keeps its numbers)
 beforeDisplay = [] # (called before the display list is made: oc4options lays its window out)
 
 
@@ -89,7 +98,8 @@ class _Widget(object):
 	__slots__ = ('name', 'kind', 'parent', 'mode', 'x', 'y', 'z', 'w', 'h', 'style', 'pstyle', 'text', 'help', 'tex', 'tex2',
 		'wt', 'd1', 'd2', 'opt', 'flags', 'font', 'shown', 'enabled', 'state', 'hittest', 'seq', 'vertical', 'scroll', 'children',
 		'bars', 'lists', 'columns', 'rows', 'headers', 'iconw', 'iconh', 'items', 'selected', 'color', 'size', 'defw', 'defh', 'points',
-		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed')
+		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed',
+		'minimum', 'maximum', 'value', 'upright', 'fill')
 
 	def __init__(self, name, kind):
 		self.name = name
@@ -116,6 +126,7 @@ class _Widget(object):
 		self.children = []
 		self.maxChars = 0      # an edit box's: at most this many characters (0: any)
 		self.allowed = None    # ... and only these (None: any)
+		self.minimum, self.maximum, self.value, self.upright, self.fill = 0, 0, 0, False, '' # a slider's stops, where it is, its fill's side
 		self.bars = None       # stacked bars: [[percent, (r, g, b, a)], ...]
 		self.lists = None      # multi lists: [[(texture, wt, d1, d2, option, disabledTexture), ...], ...]
 		self.columns = None    # tables: [[header, width, right], ...]
@@ -1281,6 +1292,15 @@ class CyGInterfaceScreen(object):
 	def addSlider(self, szName, iX, iY, iWidth, iHeight, iDefault, iMin, iMax, eWidgetType=-1, iData1=-1, iData2=-1, bIsVertical=False):
 		w = self._s.add(szName, 'slider')
 		w.x, w.y, w.w, w.h, w.size = int(iX), int(iY), int(iWidth), int(iHeight), int(iDefault)
+		w.minimum, w.maximum, w.value, w.upright, w.fill = int(iMin), int(iMax), int(iDefault), bool(bIsVertical), ''
+		w.wt, w.d1, w.d2 = int(eWidgetType), int(iData1), int(iData2)
+
+	def setSliderFill(self, szName, szFill):
+		"""(openciv4's: the side of its grip the slider's fill is on, as the CF_SLIDER_FILL_UP /
+		_DOWN control flags: 'up' the top or left, 'down' the bottom or right, '' none)"""
+		w = self._s.get(szName)
+		if w is not None:
+			_set(w, 'fill', _str(szFill))
 
 	# ---------------------------------------------------------------- lines
 
@@ -1672,6 +1692,14 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 		out.append((base + (-1,), 'line', ox + x0, oy + y0, ox + x1, oy + y1, clip, '', u'', '', '', 0, 0, False, True, 4, w.color, -1, -1, -1, False,
 			w.z, w.seq))
 		return
+	if kind == 'slider':
+		# (the theme's slider: its grip as far along it as its stop; it follows the mouse, sliderTo)
+		_sliders[(s.id, w.name)] = (x, y, x + width, y + height)
+		span = max(1, w.maximum - w.minimum)
+		at = float(max(w.minimum, min(w.maximum, w.value)) - w.minimum) / span
+		out.append((base + (-1,), 'slider', x, y, x + width, y + height, clip, ('v ' if w.upright else 'h ') + w.fill, u'', '', '', 0, 0, False,
+			w.enabled, w.hittest, None, w.wt, w.d1, w.d2, w.opt, w.z, w.seq, at, 0.0))
+		return
 	if kind == 'bar':
 		start = 0.0
 		for i, (pct, color) in enumerate(w.bars):
@@ -1737,6 +1765,7 @@ def display():
 	del _areas[:]
 	_dropRects.clear()
 	_bars.clear()
+	_sliders.clear()
 	# (the main interface first, then the screens in the order they were shown: the newest on top)
 	for s in sorted(_screens.values(), key=lambda s: (not s.main, s.shownAt, s.id)):
 		if not (s.main or s.shown):
@@ -1856,6 +1885,23 @@ def scrollTo(fileId, name, part, x, y):
 		_set(w, 'hoffset', int(max(0, min(w.hextent - wide, at * w.hextent - wide / 2))))
 
 
+def sliderTo(fileId, name, x, y):
+	"""A slider pressed or dragged: set to the stop nearest the mouse (its grip, 14 long, kept
+	within it, as drawn); the stop when that is another one, else None."""
+	r = _sliders.get((int(fileId), _str(name)))
+	s = _screens.get(int(fileId))
+	w = s.get(name) if s is not None else None
+	if r is None or w is None or not w.enabled:
+		return None
+	start, length, at = (r[1], r[3] - r[1], y) if w.upright else (r[0], r[2] - r[0], x)
+	f = float(at - start - 7) / max(1, length - 14)
+	stop = w.minimum + int(round(max(0.0, min(1.0, f)) * (w.maximum - w.minimum)))
+	if stop == w.value:
+		return None
+	_set(w, 'value', stop)
+	return stop
+
+
 def openDropdown(fileId, name):
 	"""A click on a pull down opens its list, or closes it when it is open."""
 	key = (int(fileId), _str(name))
@@ -1904,6 +1950,12 @@ def typeIntoEdit(text):
 			value += c
 	_set(w, 'text', value)
 	_changed()
+	for f in editTyped:
+		try:
+			f(w)
+		except Exception:
+			import traceback
+			traceback.print_exc()
 
 
 def closeDropdown():
@@ -2284,15 +2336,15 @@ class CyInterface(object):
 	def checkFlashUpdate(self): return False
 	def checkFlashReset(self, ePlayer): pass
 
-	def isScoresVisible(self): return True
+	def isScoresVisible(self): return bool(oc4host.map_toggles()[3])
 	def isScoresMinimized(self): return False
 	def toggleScoresMinimized(self): pass
-	def toggleScoresVisible(self): pass
+	def toggleScoresVisible(self): _setToggle(3)
 	def isOOSVisible(self): return False
 	def isNetStatsVisible(self): return False
-	def isYieldVisibleMode(self): return False
-	def toggleYieldVisibleMode(self): pass
-	def toggleBareMapMode(self): pass
+	def isYieldVisibleMode(self): return bool(oc4host.map_toggles()[2])
+	def toggleYieldVisibleMode(self): _setToggle(2)
+	def toggleBareMapMode(self): _setToggle(1)
 	def isFocused(self): return False
 	def isFocusedWidget(self): return False
 	def isInAdvancedStart(self): return False
@@ -2537,16 +2589,19 @@ _cpe.CyUserProfile.isClockOn = lambda self: False
 _cpe.CyUserProfile.wasClockJustTurnedOn = lambda self: False
 _cpe.CyUserProfile.setClockJustTurnedOn = lambda self, b: None
 _cpe.CyUserProfile.getGraphicOption = lambda self, i: False
-# (the map's toggles by the minimap, as they start: no grid, no bare map, no yields, the scores shown)
-_cpe.CyUserProfile.getGrid = lambda self: False
-_cpe.CyUserProfile.getMap = lambda self: False
-_cpe.CyUserProfile.getYields = lambda self: False
-_cpe.CyUserProfile.getScores = lambda self: True
+# (the map's toggles by the minimap, as they are: oc4options keeps them in the profile)
+_cpe.CyUserProfile.getGrid = lambda self: bool(oc4host.map_toggles()[0])
+_cpe.CyUserProfile.getMap = lambda self: bool(oc4host.map_toggles()[1])
+_cpe.CyUserProfile.getYields = lambda self: bool(oc4host.map_toggles()[2])
+_cpe.CyUserProfile.getScores = lambda self: bool(oc4host.map_toggles()[3])
+
+
+_clockText = [lambda: unicode(time.strftime('%H:%M'))] # (oc4options': the user's time format, the alarm's *)
 
 
 def getClockText():
 	"""The time of day for the interface's clock (the engine's, in CvPythonExtensions)."""
-	return unicode(time.strftime('%H:%M'))
+	return _clockText[0]()
 
 
 _cpe.getClockText = getClockText

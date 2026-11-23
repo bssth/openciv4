@@ -19,6 +19,7 @@
 #include "render/Input.h"
 #include "media/Movie.h"
 
+#include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_hints.h>
@@ -32,6 +33,8 @@
 #include <DirectXMath.h>
 
 #include <algorithm>
+#include <thread>
+#include <mutex>
 #include <set>
 #include <tuple>
 #include <array>
@@ -235,6 +238,8 @@ namespace oc4::render
 		std::function<std::string(int)> popupHelp;
 		bool busy = false; // the game runs on another thread: nothing asked of it
 		bool edgeScroll = false;
+		int maxFrameRate = 0; // (0: no cap)
+		std::chrono::steady_clock::time_point nextFrame{};
 		std::function<bool(int, int, int)> uiWheel; // the screens' (a table or list scrolled)
 		bool downOnPopup = false;
 		UiLayer ui;
@@ -270,6 +275,7 @@ namespace oc4::render
 		std::function<uint64_t(std::shared_ptr<const audio::Pcm>)> playMovieSound;
 		std::function<void(uint64_t)> stopMovieSound;
 		std::vector<std::string> moviesDone;
+		bool lowMovieQuality = false; // (Movie Quality low: the map is not drawn while a movie plays)
 		static std::string modelKey(const UiItem& it)
 		{
 			if (it.kind == UiItem::Kind::Flag)
@@ -279,6 +285,9 @@ namespace oc4::render
 		}
 		std::vector<MapWindow::UiClick> uiClicks;
 		bool downOnUi = false;
+		bool sliderDrag = false; // (the left button held on a slider: it follows the mouse)
+		std::mutex folderMutex; // (the folder dialog answers on a thread of its own)
+		std::optional<std::string> chosenFolder;
 		std::pair<int, int> helpPlot{ -1, -1 };
 		bool helpCombat = false; // (plotHelpText was asked with the right button held: the odds of an attack there)
 		std::wstring plotHelpText;
@@ -1302,7 +1311,12 @@ namespace oc4::render
 			mouseY = y;
 			popup.hover(x, y);
 			ui.hover(x, y);
-			if (minimapDrag)
+			if (sliderDrag)
+			{
+				if (const int item = ui.pressed(); item >= 0)
+					uiClicks.push_back({ item, false, false, false, false, x, y });
+			}
+			else if (minimapDrag)
 				jumpFromMinimap(std::clamp(x, int(minimapRect[0]), int(minimapRect[2])), std::clamp(y, int(minimapRect[1]), int(minimapRect[3])));
 			else if (panning)
 			{
@@ -1355,6 +1369,21 @@ namespace oc4::render
 			{
 				downOnUi = true;
 				ui.press(x, y, !left);
+				// (a slider is set where it is pressed, and follows the mouse while held)
+				if (const int item = ui.pressed(); left && item >= 0 && ui.items()[size_t(item)].kind == UiItem::Kind::Slider &&
+					ui.items()[size_t(item)].enabled)
+				{
+					sliderDrag = true;
+					SDL_CaptureMouse(true);
+					uiClicks.push_back({ item, false, mods.shift, mods.ctrl, mods.alt, x, y });
+				}
+				return;
+			}
+			if (!down && std::exchange(sliderDrag, false))
+			{
+				SDL_CaptureMouse(false);
+				downOnUi = false;
+				ui.release(x, y, mods.shift, mods.ctrl, mods.alt);
 				return;
 			}
 			if (!down && std::exchange(downOnUi, false))
@@ -1679,18 +1708,26 @@ namespace oc4::render
 			renderer->setGlobe(g.x, g.y, g.radius, g.wrapWidth);
 			fitFov();
 			// (beyond the map: black as the ground not seen, until the team's map is centred)
-			renderer->beginFrame(camera, view->seenBounds() ? Vec3{ 0, 0, 0 } : Vec3{ 0.05f, 0.07f, 0.10f });
+			// (a movie playing with the Movie Quality low: no map behind it, black, as the original)
+			const bool mapShown = !(lowMovieQuality && !movies.empty());
+			renderer->beginFrame(camera, view->seenBounds() || !mapShown ? Vec3{ 0, 0, 0 } : Vec3{ 0.05f, 0.07f, 0.10f });
 			view->options.cityScreen = cityView;
-			view->draw();
+			if (mapShown)
+				view->draw();
+			else
+				renderer->pass(); // (cleared, black, though nothing is drawn)
 			renderer->endFrame();
 			syncHeads();
 			renderHeads();
 			if (!overlay->begin())
 				return;
-			view->drawOverlay(*overlay);
-			drawMarks();
-			drawLayers();
-			drawPath();
+			if (mapShown)
+			{
+				view->drawOverlay(*overlay);
+				drawMarks();
+				drawLayers();
+				drawPath();
+			}
 			if (ui.active())
 			{
 				// The game's own interface: it has the status, the scores, the unit's buttons.
@@ -2508,6 +2545,15 @@ namespace oc4::render
 				m.view->update(dt);
 			render();
 			renderer->present();
+			// (a frame cap: the next frame no sooner than its share of the second after this one)
+			if (maxFrameRate > 0)
+			{
+				const auto period = std::chrono::nanoseconds(1'000'000'000LL / maxFrameRate);
+				const auto done = std::chrono::steady_clock::now();
+				if (done < nextFrame)
+					std::this_thread::sleep_until(nextFrame);
+				nextFrame = std::max(nextFrame, done - period) + period;
+			}
 		}
 
 		float windowDensity() const { return window ? SDL_GetWindowPixelDensity(window) : 1; }
@@ -2783,6 +2829,13 @@ namespace oc4::render
 		o.healthBars = g.healthBars;
 		o.frozen = g.frozen;
 		o.effects = g.effects;
+		o.globeBuildings = g.globeBuildings;
+		m->lowMovieQuality = g.lowMovieQuality;
+		if (m->renderer)
+		{
+			m->renderer->setLowResTextures(g.lowResTextures);
+			m->renderer->setSamples(uint32_t(std::max(1, g.samples)));
+		}
 		setFullscreen(g.fullscreen);
 	}
 
@@ -2839,6 +2892,15 @@ namespace oc4::render
 		m->onButton(false, false, x, y);
 	}
 
+	void MapWindow::mouseDrag(int x0, int y0, int x1, int y1, int steps)
+	{
+		m->onMouseMove(x0, y0);
+		m->onButton(true, true, x0, y0);
+		for (int i = 1; i <= steps; ++i)
+			m->onMouseMove(x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps);
+		m->onButton(true, false, x1, y1);
+	}
+
 	std::optional<MapWindow::PlotClick> MapWindow::clickAt(int x, int y, bool right) const
 	{
 		// (a city's bar stands for the city, as the original's: its screen opens)
@@ -2867,6 +2929,7 @@ namespace oc4::render
 		m->askPlotHelp();
 	}
 	void MapWindow::setEdgeScroll(bool on) { m->edgeScroll = on; }
+	void MapWindow::setMaxFrameRate(int fps) { m->maxFrameRate = std::clamp(fps, 0, 1000); }
 	void MapWindow::setSoundHandler(std::function<void(const std::string& tag, float x, float y)> handler)
 	{
 		if (m->view)
@@ -2918,6 +2981,21 @@ namespace oc4::render
 	MapWindow::UiDisplay MapWindow::uiDisplay() const { return { m->renderer->width(), m->renderer->height(), m->windowDensity() }; }
 	bool MapWindow::uiActive() const { return m->ui.active(); }
 	std::vector<MapWindow::UiClick> MapWindow::takeUiClicks() { return std::exchange(m->uiClicks, {}); }
+	void MapWindow::chooseFolder(const std::string& start)
+	{
+		SDL_ShowOpenFolderDialog(
+			[](void* self, const char* const* files, int) {
+				auto& impl = *static_cast<Impl*>(self);
+				const std::lock_guard lock(impl.folderMutex);
+				impl.chosenFolder = files && files[0] ? std::string(files[0]) : std::string();
+			},
+			m.get(), m->window, start.empty() ? nullptr : start.c_str(), false);
+	}
+	std::optional<std::string> MapWindow::takeChosenFolder()
+	{
+		const std::lock_guard lock(m->folderMutex);
+		return std::exchange(m->chosenFolder, std::nullopt);
+	}
 	void MapWindow::setUiTextFocus(bool focus) { m->uiTextFocus = focus; }
 	std::wstring MapWindow::takeUiTyped() { return std::exchange(m->uiTyped, {}); }
 	void MapWindow::typeText(const std::string& utf8)

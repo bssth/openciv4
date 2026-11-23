@@ -31,7 +31,7 @@
 // opens it, Esc closes it), or with --own-interface the window's simple one.
 // --keys are typed in on your turns then (letters and Space as keys, '^', '@' and '+' before
 // one hold Ctrl, Alt and Shift, '>' ends the turn, '~' is Esc, "(x,y)" right clicks that plot,
-// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e", "%t" and "%b" type an arrow, Return, Tab or Backspace into the window ("^%l" with Ctrl held, as a game hotkey), "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
+// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e", "%t" and "%b" type an arrow, Return, Tab or Backspace into the window ("^%l" with Ctrl held, as a game hotkey), "<x,y>" clicks that pixel of the window (a figure there: its unit), "<x,y:x2,y2>" drags from one to the other with the left button, "#n" picks the n-th button of the popup up (OK if it has none), a
 // popup nothing answers gets its first, 'text' goes into its next edit box, "{Name}" or
 // "{Name/part}" clicks the interface's widget so named, "^{Name}" with Ctrl held, "?{Name}" rests
 // the mouse on it); with
@@ -446,6 +446,9 @@ namespace
 	// apart while one is on, as the original's engine does; with nothing shown they run flat out.
 	// (Measured in the original under Wine: a game update every 0.26 s, a shown move every 4 updates.)
 	constexpr std::chrono::milliseconds kShownMoveSlice{ 250 };
+	// (OpenCiv4's own option Quick enemy moves: 0.6 s a move instead of 1 s; the camera still goes to
+	// each and the unit's walk ends before the next starts, so the player can follow them)
+	constexpr std::chrono::milliseconds kQuickShownMoveSlice{ 150 };
 	bool shownMoveOn()
 	{
 		for (int p = 0; p < MAX_PLAYERS; ++p)
@@ -598,7 +601,8 @@ namespace
 				return i >= 0 && utility.getGraphicOption(static_cast<GraphicOptionTypes>(i));
 			};
 			window.setGraphics({ option("GRAPHICOPTION_HEALTH_BARS"), option("GRAPHICOPTION_FROZEN_ANIMATIONS"), !option("GRAPHICOPTION_EFFECTS_DISABLED"),
-				utility.graphicOptionChosen(GC.getInfoTypeForString("GRAPHICOPTION_FULLSCREEN", true)) });
+				utility.graphicOptionChosen(GC.getInfoTypeForString("GRAPHICOPTION_FULLSCREEN", true)), !option("GRAPHICOPTION_GLOBE_VIEW_BUILDINGS_DISABLED"),
+				option("GRAPHICOPTION_LOWRES_TEXTURES"), utility.movieQuality() >= 2, utility.antiAliasing() });
 		};
 		{
 			std::array<std::string, 3> symbols;
@@ -901,30 +905,55 @@ namespace
 		host::TurnWorker worker;
 		// (the others' next game update while a move of theirs is shown: shownMoveOn)
 		Clock::time_point nextShownMoveUpdate{};
-		// A game played by hand is saved at each turn's start (Documents\My Games\openciv4\Saves\
-		// auto, ten in turn), as the original does; a scripted one is not.
+		// A game played by hand is saved as the original saves it, or openciv4's own way
+		// (AutoSaves.h, the options' OpenCiv4 tab); a scripted game is not.
 		if (opt.viewSeconds <= 0)
-			utility.engine().onAutoSave = [&session, &game](bool) {
-				PWSTR documents = nullptr;
-				if (FAILED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &documents)))
+			utility.engine().onAutoSave = [&session, &game, &engine = utility.engine()](bool initial) {
+				const host::AutoSaveSettings how = engine.autoSave.get();
+				const int turn = game.getGameTurn();
+				if (!host::autoSaveDue(how, turn, initial))
 					return;
-				const fs::path folder = fs::path(documents) / L"My Games" / L"openciv4" / L"Saves" / L"auto";
-				CoTaskMemFree(documents);
-				// (each game its own: the active civilization and the game's map seed in the name;
-				// every 25th turn kept for good)
-				std::wstring civ;
-				if (const PlayerTypes active = game.getActivePlayer(); active != NO_PLAYER)
-					for (const wchar_t c : std::wstring(GC.getInitCore().getCivShortDesc(active).GetCString()))
-						civ += std::iswalnum(c) ? c : L'_';
-				const std::wstring stem = std::format(L"AutoSave_{}_{:08X}", civ, GC.getInitCore().getMapRandSeed());
-				const fs::path path = folder / std::format(L"{}_{}.CivBeyondSwordSave", stem, game.getGameTurn() % 10);
-				try
+				// (no Documents folder: no autosave, rather than one beside the working directory)
+				const fs::path documents = documentsFolder();
+				if (documents.empty())
 				{
+					std::printf("  autosave skipped: no Documents folder\n");
+					return;
+				}
+				const auto save = [&](const fs::path& folder, const fs::path& path) {
 					fs::create_directories(folder);
 					session.saveGame(path);
-					if (game.getGameTurn() % 25 == 0)
-						fs::copy_file(path, folder / std::format(L"{}_turn{}.CivBeyondSwordSave", stem, game.getGameTurn()), fs::copy_options::overwrite_existing);
-					std::printf("  autosaved turn %d: %s\n", game.getGameTurn(), path.string().c_str());
+					std::printf("  autosaved turn %d: %s\n", turn, utf8Path(path).c_str());
+				};
+				try
+				{
+					if (how.openciv4)
+					{
+						// (Documents\My Games\openciv4\Saves\auto; the active civilization and the
+						// game's map seed in the name, one save in 25 turns kept for good)
+						const fs::path folder = documents / L"My Games" / L"openciv4" / L"Saves" / L"auto";
+						std::wstring civ;
+						if (const PlayerTypes active = game.getActivePlayer(); active != NO_PLAYER)
+							for (const wchar_t c : std::wstring(GC.getInitCore().getCivShortDesc(active).GetCString()))
+								civ += std::iswalnum(c) ? c : L'_';
+						const std::wstring stem = std::format(L"AutoSave_{}_{:08X}", civ, GC.getInitCore().getMapRandSeed());
+						const fs::path path = folder / host::openciv4AutoSaveName(stem, how, turn);
+						save(folder, path);
+						if (host::openciv4KeepsForGood(how, turn))
+							fs::copy_file(path, folder / std::format(L"{}_turn{}.CivBeyondSwordSave", stem, turn), fs::copy_options::overwrite_existing);
+						return;
+					}
+					const fs::path folder = documents / L"My Games" / L"Beyond the Sword" / L"Saves" / L"single" / L"auto";
+					// (the year through the scripts' CyGame: the game core does not export getGameTurnYear)
+					int year;
+					{
+						namespace py = pybind11;
+						py::gil_scoped_acquire gil;
+						year = py::module_::import("CvPythonExtensions").attr("CyGame")().attr("getGameTurnYear")().cast<int>();
+					}
+					save(folder, folder / host::autoSaveName(initial, year));
+					for (const fs::path& old : host::autoSavesBeyond(folder, how.kept))
+						fs::remove(old);
 				}
 				catch (const std::exception& e)
 				{
@@ -1274,6 +1303,15 @@ namespace
 					clicks.push_back(click);
 					script.erase(0, close + 1);
 				}
+				else if (int px = 0, py = 0, qx = 0, qy = 0; script.front() == '<' && script.find('>') != std::string::npos &&
+						 std::sscanf(script.c_str() + 1, "%d,%d:%d,%d", &px, &py, &qx, &qy) == 4)
+				{
+					// "<x,y:x2,y2>": the left button pressed at x,y, the mouse moved to x2,y2 and let go (a drag).
+					if (log)
+						std::printf("  drag %d,%d to %d,%d\n", px, py, qx, qy);
+					window.mouseDrag(px, py, qx, qy);
+					script.erase(0, script.find('>') + 1);
+				}
 				else if (int px = 0, py = 0; script.front() == '<' && script.find('>') != std::string::npos && std::sscanf(script.c_str() + 1, "%d,%d", &px, &py) == 2)
 				{
 					// "<x,y>": a left click at that pixel of the window, on what is there (a popup, the
@@ -1575,10 +1613,10 @@ namespace
 				for (const auto& m : marks)
 				{
 					const auto [x, y] = m.core ? host::windowPlot({ m.x, m.y }) : std::pair{ m.x, m.y };
-					// (the WorldBuilder's plot and brush, and a settler's founding border, in the
-					// original's area border style)
+					// (the WorldBuilder's plot and brush, a settler's founding border and a settler's view of the
+					// cities' plots (Show City Radius), in the original's area border style)
 					const bool hatched = m.border && (m.layer == AREA_BORDER_LAYER_HIGHLIGHT_PLOT || m.layer == AREA_BORDER_LAYER_WORLD_BUILDER ||
-						m.layer == AREA_BORDER_LAYER_FOUNDING_BORDER);
+						m.layer == AREA_BORDER_LAYER_FOUNDING_BORDER || m.layer == AREA_BORDER_LAYER_CITY_RADIUS);
 					shownMarks.marks.push_back({ x, y, m.layer, { m.r, m.g, m.b }, m.a, m.border, false, hatched });
 				}
 				for (const auto& s : signs)
@@ -1715,7 +1753,9 @@ namespace
 				if (Clock::now() >= nextShownMoveUpdate)
 				{
 					window.setBusy(true);
-					worker.start([&session, &game, &nextShownMoveUpdate] {
+					const auto slice = utility.quickEnemyMoves() ? kQuickShownMoveSlice : kShownMoveSlice;
+					host::Entities::setQuickShownMoves(utility.quickEnemyMoves());
+					worker.start([&session, &game, &nextShownMoveUpdate, slice] {
 						const auto until = Clock::now() + std::chrono::milliseconds(100);
 						do
 							if (host::Entities::battleWait())
@@ -1727,7 +1767,7 @@ namespace
 								session.update();
 								if (wasShown || shownMoveOn())
 								{
-									nextShownMoveUpdate = Clock::now() + kShownMoveSlice;
+									nextShownMoveUpdate = Clock::now() + slice;
 									break;
 								}
 							}
@@ -1919,7 +1959,8 @@ namespace
 		host::Sounds& sounds = utility.sounds();
 		if (const char* s = std::getenv("OC4_SOUND"); s ? std::string_view(s) != "0" : opt.viewSeconds <= 0)
 			sounds.start(s && std::string_view(s) == "mute");
-		sounds.setTalkMusic(-1, utility.audioScripts().index("AS2D_OPENING_MENU", AUDIOTAG_2DSCRIPT));
+		// (the opening menu's the options chose: Options -> Graphics -> Opening Menu)
+		sounds.setTalkMusic(-1, utility.audioScripts().index(screens.menuSoundtrack().c_str(), AUDIOTAG_2DSCRIPT));
 		std::optional<host::MenuChoice> choice;
 		auto last = Clock::now(), typed = last;
 		const auto start = last;

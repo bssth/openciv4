@@ -308,6 +308,19 @@ float distanceFog(float3 p)
 		// wrapping every wrapWidth (0: not).
 		void setGlobe(float x, float y, float radius, float wrapWidth) { m_globe[0] = x, m_globe[1] = y, m_globe[2] = radius, m_globe[3] = wrapWidth; }
 		bool globe() const { return m_globe[2] > 0; }
+		// Low resolution textures (the game's graphic option): every texture with mipmaps drawn
+		// from its half size level (the samplers' lowest level 1); from the next beginFrame.
+		void setLowResTextures(bool on) { m_lowResWanted = on; }
+		float minLod() const { return m_lowRes ? 1.0f : 0.0f; }
+		uint32_t samplerGeneration() const { return m_samplerGeneration; } // (changes with minLod)
+		// Anti-aliasing (the game's option): the main target drawn with this many samples a pixel
+		// (1, 2, 4, 8: as many as the device can), resolved into it at the end of each pass; from
+		// the next beginFrame. The views (setView) are drawn with one.
+		void setSamples(uint32_t samples) { m_samplesWanted = std::max(1u, samples); }
+		uint32_t samples() const { return m_samples; }
+		// The samples of the pass drawn now (a pipeline for it must have as many).
+		uint32_t passSamples() const { return (!m_target.color || m_target.color == m_color->texture) ? m_samples : 1; }
+		static SDL_GPUSampleCount sampleCount(uint32_t samples);
 		// Row-major view-projection of the current frame (p_clip = M * p).
 		const float* viewProjection() const { return m_viewProj; }
 		// Cached by asset key; null when missing or unsupported (recorded in stats).
@@ -328,10 +341,12 @@ float distanceFog(float3 p)
 			int src = 0, dst = 0;
 			bool zTest = true, zWrite = true;
 			int cull = 0;
+			uint32_t samples = 1;
 			auto operator<=>(const PipelineKey&) const = default;
 		};
 
 		void createTargets();
+		void createSampleTargets();
 		void createPipelines();
 		SDL_GPUGraphicsPipeline* pipeline(const PipelineKey& key);
 		SDL_GPUGraphicsPipeline* modelPipeline(const scene::Material& m, bool particles = false);
@@ -352,6 +367,8 @@ float distanceFog(float3 p)
 		uint32_t m_width = 0, m_height = 0;
 		SDL_GPUTextureFormat m_depthFormat = SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT;
 		std::shared_ptr<GpuImage> m_color, m_depth;
+		std::shared_ptr<GpuImage> m_msColor, m_msDepth; // (anti-aliasing: the main target's samples, resolved into m_color)
+		uint32_t m_samples = 1, m_samplesWanted = 1, m_samplesAsked = 1;
 
 		SDL_GPUCommandBuffer* m_cmd = nullptr;
 		uint32_t m_samplersUsed = 0; // (in m_cmd)
@@ -368,6 +385,9 @@ float distanceFog(float3 p)
 		std::map<PipelineKey, SDL_GPUGraphicsPipeline*> m_pipelines;
 		SDL_GPUSampler* m_samplers[4]{}; // by scene::TexClamp
 		SDL_GPUSampler* m_trilinearSamplers[4]{}; // the same without anisotropy
+		bool m_lowRes = false, m_lowResWanted = false;
+		uint32_t m_samplerGeneration = 0;
+		void makeSamplers();
 		SDL_GPUSampler* m_linearClamp = nullptr;
 		std::shared_ptr<GpuImage> m_white, m_noHeights, m_noPlots;
 		const GpuImage* m_ground = nullptr;

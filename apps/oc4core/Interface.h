@@ -239,6 +239,15 @@ namespace oc4::host
 		bool updateCursorType() override { return false; }
 		bool isFocusedWidget() override { return false; }
 		bool isFocused() override { return false; }
+		bool isDebugMenuCreated() const override { return false; } // (the options screen asks; there is no debug menu)
+		// The scores by the minimap (CONTROL_SCORES), shown as the player's profile has them.
+		std::atomic<bool> scores = true;
+		bool isScoresVisible() override { return scores; }
+		void toggleScoresVisible() override
+		{
+			scores = !scores;
+			setDirty(Score_DIRTY_BIT, true);
+		}
 		// A battle the active player's unit fights (or one it is attacked in) has the camera's focus:
 		// CvUnit::setCombatUnit tells it so, and only then the game core looks at the battle
 		// (CvInterface::lookAt with CAMERALOOKAT_BATTLE(_ZOOM_IN)) and lets go of it at the end
@@ -247,11 +256,13 @@ namespace oc4::host
 		void setCombatFocus(bool bNewValue) override;
 		// The active player's unit that attacked last (it had the focus: quick combat too), once.
 		std::optional<IDInfo> takeFocusAttacker() { return std::exchange(m_focusAttacker, std::nullopt); }
-		bool isScoresVisible() override { return false; }
 		// The tech splash (the scripts' CvTechSplashScreen, with the tech's quote): only with the
 		// game's screens up (Screens::start); without them the game core plays the short sound instead.
 		bool techSplash = false;
-		bool noTechSplash() override { return !techSplash; }
+		bool noTechSplash() override { return !techSplash || noTechSplashOption; }
+		// CivilizationIV.ini's NoTechSplash and NoEventMessages (the options' OpenCiv4 tab): no tech
+		// splash; the messages not shown on the screen (still in the turn log, their sound played).
+		bool noTechSplashOption = false, noEventMessages = false;
 		bool isInAdvancedStart() const override { return false; }
 		CvPlot* getLookAtPlot() override { return nullptr; }
 		CvPlot* getGotoPlot() override { return m_gotoPlot; }
@@ -482,6 +493,8 @@ namespace oc4::host
 		// While one is on the game is updated once a battle slice, as its animation goes:
 		// true while it is not yet time for the next update (false: go, counted).
 		static bool battleWait();
+		// OpenCiv4's option Quick enemy moves (the main loop's): the others' walks in half the time.
+		static void setQuickShownMoves(bool on);
 
 	private:
 		const Interface& m_selection;
