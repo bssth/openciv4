@@ -422,6 +422,7 @@ namespace oc4::host
 	{
 		m_utility.setGameInitializing(true);
 		m_utility.setProfileOptionsFromPlayer(NO_PLAYER);
+		m_utility.engine().resetGreatWalls({}, false);
 		m_python.run(std::format("import random\nrandom.seed({})\n", settings.seed));
 		setupScenarioInitCore(settings);
 		CvInitCore& ic = GC.getInitCore();
@@ -466,6 +467,7 @@ namespace oc4::host
 
 		m_utility.setGameInitializing(false);
 		m_utility.setGameActive(true);
+		m_utility.engine().layGreatWalls(); // (the engine's first update: a scenario's wall along its borders)
 		activateFirstTurn();
 	}
 
@@ -478,6 +480,7 @@ namespace oc4::host
 		}
 		m_utility.setGameInitializing(true);
 		m_utility.setProfileOptionsFromPlayer(NO_PLAYER);
+		m_utility.engine().resetGreatWalls({}, false);
 		setupInitCore(settings);
 		CvInitCore& ic = GC.getInitCore();
 		CvGame& game = GC.getGame();
@@ -505,6 +508,7 @@ namespace oc4::host
 
 		m_utility.setGameInitializing(false);
 		m_utility.setGameActive(true);
+		m_utility.engine().layGreatWalls(); // (the engine's first update: a scenario's wall along its borders)
 		activateFirstTurn();
 	}
 
@@ -803,6 +807,9 @@ namespace oc4::host
 		CvEventReporter::getInstance().readStatistics(&data);
 		if (data.overrun() || data.GetSizeLeft() != 0)
 			throw std::runtime_error(path.filename().string() + ": game data does not match this game core (wrong mod or DLL?)");
+		// A save doesn't keep OpenCiv4's Great Wall: it is laid again for the city with the wonder,
+		// along the borders as they are now.
+		m_utility.engine().resetGreatWalls({}, true);
 
 		// CvGame::read picks the active player of single player games; for hotseat and
 		// other multiplayer types the engine does: the human whose turn it is. The saved
