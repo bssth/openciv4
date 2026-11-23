@@ -1439,10 +1439,9 @@ namespace
 					for (int i = 0; i < plot->getNumUnits() && !own; ++i)
 						if (CvUnit* u = plot->getUnitByIndex(i); u && u->getOwner() == me)
 							own = u;
+					// (none of one's units there: the selection stays, as the original's, seen in Wine)
 					if (own)
 						ui.selectGroup(own, click.shift, click.ctrl, click.alt);
-					else
-						ui.clearSelectionList();
 					// (as the original's: the camera goes to the plot clicked, a unit there or not;
 					// a scripted game told where to look keeps looking there)
 					if (opt.lookX < 0 || opt.viewSeconds <= 0)
