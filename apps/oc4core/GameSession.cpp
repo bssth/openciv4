@@ -508,6 +508,22 @@ namespace oc4::host
 		activateFirstTurn();
 	}
 
+	void GameSession::endGame()
+	{
+		m_utility.setGameActive(false);
+		// (the players first: their units and cities stand on the map's plots)
+		for (int p = 0; p < maxPlayers(); ++p)
+			player(p).reset(static_cast<PlayerTypes>(p));
+		for (int t = 0; t < maxTeams(); ++t)
+			team(t).reset(static_cast<TeamTypes>(t));
+		// (no active player: a loaded game's setActivePlayer claims its slot again, as in a new process)
+		GC.getInitCore().init(NO_GAMEMODE);
+		CvMapInitData none; // (no plots; and the last game's map script is not asked)
+		GC.getMap().reset(&none);
+		GC.getGame().reset(NO_HANDICAP);
+		m_autoPlay = {};
+	}
+
 	void GameSession::activateFirstTurn()
 	{
 		CvGame& game = GC.getGame();

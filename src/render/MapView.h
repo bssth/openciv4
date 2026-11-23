@@ -42,6 +42,9 @@ namespace oc4::render
 		// Takes over a new state of the game; rebuilds what changed.
 		void setMap(const MapSnapshot& snapshot);
 		bool empty() const;
+		// The game is over (back to the main menu): no map until the next game's setMap, which
+		// then builds everything anew; what was moving or burning on the old one is gone.
+		void clear();
 		const MapSnapshot& map() const;
 
 		void update(float dt);

@@ -2635,6 +2635,38 @@ namespace oc4::render
 		}
 	}
 
+	void MapWindow::clearMap()
+	{
+		m->view->clear();
+		m->framed = false;
+		m->glide.reset();
+		m->travelTo.reset();
+		m->cityView = m->battleView = false;
+		m->beforeCity.reset();
+		m->beforeBattle.reset();
+		m->globeView = m->worldBuilder = false;
+		m->actions.clear();
+		m->actionClick.reset();
+		m->helpAction = -2;
+		m->info.clear();
+		m->messages.clear();
+		m->screenMinimap = {};
+		m->plotMarks = {};
+		m->helpPlot = { -1, -1 };
+		m->plotHelpText.clear();
+		m->plotHelpSeen.clear();
+		m->plotHelp = {};
+		// (the game's helpers: they point into the game that was)
+		m->actionHelp = {};
+		m->popupHelp = {};
+		m->popup.set(nullptr);
+		m->busy = false;
+		m->clicks.clear();
+		m->keys.clear();
+		m->uiClicks.clear();
+		m->status.clear();
+		m->updateTitle();
+	}
 	void MapWindow::lookAt(int x, int y, float distanceInPlots) { m->lookAt(x, y, distanceInPlots); }
 	void MapWindow::enterCityView(int x, int y) { m->enterCityView(x, y); }
 	void MapWindow::leaveCityView() { m->leaveCityView(); }

@@ -359,6 +359,17 @@ namespace oc4::host
 		}
 	}
 
+	void Utility::endGame()
+	{
+		for (CvMessageData* m : std::exchange(m_messages, {}))
+			delete m;
+		m_diplomacy.end();
+		m_interface.endGame();
+		m_engine.endGame();
+		m_gameActive = m_gameInitializing = false;
+		m_shift = m_ctrl = m_alt = false;
+	}
+
 	void Utility::pumpMessages()
 	{
 		std::vector<CvMessageData*> batch;

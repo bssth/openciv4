@@ -932,6 +932,44 @@ namespace oc4::host
 			infos.push_back(m_popup->info);
 	}
 
+	void Interface::endGame()
+	{
+		m_exiting = false;
+		{
+			std::lock_guard lock(m_shownMutex);
+			m_shown.clear();
+		}
+		m_minimapBase.clear();
+		m_selection.clear();
+		m_gotoPlot = nullptr;
+		m_lastSelected = nullptr;
+		m_endTurnMessage = m_hasMovedUnit = m_forcePopup = false;
+		m_endTurnCounter = m_cycleSelectionCounter = 0;
+		m_combatFocus = false;
+		m_focusAttacker.reset();
+		clearQueuedPopups();
+		closePopup();
+		m_quietFocus = false;
+		m_interfaceMode = INTERFACEMODE_SELECTION;
+		m_dirty.set();
+		m_show = INTERFACE_SHOW;
+		m_worldBuilder = false;
+		m_showBeforeWorldBuilder = INTERFACE_SHOW;
+		m_cities.clear();
+		m_citiesShown.clear();
+		m_cityScreen = false;
+		lookAtX = lookAtY = -1;
+		lookAtPointX = lookAtPointY = -1;
+		lookAtBattleZoom = false;
+		lookAtBattleDirX = 0;
+		releaseCamera = false;
+		mouseX = mouseY = -1;
+		mouseLeft = mouseRight = mouseOverMap = false;
+		techSplash = false;
+		turnLogRequest.store(TurnLog::None);
+		Entities::endGame();
+	}
+
 	void Interface::clearQueuedPopups()
 	{
 		for (const Queued& q : m_queued)
@@ -1272,6 +1310,35 @@ namespace oc4::host
 		{
 			lookAtX = p->getX();
 			lookAtY = p->getY();
+		}
+	}
+	void Entities::endGame()
+	{
+		s_missions.clear();
+		{
+			std::lock_guard lock(g_movementMutex);
+			g_movements.clear();
+		}
+		{
+			std::lock_guard lock(g_foundingMutex);
+			g_foundings.clear();
+		}
+		{
+			std::lock_guard lock(g_damageMutex);
+			g_damaged.clear();
+		}
+		{
+			std::lock_guard lock(g_siegeMutex);
+			g_siegeTowers.clear();
+		}
+		{
+			std::lock_guard lock(g_battleMutex);
+			g_battles.clear();
+			g_lastSlice = {};
+		}
+		{
+			std::lock_guard lock(g_actionMutex);
+			g_actions.clear();
 		}
 	}
 }

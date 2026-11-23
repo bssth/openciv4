@@ -316,6 +316,10 @@ namespace oc4::host
 				onExitToMainMenu(szLoadFile ? szLoadFile : "");
 		}
 		bool isExitingToMainMenu() override { return m_exiting; }
+		// The game is over and the program goes on (the main menu, another game in the same
+		// window): what this interface held of it goes (selection, popups, messages, the city
+		// screen, the camera's requests); the player's choices of display stay, as the original's.
+		void endGame();
 		// The turn log (Ctrl+Tab): the game core asks for it to come and go, to be shown, or
 		// says it changed; the screens see to it (python/oc4turnlog.py). Any thread.
 		void toggleTurnLog() override { turnLogRequest.store(TurnLog::Toggle); }
@@ -482,6 +486,8 @@ namespace oc4::host
 		// While one is on the game is updated once a battle slice, as its animation goes:
 		// true while it is not yet time for the next update (false: go, counted).
 		static bool battleWait();
+		// The game is over: the walks, battles, actions and foundings it was showing go.
+		static void endGame();
 
 	private:
 		const Interface& m_selection;

@@ -30,6 +30,10 @@ namespace oc4::host
 		void initEngine();
 
 		void startNewGame(const NewGameSettings& settings);
+		// The game left (the game menu's main menu, a load): the game core back to how it was
+		// before the first game, so the next one, new or loaded, starts as it would in a new
+		// process (its players, teams, map and game reset; the staging room empty).
+		void endGame();
 		// Throws what startNewGame would for settings it cannot start a game from (too few
 		// civilizations, a leader of another civilization); it leaves the init core set up.
 		void checkNewGame(const NewGameSettings& settings);

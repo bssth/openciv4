@@ -2102,6 +2102,26 @@ def _forget(s):
 		s.minimap, s.helpArea, s.endTurn = None, None, None
 
 
+def endGame():
+	"""The game is over (back to the main menu, another game in the same window): every screen it
+	had up goes, the main interface too, with their widgets; the next game shows its own."""
+	for s in list(_screens.values()):
+		if s.shown:
+			s.shown = False
+			_screenMusic(s, False)
+		s.widgets, s.order, s.hideLists = {}, [], {}
+		s.minimap, s.mm, s.helpArea, s.endTurn = None, None, None, None
+	_drop[0], _drop[1] = None, 0
+	_editFocus[0] = None
+	_citySelection[0] = ()
+	del _areas[:]
+	_bars.clear()
+	_dropRects.clear()
+	_heads.clear()
+	_spaceship.update({'project': -1, 'zoom': None, 'appear': set(), 'launched': False})
+	_changed()
+
+
 def modalUp():
 	"""The host: whether a screen of its own is up over the map (an advisor, a wonder's movie)."""
 	for s in _screens.values():

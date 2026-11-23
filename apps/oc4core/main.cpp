@@ -117,9 +117,18 @@ namespace
 {
 	fs::path documentsFolder();
 
-	// What the program runs as next, when a game leaves for another (the game menu's load,
-	// its main menu): these options with the install's and the mod's of this run.
+	// What the program runs as next (a new multiplayer game, hosted from its save): these
+	// options with the install's and the mod's of this run.
 	std::optional<std::vector<std::wstring>> g_relaunch;
+	// What comes after a game the player leaves (the game menu's main menu or load, a quick
+	// load): the main menu (on that page) or that save, in the same window, as the original.
+	struct NextGame
+	{
+		bool menu = false;
+		std::string menuPage;
+		fs::path load;
+	};
+	std::optional<NextGame> g_next;
 
 	struct Options
 	{
@@ -555,7 +564,9 @@ namespace
 	// the game's actions (CvActionInfo: missions, commands, builds, promotions, controls) from
 	// their buttons and hotkeys through CvGame::handleAction, a plot for the interface mode one
 	// asks for; the AI plays its turns in between.
-	void runPlay(const Options& opt, render::MapWindow& window, host::MapCapture& capture, host::GameSession& session, host::Utility& utility)
+	// (keys: --keys, those still to come; what this game leaves of them goes on to the menu)
+	void runPlay(const Options& opt, render::MapWindow& window, host::MapCapture& capture, host::GameSession& session, host::Utility& utility,
+		std::string& keys)
 	{
 		using Clock = std::chrono::steady_clock;
 		host::Interface& ui = utility.gameInterface();
@@ -754,7 +765,7 @@ namespace
 		// Ctrl, Alt, Shift with the next key, "(x,y)" a right click on that plot, "[x,y]" a left
 		// click, "#n" the n-th button of the popup up, 'text' for its next edit box, "{Name}" a
 		// click on the screens' widget so named, "{Name/part}" on its part): a scripted game.
-		std::string script = opt.viewKeys;
+		std::string& script = keys;
 		int waited = 0;
 		std::pair<int, int> cityScreen{ -1, -1 }; // the city whose screen is up
 		long long cityFrames = 0; // frames when the city screen last opened or closed
@@ -970,12 +981,12 @@ namespace
 		utility.session.quickSave = [&] { saved(quick); };
 		utility.session.quickLoad = [&] {
 			if (std::error_code ec; fs::exists(quick, ec))
-				g_relaunch = std::vector<std::wstring>{ L"--play", L"--load", quick.wstring() }, leave = true;
+				g_next = NextGame{ .load = quick }, leave = true;
 		};
-		utility.session.load = [&] { g_relaunch = std::vector<std::wstring>{ L"--menu", L"--menu-page", L"load" }, leave = true; };
+		utility.session.load = [&] { g_next = NextGame{ .menu = true, .menuPage = "load" }, leave = true; };
 		utility.session.quit = [&] { leave = true; };
 		ui.onExitToMainMenu = [&](const std::string& load) {
-			g_relaunch = load.empty() ? std::vector<std::wstring>{ L"--menu" } : std::vector<std::wstring>{ L"--play", L"--load", fs::path(load).wstring() };
+			g_next = load.empty() ? NextGame{ .menu = true } : NextGame{ .load = fs::path(load) };
 			leave = true;
 		};
 		struct ForgetSession
@@ -1994,7 +2005,7 @@ namespace
 	}
 
 	// The map in a window while the AI plays, or rendered into a file.
-	void runMapView(const Options& opt, const AssetResolver& assets, host::GameSession& session, host::Utility& utility, render::MapWindow* menuWindow = nullptr)
+	void runMapView(Options& opt, const AssetResolver& assets, host::GameSession& session, host::Utility& utility, render::MapWindow* menuWindow = nullptr)
 	{
 		using Clock = std::chrono::steady_clock;
 		const bool offscreen = !opt.screenshot.empty();
@@ -2032,7 +2043,7 @@ namespace
 		if (opt.play)
 		{
 			// (offscreen: --keys played for --view-seconds, then the last frame saved)
-			runPlay(opt, window, capture, session, utility);
+			runPlay(opt, window, capture, session, utility, opt.viewKeys);
 			if (offscreen)
 			{
 				window.saveScreenshot(opt.screenshot);
@@ -2285,212 +2296,266 @@ int wmain(int argc, wchar_t** argv)
 				session.initEngine();
 				return true;
 			});
-			// The menu first: what it chooses is played as with --play, in its window.
+			// The menu first: what it chooses is played as with --play, in its window. A game left
+			// for the main menu or another save goes on in the same window, as the original's.
 			Options played = opt;
 			std::optional<render::MapWindow> menuWindow;
-			if (opt.menu)
+			std::string message; // (a save that cannot be played here: the menu again, saying why)
+			for (bool first = true;; first = false)
 			{
-				menuWindow.emplace(assets, opt.viewWidth, opt.viewHeight, !opt.screenshot.empty());
-				std::vector<std::string> maps;
-				std::set<std::string> seen;
-				for (const fs::path& dir : mapDirs)
+				if (played.menu)
 				{
-					std::error_code ec;
-					for (const auto& e : fs::directory_iterator(dir, ec))
-						if (e.is_regular_file() && lowerAscii(utf8Path(e.path().extension())) == ".py" && seen.insert(lowerAscii(utf8Path(e.path().stem()))).second)
-							maps.push_back(utf8Path(e.path().stem()));
-				}
-				const std::string title = modDir ? utf8Path(modDir->filename()) : "Civilization IV: Beyond the Sword";
-				rememberMod({ modFolder, opt.mod.value_or(fs::path()), thisProgram() });
-				const std::vector<KnownMod> mods = readKnownMods();
-				std::vector<std::string> otherMods;
-				for (const KnownMod& m : mods)
-					if (m.folder != modFolder)
-						otherMods.push_back(m.folder);
-				// (a save that cannot be played here: the menu again, saying why)
-				std::string message;
-				Options menuOpt = opt;
-				for (;;)
-				{
-					const auto choice = runMenu(menuOpt, *menuWindow, utility, title, maps, otherMods, played.viewKeys, message);
-					if (!choice || choice->kind == host::MenuChoice::Kind::Exit)
+					if (!menuWindow)
+						menuWindow.emplace(assets, opt.viewWidth, opt.viewHeight, !opt.screenshot.empty());
+					std::vector<std::string> maps;
+					std::set<std::string> seen;
+					for (const fs::path& dir : mapDirs)
 					{
-						std::printf("\nmenu: %s\n", choice ? "exit" : "closed");
-						return 0;
+						std::error_code ec;
+						for (const auto& e : fs::directory_iterator(dir, ec))
+							if (e.is_regular_file() && lowerAscii(utf8Path(e.path().extension())) == ".py" && seen.insert(lowerAscii(utf8Path(e.path().stem()))).second)
+								maps.push_back(utf8Path(e.path().stem()));
 					}
-					played.view = played.play = true;
-					played.turns = 0;
-					// (multiplayer: hosting it on the usual port, or joining one)
-					played.hostPort = choice->host > 0 ? 2056 : 0;
-					played.humans = std::max(2, choice->host);
-					if (choice->kind == host::MenuChoice::Kind::Join)
+					const std::string title = modDir ? utf8Path(modDir->filename()) : "Civilization IV: Beyond the Sword";
+					rememberMod({ modFolder, opt.mod.value_or(fs::path()), thisProgram() });
+					const std::vector<KnownMod> mods = readKnownMods();
+					std::vector<std::string> otherMods;
+					for (const KnownMod& m : mods)
+						if (m.folder != modFolder)
+							otherMods.push_back(m.folder);
+					Options menuOpt = played;
+					for (;;)
 					{
-						played.join = choice->join;
-						break;
-					}
-					if (choice->kind == host::MenuChoice::Kind::NewGame)
-					{
-						// (what the command line chose and the menu does not: as chosen there)
-						const host::NewGameSettings asked = played.game;
-						played.game = choice->game;
-						if (played.game.players == 0)
-							played.game.players = asked.players;
-						if (played.game.options.empty())
-							played.game.options = asked.options;
-						if (played.game.victories.empty())
-							played.game.victories = asked.victories;
-						if (played.game.mapOptions.empty() && played.game.mapScript == asked.mapScript)
-							played.game.mapOptions = asked.mapOptions;
-						if (played.game.slots.empty())
-							played.game.slots = asked.slots;
-						if (played.game.advancedStartPoints < 0)
-							played.game.advancedStartPoints = asked.advancedStartPoints;
-						// (settings the game cannot start from: the menu again, saying why)
+						const auto choice = runMenu(menuOpt, *menuWindow, utility, title, maps, otherMods, played.viewKeys, message);
+						if (!choice || choice->kind == host::MenuChoice::Kind::Exit)
+						{
+							std::printf("\nmenu: %s\n", choice ? "exit" : "closed");
+							return 0;
+						}
+						played.view = played.play = true;
+						played.turns = 0;
+						// (multiplayer: hosting it on the usual port, or joining one)
+						played.hostPort = choice->host > 0 ? 2056 : 0;
+						played.humans = std::max(2, choice->host);
+						if (choice->kind == host::MenuChoice::Kind::Join)
+						{
+							played.join = choice->join;
+							break;
+						}
+						if (choice->kind == host::MenuChoice::Kind::NewGame)
+						{
+							// (what the command line chose and the menu does not: as chosen there)
+							const host::NewGameSettings asked = played.game;
+							played.game = choice->game;
+							if (played.game.players == 0)
+								played.game.players = asked.players;
+							if (played.game.options.empty())
+								played.game.options = asked.options;
+							if (played.game.victories.empty())
+								played.game.victories = asked.victories;
+							if (played.game.mapOptions.empty() && played.game.mapScript == asked.mapScript)
+								played.game.mapOptions = asked.mapOptions;
+							if (played.game.slots.empty())
+								played.game.slots = asked.slots;
+							if (played.game.advancedStartPoints < 0)
+								played.game.advancedStartPoints = asked.advancedStartPoints;
+							// (settings the game cannot start from: the menu again, saying why)
+							try
+							{
+								session.checkNewGame(played.game);
+								break;
+							}
+							catch (const std::exception& e)
+							{
+								message = e.what();
+								menuOpt.menuPage = choice->game.slots.empty() ? "new" : "custom";
+								std::printf("\nmenu: %s\n", message.c_str());
+								continue;
+							}
+						}
+						if (choice->kind == host::MenuChoice::Kind::Mod)
+						{
+							for (const KnownMod& m : mods)
+								if (m.folder == choice->mod)
+									startAgain(opt, m, { L"--menu" });
+							return 0;
+						}
 						try
 						{
-							session.checkNewGame(played.game);
+							if (loadElsewhere(choice->save, played.hostPort, played.humans))
+								return 0;
+							session.checkSave(choice->save);
+							played.load = choice->save;
 							break;
 						}
 						catch (const std::exception& e)
 						{
 							message = e.what();
-							menuOpt.menuPage = choice->game.slots.empty() ? "new" : "custom";
+							menuOpt.menuPage = "load";
 							std::printf("\nmenu: %s\n", message.c_str());
-							continue;
 						}
 					}
-					if (choice->kind == host::MenuChoice::Kind::Mod)
+				}
+				// Joining a multiplayer game: the host's save, loaded as any other.
+				host::Net::Welcome joined;
+				if (!played.join.empty())
+				{
+					std::printf("\nmultiplayer: joining %s\n", played.join.c_str());
+					host::Net::get().join(played.join);
+					joined = host::Net::get().awaitWelcome();
+					const fs::path file = multiplayerFolder() / L"joined.CivBeyondSwordSave";
+					std::ofstream(file, std::ios::binary).write(reinterpret_cast<const char*>(joined.save.data()), std::streamsize(joined.save.size()));
+					std::printf("  multiplayer: seat %d, %zu humans, the game %zu bytes\n", joined.seat, joined.humans.size(), joined.save.size());
+					played.load = file;
+				}
+				if (!played.load.empty())
+				{
+					std::printf("\nload: %s\n", utf8Path(played.load.filename()).c_str());
+					stage("load game", [&] {
+						session.loadGame(played.load);
+						return true;
+					});
+				}
+				else
+				{
+					std::printf("\nnew game: %s, %s, seed %u%s%s\n", played.game.mapScript.c_str(), played.game.worldSize.c_str(), played.game.seed,
+						played.game.leader.empty() ? "" : ", ", played.game.leader.c_str());
+					stage("start new game", [&] {
+						session.startNewGame(played.game);
+						return true;
+					});
+				}
+				if (!played.execFirst.empty())
+				{
+					const auto bytes = readWholeFile(played.execFirst);
+					python.run(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+				}
+				// Hosting a multiplayer game: a new one is saved and started again from its save (all
+				// the players then begin from the same file); a loaded one waits for the others, gives
+				// them their seats and the file, and the frames begin.
+				if (played.hostPort > 0 && played.load.empty())
+				{
+					const fs::path file = multiplayerFolder() / L"host-start.CivBeyondSwordSave";
+					session.saveGame(file);
+					g_relaunch = std::vector<std::wstring>{ L"--play", L"--host", std::to_wstring(played.hostPort), L"--humans",
+						std::to_wstring(played.humans), L"--load", file.wstring() };
+					played.view = false;
+				}
+				else if (played.hostPort > 0)
+				{
+					const PlayerTypes mine = GC.getGame().getActivePlayer();
+					std::vector<int> humans{ int(mine) };
+					for (int pass = 0; pass < 2; ++pass)
+						for (int p = 0; p < GC.getMAX_CIV_PLAYERS() && int(humans.size()) < played.humans; ++p)
+						{
+							const CvPlayerAI& pl = CvPlayerAI::getPlayerNonInl(static_cast<PlayerTypes>(p));
+							if (pl.isAlive() && !pl.isBarbarian() && std::ranges::find(humans, p) == humans.end() && (pass == 1 || pl.isHuman()))
+								humans.push_back(p);
+						}
+					host::Net& net = host::Net::get();
+					net.listen(static_cast<uint16_t>(played.hostPort));
+					std::printf("\nmultiplayer: hosting on port %d for %zu humans (seats", played.hostPort, humans.size());
+					for (const int h : humans)
+						std::printf(" %d", h);
+					std::printf(")\n");
+					std::fflush(stdout);
+					// (the window up and live meanwhile, saying who has come; closing it gives up)
+					if (!menuWindow && played.view)
+						menuWindow.emplace(assets, opt.viewWidth, opt.viewHeight, !opt.screenshot.empty());
+					net.acceptPlayers(int(humans.size()) - 1, [&](int joined) {
+						if (!menuWindow)
+							return true;
+						menuWindow->setStatus(std::format("multiplayer: waiting for the others on port {} ({} of {} here)", played.hostPort,
+							joined + 1, humans.size()));
+						menuWindow->frame(0.1f);
+						return menuWindow->pump();
+					});
+					net.welcome(std::vector<int>(humans.begin() + 1, humans.end()), humans, readWholeFile(played.load));
+					session.setupMultiplayer(humans, int(mine));
+					net.start();
+				}
+				else if (!played.join.empty())
+				{
+					session.setupMultiplayer(joined.humans, joined.seat);
+					host::Net::get().start();
+				}
+				// (in a window the AI plays them while the map shows)
+				if (first && opt.turns > 0 && (!opt.view || !opt.screenshot.empty()))
+				{
+					std::printf("\nAI autoplay, %d turns:\n", opt.turns);
+					host::SamplingProfiler profiler;
+					if (opt.profile)
+						profiler.start();
+					const auto tPlay = std::chrono::steady_clock::now();
+					session.autoPlay(opt.turns, [&](int turn) {
+						if (turn == opt.saveAt && !opt.save.empty())
+						{
+							session.saveGame(opt.save);
+							std::printf("  saved %s at turn %d\n", opt.save.filename().string().c_str(), turn);
+						}
+					});
+					std::printf("  %.2fs\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - tPlay).count());
+					if (opt.profile)
 					{
-						for (const KnownMod& m : mods)
-							if (m.folder == choice->mod)
-								startAgain(opt, m, { L"--menu" });
-						return 0;
+						profiler.stop();
+						profiler.report(stdout, 40);
+						if (!opt.profileOut.empty())
+							profiler.writeFolded(opt.profileOut);
 					}
+				}
+				if (played.view)
+				{
+					// (the window stays for the games after this one)
+					if (!menuWindow)
+						menuWindow.emplace(assets, opt.viewWidth, opt.viewHeight, !opt.screenshot.empty());
+					runMapView(played, assets, session, utility, &*menuWindow);
+				}
+				if (!g_next)
+					break;
+				const NextGame next = *std::exchange(g_next, std::nullopt);
+				// (a multiplayer game's connections are the program's: it starts again for the next)
+				if (played.hostPort > 0 || !played.join.empty())
+				{
+					g_relaunch = next.menu ? std::vector<std::wstring>{ L"--menu", L"--menu-page", fs::path(next.menuPage).wstring() }
+										   : std::vector<std::wstring>{ L"--play", L"--load", next.load.wstring() };
+					break;
+				}
+				// The game over, the next in this window: the main menu (on its load page) or a save.
+				std::printf("\nleaving the game for %s\n", next.menu ? "the main menu" : utf8Path(next.load.filename()).c_str());
+				host::Screens::endGame();
+				session.endGame();
+				utility.endGame();
+				menuWindow->clearMap();
+				std::string keys = std::move(played.viewKeys);
+				played = opt;
+				played.viewKeys = std::move(keys);
+				played.menu = next.menu;
+				played.menuPage = next.menuPage;
+				played.load = next.load;
+				played.view = played.play = true;
+				played.turns = 0;
+				played.lookX = played.lookY = -1;
+				played.execFirst.clear();
+				message.clear();
+				if (!played.load.empty())
+				{
+					// (another mod's save: that mod's program, as the original restarts into its mod)
+					if (loadElsewhere(played.load, 0, played.humans))
+						return 0;
 					try
 					{
-						if (loadElsewhere(choice->save, played.hostPort, played.humans))
-							return 0;
-						session.checkSave(choice->save);
-						played.load = choice->save;
-						break;
+						session.checkSave(played.load);
 					}
 					catch (const std::exception& e)
 					{
 						message = e.what();
-						menuOpt.menuPage = "load";
+						played.load.clear();
+						played.menu = true;
+						played.menuPage = "load";
 						std::printf("\nmenu: %s\n", message.c_str());
 					}
 				}
 			}
-			// Joining a multiplayer game: the host's save, loaded as any other.
-			host::Net::Welcome joined;
-			if (!played.join.empty())
-			{
-				std::printf("\nmultiplayer: joining %s\n", played.join.c_str());
-				host::Net::get().join(played.join);
-				joined = host::Net::get().awaitWelcome();
-				const fs::path file = multiplayerFolder() / L"joined.CivBeyondSwordSave";
-				std::ofstream(file, std::ios::binary).write(reinterpret_cast<const char*>(joined.save.data()), std::streamsize(joined.save.size()));
-				std::printf("  multiplayer: seat %d, %zu humans, the game %zu bytes\n", joined.seat, joined.humans.size(), joined.save.size());
-				played.load = file;
-			}
-			if (!played.load.empty())
-			{
-				std::printf("\nload: %s\n", utf8Path(played.load.filename()).c_str());
-				stage("load game", [&] {
-					session.loadGame(played.load);
-					return true;
-				});
-			}
-			else
-			{
-				std::printf("\nnew game: %s, %s, seed %u%s%s\n", played.game.mapScript.c_str(), played.game.worldSize.c_str(), played.game.seed,
-					played.game.leader.empty() ? "" : ", ", played.game.leader.c_str());
-				stage("start new game", [&] {
-					session.startNewGame(played.game);
-					return true;
-				});
-			}
-			if (!opt.execFirst.empty())
-			{
-				const auto bytes = readWholeFile(opt.execFirst);
-				python.run(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
-			}
-			// Hosting a multiplayer game: a new one is saved and started again from its save (all
-			// the players then begin from the same file); a loaded one waits for the others, gives
-			// them their seats and the file, and the frames begin.
-			if (played.hostPort > 0 && played.load.empty())
-			{
-				const fs::path file = multiplayerFolder() / L"host-start.CivBeyondSwordSave";
-				session.saveGame(file);
-				g_relaunch = std::vector<std::wstring>{ L"--play", L"--host", std::to_wstring(played.hostPort), L"--humans",
-					std::to_wstring(played.humans), L"--load", file.wstring() };
-				played.view = false;
-			}
-			else if (played.hostPort > 0)
-			{
-				const PlayerTypes mine = GC.getGame().getActivePlayer();
-				std::vector<int> humans{ int(mine) };
-				for (int pass = 0; pass < 2; ++pass)
-					for (int p = 0; p < GC.getMAX_CIV_PLAYERS() && int(humans.size()) < played.humans; ++p)
-					{
-						const CvPlayerAI& pl = CvPlayerAI::getPlayerNonInl(static_cast<PlayerTypes>(p));
-						if (pl.isAlive() && !pl.isBarbarian() && std::ranges::find(humans, p) == humans.end() && (pass == 1 || pl.isHuman()))
-							humans.push_back(p);
-					}
-				host::Net& net = host::Net::get();
-				net.listen(static_cast<uint16_t>(played.hostPort));
-				std::printf("\nmultiplayer: hosting on port %d for %zu humans (seats", played.hostPort, humans.size());
-				for (const int h : humans)
-					std::printf(" %d", h);
-				std::printf(")\n");
-				std::fflush(stdout);
-				// (the window up and live meanwhile, saying who has come; closing it gives up)
-				if (!menuWindow && played.view)
-					menuWindow.emplace(assets, opt.viewWidth, opt.viewHeight, !opt.screenshot.empty());
-				net.acceptPlayers(int(humans.size()) - 1, [&](int joined) {
-					if (!menuWindow)
-						return true;
-					menuWindow->setStatus(std::format("multiplayer: waiting for the others on port {} ({} of {} here)", played.hostPort,
-						joined + 1, humans.size()));
-					menuWindow->frame(0.1f);
-					return menuWindow->pump();
-				});
-				net.welcome(std::vector<int>(humans.begin() + 1, humans.end()), humans, readWholeFile(played.load));
-				session.setupMultiplayer(humans, int(mine));
-				net.start();
-			}
-			else if (!played.join.empty())
-			{
-				session.setupMultiplayer(joined.humans, joined.seat);
-				host::Net::get().start();
-			}
-			// (in a window the AI plays them while the map shows)
-			if (opt.turns > 0 && (!opt.view || !opt.screenshot.empty()))
-			{
-				std::printf("\nAI autoplay, %d turns:\n", opt.turns);
-				host::SamplingProfiler profiler;
-				if (opt.profile)
-					profiler.start();
-				const auto tPlay = std::chrono::steady_clock::now();
-				session.autoPlay(opt.turns, [&](int turn) {
-					if (turn == opt.saveAt && !opt.save.empty())
-					{
-						session.saveGame(opt.save);
-						std::printf("  saved %s at turn %d\n", opt.save.filename().string().c_str(), turn);
-					}
-				});
-				std::printf("  %.2fs\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - tPlay).count());
-				if (opt.profile)
-				{
-					profiler.stop();
-					profiler.report(stdout, 40);
-					if (!opt.profileOut.empty())
-						profiler.writeFolded(opt.profileOut);
-				}
-			}
-			if (played.view)
-				runMapView(played, assets, session, utility, menuWindow ? &*menuWindow : nullptr);
 			if (!opt.save.empty() && opt.saveAt < 0)
 				stage("save game", [&] {
 					session.saveGame(opt.save);

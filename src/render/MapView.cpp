@@ -4838,6 +4838,16 @@ float4 PSWater(WaterOut i) : SV_Target
 	}
 
 	bool MapView::empty() const { return !m->hasMap; }
+	void MapView::clear()
+	{
+		m->hasMap = false;
+		m->effects.clear();
+		m->bursts.clear();
+		m->pendingBursts.clear();
+		m->pendingEffects.clear();
+		m->motions.clear();
+		m->cityLayouts.clear();
+	}
 	const MapSnapshot& MapView::map() const { return m->map; }
 	void MapView::triggerEffect(const std::string& nif, int x, int y, float fx, float fy, float degrees, float scale)
 	{

@@ -721,6 +721,18 @@ if _walls:
 	void Screens::setTextWidth(std::function<int(const std::string&, int)> width) { g_textWidth = std::move(width); }
 	void Screens::setTextHeight(std::function<int(const std::string&, int, int)> height) { g_textHeight = std::move(height); }
 
+	void Screens::endGame()
+	{
+		try
+		{
+			py::module_::import("oc4screens").attr("endGame")();
+		}
+		catch (py::error_already_set& e)
+		{
+			printPythonError(e);
+		}
+	}
+
 	bool Screens::start(int width, int height)
 	{
 		try

@@ -167,6 +167,28 @@ namespace oc4::host
 		void AddGreatWall(CvCity*) override { ++greatWallVersion; }
 		void RemoveGreatWall(CvCity*) override { ++greatWallVersion; }
 		std::atomic<uint64_t> greatWallVersion = 1;
+		// The game is over: its marks, signs, effects, globe and camera turn go; the layers the
+		// player chose (grid, resources, unit icons) stay.
+		void endGame()
+		{
+			{
+				std::lock_guard lock(marksMutex);
+				marks.clear();
+				signs.clear();
+				effects.clear();
+				++marksVersion;
+			}
+			globeUp = false;
+			globeLayer = -1;
+			globeOption = 0;
+			++globeVersion;
+			baseTurn = 0;
+			basePitch = 0;
+			satellite = false;
+			++cameraVersion;
+			foundingDirty = false;
+			++greatWallVersion;
+		}
 		std::mutex marksMutex;
 		std::vector<PlotMark> marks;
 		std::vector<Sign> signs;
@@ -427,6 +449,10 @@ namespace oc4::host
 
 		bool isGameInitializing() override { return m_gameInitializing; }
 		void setGameActive(bool active) { m_gameActive = active; }
+		// The game is over and the program goes on to the main menu or another game in the same
+		// process, as the original does: what the host kept of this one goes. (The game core's
+		// own state goes when the next game is set up: CvGame::init or CvGame::read reset it.)
+		void endGame();
 		void setGameInitializing(bool initializing) { m_gameInitializing = initializing; }
 
 	private:

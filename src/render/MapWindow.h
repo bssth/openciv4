@@ -42,6 +42,9 @@ namespace oc4::render
 		bool pump();
 		// The first map frames the camera on the active player's capital (focusX/Y) or the middle.
 		void setMap(const MapSnapshot& snapshot, int focusX = -1, int focusY = -1);
+		// The game left for the main menu: the window stays, empty, as before the first game; the
+		// next game's setMap frames its own start.
+		void clearMap();
 		// (distanceInPlots below 0: the game's start distance, CAMERA_START_DISTANCE)
 		void lookAt(int x, int y, float distanceInPlots = -1);
 		// Moves the camera over the plot, keeping its distance.
