@@ -1399,6 +1399,35 @@ namespace oc4::host
 							s.models[size_t(u.models.back())].ranged = info->getActAsRanged();
 							s.models[size_t(u.models.back())].battleDistance = info->getBattleDistance();
 						}
+					// Where they stand: the formation (CvUnitFormationInfo, CIV4FormationInfos.xml) of the
+					// unit's FormationType for what it does (its entity event: a battle's, a worker's
+					// build's, the mission a waiting unit was told; else idle), the first with as many
+					// unit entries as it has figures; and where its general and its siege tower stand.
+					{
+						// (the events are infos: CIV4EntityEventInfos.xml)
+						EntityEventTypes event = EntityEventTypes(GC.getInfoTypeForString("ENTITY_EVENT_IDLE", true));
+						if (u.battle >= 0)
+							event = EntityEventTypes(GC.getInfoTypeForString("ENTITY_EVENT_BEGIN_COMBAT", true));
+						else if (const BuildTypes build = shown->getBuildType(); build != NO_BUILD && GC.getBuildInfo(build).getEntityEvent() >= 0)
+							event = EntityEventTypes(GC.getBuildInfo(build).getEntityEvent());
+						else if (const int told = Entities::restingEvent(*shown); told >= 0)
+							event = EntityEventTypes(told);
+						const char* type = shown->getFormationType();
+						const auto spot = [](const CvUnitEntry& e) { return render::UnitView::Spot{ e.m_position.x, e.m_position.y, e.m_fFacingDirection }; };
+						for (int k = 0; k < GC.getNumUnitFormationInfos() && u.spots.empty(); ++k)
+						{
+							const CvUnitFormationInfo& f = GC.getUnitFormationInfo(k);
+							if (f.getNumUnitEntries() != int(u.models.size()) || !type || std::strcmp(f.getFormationType(), type) != 0 ||
+								std::ranges::find(f.getEventTypes(), event) == f.getEventTypes().end())
+								continue;
+							for (int e = 0; e < f.getNumUnitEntries(); ++e)
+								u.spots.push_back(spot(f.getUnitEntry(e)));
+							if (f.getNumGreatUnitEntries() > 0)
+								u.leaderSpot = spot(f.getGreatUnitEntry(0));
+							if (f.getNumSiegeUnitEntries() > 0)
+								u.towerSpot = spot(f.getSiegeUnitEntry(0));
+						}
+					}
 					// (the great general's figure: its era's warlord, as CvUnitInfo::getArtInfo picks the
 					// early, middle or late art; the tags are not exported, BtS names them)
 					if (shown->getLeaderUnitType() != NO_UNIT)

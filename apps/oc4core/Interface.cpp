@@ -763,6 +763,14 @@ namespace oc4::host
 		return it->second == MISSION_FORTIFY || it->second == MISSION_SLEEP || it->second == MISSION_SENTRY || it->second == MISSION_HEAL;
 	}
 
+	int Entities::restingEvent(const CvUnit& unit)
+	{
+		if (!unit.isWaiting())
+			return -1;
+		const auto it = s_missions.find(&unit);
+		return it == s_missions.end() || it->second < 0 || it->second >= GC.getNumMissionInfos() ? -1 : int(GC.getMissionInfo(it->second).getEntityEvent());
+	}
+
 	// ---------------------------------------------------------------- cities
 
 	namespace

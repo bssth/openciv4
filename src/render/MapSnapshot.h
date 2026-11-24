@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -166,6 +167,15 @@ namespace oc4::render
 		std::vector<MoveStep> moveSteps; // the plots it walked through since the last snapshot, in order
 		float moveSeconds = 0; // how long the walk through them takes (0: as long as their plots make it)
 		std::vector<int> models; // one per figure of the formation, into MapSnapshot::models
+		// Where each of them stands (CIV4FormationInfos.xml: the formation for the unit's entity
+		// event, its type and its number of figures): x to the right, y back, in half plots; the
+		// way it faces (radians, pi: ahead). Empty: no formation fits.
+		struct Spot
+		{
+			float x = 0, y = 0, facing = 3.14159265f;
+		};
+		std::vector<Spot> spots;
+		std::optional<Spot> leaderSpot, towerSpot; // (with spots: the formation's general and siege tower)
 		// More figures, into MapSnapshot::models (none: -1): the great general leading it (its era's
 		// warlord: beside the formation, it strikes with it and falls with its last), and, an
 		// attacker the game core gave a siege tower (walls, a city attack bonus), the tower before it.

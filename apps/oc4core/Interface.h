@@ -433,6 +433,9 @@ namespace oc4::host
 		// Whether a unit rests (fortified, asleep, on sentry, healing): told so last and
 		// still waiting; one never told (in a loaded game) when it is waiting.
 		static bool resting(const CvUnit& unit);
+		// The entity event of the mission a waiting unit was last told (CvMissionInfo's
+		// EntityEventType: fortify, sleep, ...), which picks its formation; -1 none.
+		static int restingEvent(const CvUnit& unit);
 
 		// A battle the game shows (MISSION_BEGIN_COMBAT, a CvBattleDefinition: the DLL sends
 		// one where the active player sees it): kept while it plays, for the window.

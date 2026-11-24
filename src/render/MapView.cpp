@@ -743,6 +743,8 @@ float4 PSWater(WaterOut i) : SV_Target
 			bool figure = false;
 			Vec3 anchor, offset;
 			float yaw = 0, scale = 1;
+			float turn = 0;        // a figure's turn from the unit's facing, where its formation stands (radians)
+			bool spread = false;   // its offset grows with the figures (the grid; a formation's spots do not)
 			bool onGround = false; // heights over the terrain (roads)
 			bool route = false;    // a road or railroad piece: trees beside it go (cutTrees)
 			bool laid = false;     // a piece laid on the terrain (rivers, roads, a farm's crops): drawn before the culture borders
@@ -3261,9 +3263,6 @@ float4 PSWater(WaterOut i) : SV_Target
 					}
 				}
 			std::erase_if(battleStarts, [&](const auto& e) { return time - e.second > 300; });
-			std::unordered_set<int> cityPlots;
-			for (const CityView& c : map.cities)
-				cityPlots.insert(c.x + c.y * map.width);
 			for (const UnitView& u : map.units)
 			{
 				// DirectionTypes: north 0, clockwise in eighths. Models face -Y. (Acting at another
@@ -3276,9 +3275,8 @@ float4 PSWater(WaterOut i) : SV_Target
 						dx -= std::copysign(float(map.width), dx);
 					yaw = std::atan2(float(u.actionY - u.y), dx) + std::numbers::pi_v<float> / 2;
 				}
+				// (in a city too: the original's stand at its plot's centre, seen in Wine)
 				Vec3 center{ (float(u.x) + 0.5f) * S(), (float(u.y) + 0.5f) * S(), 0 };
-				if (cityPlots.contains(u.x + u.y * map.width))
-					center.y -= 0.3f * S();
 				// A unit seen on another plot before walks there, plot by plot through those the game
 				// moved it through (a whole Go To this turn is one game update: the snapshots alone
 				// see only its end). As the original's: the plots one order walked, in a second
@@ -3303,10 +3301,7 @@ float4 PSWater(WaterOut i) : SV_Target
 					};
 					for (const UnitView::MoveStep& step : u.moveSteps)
 					{
-						Vec3 to{ (float(step.x) + 0.5f) * S(), (float(step.y) + 0.5f) * S(), 0 };
-						if (cityPlots.contains(step.x + step.y * map.width))
-							to.y -= 0.3f * S();
-						add(to);
+						add({ (float(step.x) + 0.5f) * S(), (float(step.y) + 0.5f) * S(), 0 });
 					}
 					add(center);
 					float total = 0;
@@ -3353,10 +3348,20 @@ float4 PSWater(WaterOut i) : SV_Target
 					LoadedModel* lm = model(art.nif, art.kfm);
 					if (!lm)
 						continue;
-					// (the general beside the formation, on its right; the tower ahead of it, to the left)
-					const float ox = role == 1 ? (float(columns) / 2 + 0.6f) * spacing : role == 2 ? -0.25f * S()
-																								: (float(int(i) % columns) - float(columns - 1) / 2) * spacing;
-					const float oy = role ? 0.0f : (float(int(i) / columns) - float(rows - 1) / 2) * spacing;
+					// The original's formation (CIV4FormationInfos.xml), where one fits: each figure at its
+					// entry's spot, x to the right and y back in half plots (seen in Wine: two workers at
+					// x -0.48 and 0.45 stand 0.47 plots apart, at every camera distance), turned as the
+					// entry says. The middle of the plot stays free for what stands there: a mine, dye.
+					std::optional<UnitView::Spot> spot;
+					if (u.spots.size() == n)
+						spot = role == 1 ? u.leaderSpot : role == 2 ? u.towerSpot : std::optional(u.spots[i]);
+					const bool spotted = spot.has_value();
+					// (none: a square grid; the general beside it, on its right; the tower ahead of it, to the left)
+					const float ox = spotted ? spot->x * 0.5f * S()
+						: role == 1			 ? (float(columns) / 2 + 0.6f) * spacing
+						: role == 2			 ? -0.25f * S()
+											 : (float(int(i) % columns) - float(columns - 1) / 2) * spacing;
+					const float oy = spotted ? spot->y * 0.5f * S() : role ? 0.0f : (float(int(i) / columns) - float(rows - 1) / 2) * spacing;
 					const float c = std::cos(yaw), s = std::sin(yaw);
 					Instance inst;
 					inst.model = lm;
@@ -3364,10 +3369,14 @@ float4 PSWater(WaterOut i) : SV_Target
 					inst.anchor = center;
 					inst.offset = { ox * c - oy * s, ox * s + oy * c, 0 };
 					inst.yaw = yaw;
+					inst.spread = !spotted;
+					// (Direction: pi faces ahead; less turns it clockwise seen from above, as the yaw)
+					if (spotted)
+						inst.turn = spot->facing - std::numbers::pi_v<float>;
 					// The game draws a lone figure larger (SINGLE_UNIT_GFX_EXTRA_SCALE).
 					inst.scale = art.scale * (n == 1 ? 1.25f : 1.0f);
 					inst.center = center;
-					inst.radius = lm->bounds.radius() * inst.scale * 2.5f + spacing * float(columns);
+					inst.radius = lm->bounds.radius() * inst.scale * 2.5f + (spotted ? 0.6f * S() : spacing * float(columns));
 					inst.team = teamColor(u.shownOwner);
 					inst.animated = lm->idle.has_value();
 					inst.phase = unitFloat(hash(u.x, u.y, int(i))) * 10;
@@ -4596,9 +4605,10 @@ float4 PSWater(WaterOut i) : SV_Target
 				{
 					const float c = std::cos(yaw - inst.yaw), s = std::sin(yaw - inst.yaw);
 					const Vec3 offset{ inst.offset.x * c - inst.offset.y * s, inst.offset.x * s + inst.offset.y * c, 0 };
-					Vec3 at = anchor + offset * std::min(zoom, 1.6f);
+					Vec3 at = anchor + offset * (inst.spread ? std::min(zoom, 1.6f) : 1.0f);
 					at.z = ground(at.x, at.y) + lift;
-					place = placement(at, yaw, inst.scale * zoom);
+					// (standing, each as its formation turns it; walking and fighting, the way it goes)
+					place = placement(at, motion || battle.fighting || flying ? yaw : yaw + inst.turn, inst.scale * zoom);
 					if (!lm.bounds.empty())
 					{
 						// (as round as the figure is tall, a quarter of it: its weapons stick out of its bounds)
