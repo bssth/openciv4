@@ -1,16 +1,14 @@
 #pragma once
-// The text of an XML document as the original engine reads it (Xml.cpp), and the way back to the
+// The text of an XML document as the original game reads it (Xml.cpp), and the way back to the
 // DLL's narrow strings.
 //
-// The original engine reads the whole file, turns it into UTF-16 with
-// MultiByteToWideChar(CP_THREAD_ACP, 0, ...) and hands that to MSXML's IXMLDOMDocument::loadXML. The
-// encoding a declaration names therefore plays no part: on a Western Windows every byte is
-// Windows-1252, whether the file says ISO-8859-1, UTF-8 or nothing, and a UTF-8 file's accented
-// letters come out as two characters each. Values the DLL asks for as char* or std::string go back
-// through WideCharToMultiByte(CP_THREAD_ACP, 0, ...).
+// The original game ignores the encoding a declaration names: every byte reads in the system's
+// ANSI code page (Windows-1252 on a Western Windows), whether the file says ISO-8859-1, UTF-8 or
+// nothing, so a UTF-8 file's accented letters show as two characters each. Values the DLL asks
+// for as char* or std::string are in that code page too.
 //
-// Here the document becomes UTF-8 before it is parsed: on Windows through the same two calls, on
-// other systems with Windows-1252. A file that starts with a UTF-8 byte order mark, which the
+// Here the document becomes UTF-8 before it is parsed: on Windows from the ANSI code page, on
+// other systems from Windows-1252. A file that starts with a UTF-8 byte order mark, which the
 // original cannot load at all, is read as UTF-8, with any byte that does not start a well-formed
 // sequence read as Windows-1252.
 
@@ -81,7 +79,7 @@ namespace oc4::host
 		return '?';
 	}
 
-	// The document as UTF-8, read the way the original engine reads it (see the top of this file).
+	// The document as UTF-8, read the way the original game reads it (see the top of this file).
 	inline std::string windows1252ToUtf8(std::span<const unsigned char> bytes)
 	{
 		std::string out;

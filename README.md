@@ -6,7 +6,9 @@
 
 An experimental, clean-room, 64-bit engine for *Sid Meier's Civilization IV: Beyond the Sword*
 that runs on the original game's assets. Nothing from the game is included in this
-repository: you need your own installed copy (3.19, Steam, GOG or disc).
+repository: you need your own installed copy (3.19, Steam, GOG or disc). It is written without
+looking inside the original's executables, from the SDK, the game's own data files and what the
+running game shows; see [Clean room](CONTRIBUTING.md#clean-room).
 
 The game's own game core (`CvGameCoreDLL`, from the SDK Firaxis released, rebuilt as 64-bit)
 and its Python scripts run as they are; openciv4 does the rest: the map, the interface, the

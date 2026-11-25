@@ -1316,7 +1316,7 @@ if _walls:
 			return;
 		m_mouse = window.mousePosition();
 		// A movie at its end: its screen hears NOTIFY_MOVIE_DONE.
-		constexpr int kMovieDone = 17;
+		constexpr int kMovieDone = 12; // NotifyCode in oc4engine.py
 		// Keys typed into an edit box, and whether one takes them.
 		try
 		{
