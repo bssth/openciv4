@@ -123,37 +123,36 @@ class FracVals(object):
 _cpe.CyFractal.FracVals = FracVals
 
 
-# Input enums: the host raises no input events yet, the values only need to differ.
+# Mods' scripts compare getNotifyCode() with 0 (a click) and 11 (a list item chosen); the other
+# codes only need to differ.
 class NotifyCode(object):
-	# in the order the original engine registers them (values assumed to count up from 0)
-	NOTIFY_CLICKED, NOTIFY_DBL_CLICKED, NOTIFY_FOCUS, NOTIFY_UNFOCUS, NOTIFY_CURSOR_MOVE_ON, NOTIFY_CURSOR_MOVE_OFF, \
-	NOTIFY_CHARACTER, NOTIFY_SCROLL_UP, NOTIFY_SCROLL_DOWN, NOTIFY_NEW_HORIZONTAL_STOP, NOTIFY_NEW_VERTICAL_STOP, \
-	NOTIFY_LISTBOX_ITEM_SELECTED, NOTIFY_FLYOUT_ITEM_SELECTED, NOTIFY_MOUSEMOVE, NOTIFY_MOUSEWHEELUP, NOTIFY_MOUSEWHEELDOWN, \
-	NOTIFY_LINKEXECUTE, NOTIFY_MOVIE_DONE, NOTIFY_SLIDER_NEWSTOP, NOTIFY_TABLE_HEADER_SELECTED = range(20)
+	NOTIFY_CLICKED, NOTIFY_LISTBOX_ITEM_SELECTED = 0, 11
+
+for _value, _name in zip([v for v in range(20) if v not in (0, 11)], ['CHARACTER', 'CURSOR_MOVE_OFF', 'CURSOR_MOVE_ON',
+		'DBL_CLICKED', 'FLYOUT_ITEM_SELECTED', 'FOCUS', 'LINKEXECUTE', 'MOUSEMOVE', 'MOUSEWHEELDOWN', 'MOUSEWHEELUP', 'MOVIE_DONE',
+		'NEW_HORIZONTAL_STOP', 'NEW_VERTICAL_STOP', 'SCROLL_DOWN', 'SCROLL_UP', 'SLIDER_NEWSTOP', 'TABLE_HEADER_SELECTED', 'UNFOCUS']):
+	setattr(NotifyCode, 'NOTIFY_' + _name, _value)
 
 
 class MouseFlags(object):
 	pass
 
-# The names the original engine registers, in its order. Their values are not known (the
-# Steam executable's code is encrypted); distinct bits do, since no mouse input reaches a
-# headless engine (scripts use them as dictionary keys).
-for _i, _name in enumerate(['STATE', 'LBUTTON', 'RBUTTON', 'SHIFT', 'CONTROL', 'MBUTTON', 'XBUTTON1', 'XBUTTON2', 'EVENT',
-		'MOUSEMOVE', 'LBUTTONDOWN', 'LBUTTONUP', 'LBUTTONDBLCLK', 'RBUTTONDOWN', 'RBUTTONUP', 'RBUTTONDBLCLK', 'MBUTTONDOWN',
-		'MBUTTONUP', 'MBUTTONDBLCLK', 'MOUSEWHEELUP', 'MOUSEWHEELDOWN', 'XBUTTONDOWN', 'XBUTTONUP', 'XBUTTONDBLCLK', 'CLICKED',
-		'DBLCLICKED', 'RELEASED']):
+# Distinct bits: scripts test them with & and use them as dictionary keys.
+for _i, _name in enumerate(['CLICKED', 'CONTROL', 'DBLCLICKED', 'EVENT', 'LBUTTON', 'LBUTTONDBLCLK', 'LBUTTONDOWN', 'LBUTTONUP',
+		'MBUTTON', 'MBUTTONDBLCLK', 'MBUTTONDOWN', 'MBUTTONUP', 'MOUSEMOVE', 'MOUSEWHEELDOWN', 'MOUSEWHEELUP', 'RBUTTON',
+		'RBUTTONDBLCLK', 'RBUTTONDOWN', 'RBUTTONUP', 'RELEASED', 'SHIFT', 'STATE', 'XBUTTON1', 'XBUTTON2', 'XBUTTONDBLCLK',
+		'XBUTTONDOWN', 'XBUTTONUP']):
 	setattr(MouseFlags, 'MOUSE_' + _name, 1 << _i)
 
 
 class InputTypes(object):
 	pass
 
-# The keys the original engine registers, in its order (DirectInput's, digits and letters
-# first); values assumed to count up.
+# The SDK's FInputDevice::InputType, the codes kbdEvent hands the scripts.
 for _i, _name in enumerate(['ESCAPE'] + [str(d) for d in range(10)] + ['MINUS'] + [chr(c) for c in range(ord('A'), ord('Z') + 1)] + (
 		'EQUALS BACKSPACE TAB LBRACKET RBRACKET RETURN LCONTROL SEMICOLON APOSTROPHE GRAVE LSHIFT BACKSLASH COMMA PERIOD SLASH '
-		'RSHIFT NUMPADSTAR LALT SPACE CAPSLOCK F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 NUMLOCK SCROLL NUMPAD7 NUMPAD8 NUMPAD9 NUMPADMINUS '
-		'NUMPAD4 NUMPAD5 NUMPAD6 NUMPADPLUS NUMPAD1 NUMPAD2 NUMPAD3 NUMPAD0 NUMPADPERIOD F11 F12 NUMPADEQUALS AT UNDERLINE COLON '
+		'RSHIFT NUMPADSTAR LALT SPACE CAPSLOCK F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 NUMLOCK SCROLL NUMPAD0 NUMPAD1 NUMPAD2 '
+		'NUMPAD3 NUMPAD4 NUMPAD5 NUMPAD6 NUMPAD7 NUMPAD8 NUMPAD9 NUMPADMINUS NUMPADPLUS NUMPADPERIOD NUMPADEQUALS AT UNDERLINE COLON '
 		'NUMPADENTER RCONTROL VOLUMEDOWN VOLUMEUP NUMPADCOMMA NUMPADSLASH SYSRQ RALT PAUSE HOME UP PGUP LEFT RIGHT END DOWN PGDN '
 		'INSERT DELETE').split()):
 	setattr(InputTypes, 'KB_' + _name, _i + 1)

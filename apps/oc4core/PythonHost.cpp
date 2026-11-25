@@ -324,8 +324,8 @@ if not hasattr(sys, 'argv'):
 		PyObject* r = call(moduleName, fxnName, fxnArg, found);
 		if (!r)
 			return false;
-		// Always written, the way the original engine converts results (PyInt_AsLong):
-		// callbacks that fall off their end return None, which becomes -1, i.e. true.
+		// Always written: callbacks that fall off their end return None, which reads as -1,
+		// i.e. true.
 		// The DLL tests such results without initialising them (e.g. the PythonCanDoCity
 		// checks of event triggers), so leaving *result alone would read stack garbage.
 		const long v = PyInt_AsLong(r);
