@@ -365,6 +365,9 @@ namespace oc4::host
 		bool selected(const CvUnit* pUnit) const;
 
 		CLinkList<IDInfo> m_selection;
+		// The selected units as one group, when they are not the head unit's own group (made on
+		// first use; shared_ptr since CvSelectionGroup is only declared here).
+		std::shared_ptr<CvSelectionGroup> m_selectionGroup;
 		CvPlot* m_gotoPlot = nullptr;
 		CvUnit* m_lastSelected = nullptr;
 		bool m_endTurnMessage = false, m_hasMovedUnit = false, m_forcePopup = false;

@@ -10,6 +10,7 @@
 #include "CvPopupInfo.h"
 #include "CvPopupReturn.h"
 #include "CvSelectionGroup.h"
+#include "CvSelectionGroupAI.h"
 #include "CvTalkingHeadMessage.h"
 #include "CvUnit.h"
 
@@ -378,10 +379,30 @@ namespace oc4::host
 		return true;
 	}
 
+	// The selected units as a group, which the game core asks what they can do (CvGame::
+	// canHandleAction: the action buttons; the lead and load popups, the attack odds, the path).
+	// When they are the head unit's group, that group; otherwise a group of the selected units
+	// that belongs to no one, as the SDK expects the interface's list to be (CvSelectionGroup::
+	// addUnit and deleteUnitNode, isHuman and AI_compareStacks all allow for an ownerless group).
+	// With the head's group only, a Great General selected with a Chariot under it offered no
+	// Lead button: only the Chariot's group was asked.
 	CvSelectionGroup* Interface::getSelectionList()
 	{
 		CvUnit* head = getHeadSelectedUnit();
-		return head ? head->getGroup() : nullptr;
+		if (!head || mirrorsSelectionGroup())
+			return head ? head->getGroup() : nullptr;
+		if (!m_selectionGroup)
+		{
+			m_selectionGroup = std::make_shared<CvSelectionGroupAI>();
+			m_selectionGroup->init(FFreeList::INVALID_INDEX, NO_PLAYER);
+		}
+		CvSelectionGroup& list = *m_selectionGroup;
+		list.clearUnits();
+		list.addUnit(head, true);
+		for (CLLNode<IDInfo>* n = m_selection.head(); n; n = m_selection.next(n))
+			if (CvUnit* u = unitOf(n->m_data); u && u != head)
+				list.addUnit(u, true);
+		return &list;
 	}
 
 	bool Interface::canSelectionListFound()
