@@ -505,6 +505,26 @@ namespace oc4::host
 		}
 		else
 			m_show = m_showBeforeWorldBuilder;
+		// Debug mode while the WorldBuilder is up: in the original (seen in Wine, BtS 3.19 + BUG + BULL, backlog
+		// #107) CyGame().isDebugMode() is 1 in the WorldBuilder and 0 again after it, so that every
+		// city's bar shows what it builds (CvCity::canBeSelected). The game core leaves the cache to
+		// the engine (CvGame::updateDebugModeCache, exported, true only with cheats or the
+		// WorldBuilder); turned on here, and off again on the way out if it was turned on here.
+		CvGame& game = GC.getGame();
+		if (bTurnOn)
+		{
+			game.updateDebugModeCache();
+			m_debugForWorldBuilder = !game.isDebugMode();
+			if (m_debugForWorldBuilder)
+				game.toggleDebugMode();
+		}
+		else
+		{
+			if (m_debugForWorldBuilder)
+				game.toggleDebugMode();
+			m_debugForWorldBuilder = false;
+			game.updateDebugModeCache();
+		}
 		m_dirty.set();
 		try
 		{

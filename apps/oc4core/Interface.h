@@ -390,6 +390,7 @@ namespace oc4::host
 		InterfaceVisibility m_show = INTERFACE_SHOW;
 		bool m_worldBuilder = false;
 		InterfaceVisibility m_showBeforeWorldBuilder = INTERFACE_SHOW;
+		bool m_debugForWorldBuilder = false; // (debug mode turned on for the WorldBuilder: off again on the way out)
 		CLinkList<IDInfo> m_cities;
 		std::vector<IDInfo> m_citiesShown; // (asked for production when the city screen closes, if idle)
 		bool m_cityScreen = false;
