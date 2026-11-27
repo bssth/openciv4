@@ -50,6 +50,7 @@
 // script and lets the AI play N turns.
 
 #include "AutoEndTurn.h"
+#include "AutoSaveStem.h"
 #include "CrashHandler.h"
 #include "EngineClasses.h"
 #include "GameCoreImports.h"
@@ -910,13 +911,9 @@ namespace
 					return;
 				const fs::path folder = fs::path(documents) / L"My Games" / L"openciv4" / L"Saves" / L"auto";
 				CoTaskMemFree(documents);
-				// (each game its own: the active civilization and the game's map seed in the name;
-				// every 25th turn kept for good)
-				std::wstring civ;
-				if (const PlayerTypes active = game.getActivePlayer(); active != NO_PLAYER)
-					for (const wchar_t c : std::wstring(GC.getInitCore().getCivShortDesc(active).GetCString()))
-						civ += std::iswalnum(c) ? c : L'_';
-				const std::wstring stem = std::format(L"AutoSave_{}_{:08X}", civ, GC.getInitCore().getMapRandSeed());
+				// (each game its own: the active civilization and the game's map in the name,
+				// AutoSaveStem.h; every 25th turn kept for good)
+				const std::wstring stem = host::autoSaveStem(game);
 				const fs::path path = folder / std::format(L"{}_{}.CivBeyondSwordSave", stem, game.getGameTurn() % 10);
 				try
 				{
