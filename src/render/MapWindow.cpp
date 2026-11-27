@@ -1678,8 +1678,9 @@ namespace oc4::render
 			const GlobeShape g = globeShape();
 			renderer->setGlobe(g.x, g.y, g.radius, g.wrapWidth);
 			fitFov();
-			// (beyond the map: black as the ground not seen, until the team's map is centred)
-			renderer->beginFrame(camera, view->seenBounds() ? Vec3{ 0, 0, 0 } : Vec3{ 0.05f, 0.07f, 0.10f });
+			// (beyond the map: black, as the original draws past a flat map's edge, before and after
+			// the team's map is centred)
+			renderer->beginFrame(camera, Vec3{ 0, 0, 0 });
 			view->options.cityScreen = cityView;
 			view->draw();
 			renderer->endFrame();
