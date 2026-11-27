@@ -1336,6 +1336,12 @@ namespace oc4::host
 							u.moveSteps.push_back({ x, y });
 						u.moveSeconds = movement->seconds;
 					}
+					// (the plot's other units are on it, under the shown one: their walks here are
+					// taken now. Kept, a unit shown later, when the one above it leaves, walked them
+					// again: a worker that came from the north ran north and back to its plot.)
+					for (int k = 0; k < count; ++k)
+						if (const CvUnit* any = plot->getUnitByIndex(k); any && any != shown)
+							Entities::movement(any->getIDInfo(), plot->getX(), plot->getY());
 					if (fight != fighting.end() && shown->getOwner() == fight->second.first.eOwner && shown->getID() == fight->second.first.iID)
 						u.battle = fight->second.second.first, u.attacking = fight->second.second.second;
 					for (int k = 0; selection && k < count && !u.selected; ++k)
