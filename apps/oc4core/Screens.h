@@ -21,6 +21,8 @@
 #include <utility>
 #include <vector>
 
+class CvPlot;
+
 namespace oc4::host
 {
 	class Utility;
@@ -106,6 +108,17 @@ namespace oc4::host
 		// manager's kbdEvent, down and up, with the mouse and the plot under it (BUG's shortcuts
 		// are there). True if they took it (it goes no further then).
 		bool keyEvent(int key, bool shift, bool ctrl, bool alt, int mouseX, int mouseY, int plotX, int plotY);
+		// A mouse button pressed (1 the left, 2 its double click, 3 the right; the event manager's
+		// EventLButtonDown, EventLcButtonDblClick, EventRButtonDown), as the original engine reports it
+		// to the scripts (CvDllPythonEvents::reportMouseEvent): with the plot under it (-1 for
+		// none), whether the interface took it, the screens up and the modifier keys. True if the
+		// scripts took it (it goes no further then).
+		bool mouseEvent(int type, int mouseX, int mouseY, int plotX, int plotY, bool interfaceConsumed, bool shift, bool ctrl, bool alt);
+		// The plot's menu (Shift and a left click on the map): the game core's items for the plot
+		// (CvGame::startFlyoutMenu) at the mouse; false if it has none. A row clicked does it
+		// (CvGame::applyFlyoutMenu); any other click or Esc closes it (hideFlyout: true if it was up).
+		bool showFlyout(const CvPlot& plot, int mouseX, int mouseY);
+		bool hideFlyout();
 
 		bool menuUp(); // the main menu, a talk or a screen over the map: the arrows are its
 

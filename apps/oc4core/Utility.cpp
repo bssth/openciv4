@@ -4,6 +4,7 @@
 #include "GameFont.h"
 #include "Net.h"
 #include "core/FileUtil.h"
+#include "render/Input.h"
 
 #include "CvDeal.h"
 #include "CvGameAI.h"
@@ -386,6 +387,21 @@ namespace oc4::host
 			return;
 		}
 		CvPlayerAI::getPlayerNonInl(active).setOption(eOption, bValue);
+	}
+
+	bool Utility::altKey()
+	{
+		return m_alt || render::heldModifiers().alt;
+	}
+
+	bool Utility::shiftKey()
+	{
+		return m_shift || render::heldModifiers().shift;
+	}
+
+	bool Utility::ctrlKey()
+	{
+		return m_ctrl || render::heldModifiers().ctrl;
 	}
 
 	bool Utility::getPlayerOption(PlayerOptionTypes ePlayerOption)

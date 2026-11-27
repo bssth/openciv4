@@ -10,6 +10,7 @@
 #include "core/AssetResolver.h"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -65,6 +66,9 @@ namespace oc4::render
 		std::map<std::string, Icon> m_icons;
 		std::map<std::tuple<std::string, uint32_t, uint32_t, bool>, Icon> m_flags;
 		std::map<std::string, Picture> m_pictures; // decoded DDS files (the atlases)
-		uint64_t m_next = 0;
+		// (one count for every cache: the map view keeps its own for the flags and the plot picker's
+		// bubbles, and the overlay keeps one picture per key, so two caches must never give the
+		// same key: a plot list button showed the bubble's mask instead of its unit)
+		static std::atomic<uint64_t> s_next;
 	};
 }

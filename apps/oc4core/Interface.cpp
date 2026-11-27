@@ -5,6 +5,7 @@
 #include "CvDLLButtonPopup.h"
 #include "CvDLLWidgetData.h"
 #include "CvMap.h"
+#include "CvMessageControl.h"
 #include "CvPlayerAI.h"
 #include "CvPlot.h"
 #include "CvPopupInfo.h"
@@ -145,13 +146,27 @@ namespace oc4::host
 	CvUnit* Interface::getHeadSelectedUnit()
 	{
 		// Units that died since are dropped on the way.
+		CvUnit* first = nullptr;
 		while (CLLNode<IDInfo>* n = m_selection.head())
 		{
-			if (CvUnit* u = unitOf(n->m_data))
-				return u;
+			if ((first = unitOf(n->m_data)))
+				break;
 			m_selection.deleteNode(n);
 		}
-		return nullptr;
+		// A selection that is a whole group of several has that group's head at its head (the
+		// group's order: CvSelectionGroup::addUnit, by AI_groupFirstVal). Seen in Wine (backlog
+		// #113): after Alt or Select All on a stack the head is one of its Workers.
+		if (first && m_selection.getLength() > 1)
+			if (CvSelectionGroup* group = first->getGroup(); group && group->getNumUnits() == m_selection.getLength())
+			{
+				bool whole = true;
+				for (CLLNode<IDInfo>* n = group->headUnitNode(); n && whole; n = group->nextUnitNode(n))
+					whole = unitOf(n->m_data) && selected(unitOf(n->m_data));
+				if (whole)
+					if (CvUnit* head = group->getHeadUnit())
+						return head;
+			}
+		return first;
 	}
 
 	CvUnit* Interface::getSelectionUnit(int iIndex)
@@ -292,6 +307,13 @@ namespace oc4::host
 		sounds->play(AudioScripts::Script3D, script, Sounds::Place{ float(pUnit->getX()) + 0.5f, float(pUnit->getY()) + 0.5f });
 	}
 
+	// One unit, never its whole group: the game core inserts a group unit by unit itself
+	// (CvGame::selectUnit), and with bGroup set it picks single units out of their groups: Ctrl's
+	// units of one type, Alt's units that can still move (CvGame::selectGroup), the hurt ones
+	// (CONTROL_SELECT_HEALTHY). bGroup makes the selection one group: the unit joins the head
+	// unit's group at once, as the original's (seen in Wine 2026-11-27, backlog #113: after Ctrl,
+	// Alt, Shift, Ctrl+Shift or a double click the selected units are one group, a unit the head
+	// was grouped with stays in it unselected, and one Shift-clicked off stays in the group).
 	void Interface::insertIntoSelectionList(CvUnit* pUnit, bool bClear, bool bToggle, bool bGroup, bool bSound, bool /*bMinimalChange*/)
 	{
 		if (bSound && (bClear || m_selection.getLength() == 0)) // (once for a group, inserted unit by unit)
@@ -305,24 +327,16 @@ namespace oc4::host
 				leaveInterfaceMode();
 			return;
 		}
-		const auto insert = [&](CvUnit* u) {
-			if (!selected(u))
-			{
-				m_selection.insertAtEnd(u->getIDInfo());
-				changed = true;
-			}
-			else if (bToggle)
-				removeFromSelectionList(u);
-		};
-		if (bGroup && pUnit->getGroup())
+		if (!selected(pUnit))
 		{
-			CvSelectionGroup* group = pUnit->getGroup();
-			for (CLLNode<IDInfo>* n = group->headUnitNode(); n; n = group->nextUnitNode(n))
-				if (CvUnit* u = unitOf(n->m_data))
-					insert(u);
+			m_selection.insertAtEnd(pUnit->getIDInfo());
+			changed = true;
+			if (const CvUnit* head = getHeadSelectedUnit(); bGroup && head && head != pUnit && head->getGroup() != pUnit->getGroup() &&
+				pUnit->getOwner() == GC.getGame().getActivePlayer() && head->getOwner() == pUnit->getOwner())
+				CvMessageControl::getInstance().sendJoinGroup(pUnit->getID(), head->getID());
 		}
-		else
-			insert(pUnit);
+		else if (bToggle)
+			removeFromSelectionList(pUnit);
 		m_lastSelected = pUnit;
 		selectionChanged();
 		if (changed)
@@ -347,9 +361,16 @@ namespace oc4::host
 		if (m_selection.getLength() > 0)
 			leaveInterfaceMode();
 		m_selection.clear();
-		for (int i = 0; pPlot && i < pPlot->getNumUnits(); ++i)
-			if (CvUnit* u = pPlot->getUnitByIndex(i); u && u->getOwner() == GC.getGame().getActivePlayer())
-				insertIntoSelectionList(u, false, false, false, false, false);
+		// (as the game core's CvGame::selectAll: Alt on the plot's unit, so the units there that can
+		// still move, one group; seen in Wine, backlog #113: the plot menu's Select All on a stack
+		// of 11 selects all 11 as one group)
+		const PlayerTypes me = GC.getGame().getActivePlayer();
+		CvUnit* unit = nullptr;
+		for (int i = 0; pPlot && i < pPlot->getNumUnits() && !unit; ++i)
+			if (CvUnit* u = pPlot->getUnitByIndex(i); u && u->getOwner() == me)
+				unit = u;
+		if (unit)
+			selectGroup(unit, false, false, true);
 	}
 
 	bool Interface::removeFromSelectionList(CvUnit* pUnit)

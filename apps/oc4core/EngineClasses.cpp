@@ -23,6 +23,7 @@
 #include "oc4turnlog_py.h" // kOc4TurnLogPy: python/oc4turnlog.py
 #include "oc4options_py.h" // kOc4OptionsPy: python/oc4options.py
 #include "oc4wb_py.h"      // kOc4WbPy: python/oc4wb.py
+#include "oc4flyout_py.h"  // kOc4FlyoutPy: python/oc4flyout.py
 
 namespace py = pybind11;
 
@@ -137,10 +138,12 @@ namespace oc4::host
 
 		// The Python half: module oc4engine adds its classes to CvPythonExtensions, oc4screens
 		// the screens (CyGInterfaceScreen, CyInterface) over them, oc4menu the main menu, oc4turnlog the turn log,
-		// oc4options the options screen's tab control and the player's profile (CyGTabCtrl, CyUserProfile).
+		// oc4options the options screen's tab control and the player's profile (CyGTabCtrl, CyUserProfile),
+		// oc4flyout the plot's menu (Shift and a left click on the map).
 		registerScreenFunctions(utility);
 		for (const auto& [source, name] : { std::pair{ kOc4EnginePy, "oc4engine" }, std::pair{ kOc4ScreensPy, "oc4screens" }, std::pair{ kOc4MenuPy, "oc4menu" }, std::pair{ kOc4TurnLogPy, "oc4turnlog" },
-				 std::pair{ kOc4OptionsPy, "oc4options" }, std::pair{ kOc4WbPy, "oc4wb" } })
+				 std::pair{ kOc4OptionsPy, "oc4options" }, std::pair{ kOc4WbPy, "oc4wb" },
+				 std::pair{ kOc4FlyoutPy, "oc4flyout" } })
 		{
 			const std::string file = std::string(name) + ".py";
 			PyObject* code = Py_CompileString(reinterpret_cast<const char*>(source), file.c_str(), Py_file_input);

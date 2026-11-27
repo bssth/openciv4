@@ -1439,6 +1439,15 @@ namespace oc4::render
 			// On the screens: what scrolls there, else nothing (the map only zooms where it shows).
 			if (!popup.active() && ui.active() && ((!busy && uiWheel && uiWheel(mouseX, mouseY, delta)) || ui.solid(mouseX, mouseY)))
 				return;
+			// Ctrl with the wheel over the map: the plot's units one by one, as comma (down) and
+			// period (up) do (CONTROL_PREVUNIT / CONTROL_NEXTUNIT), not a zoom. Hint "Hold down the
+			// [CTRL] key and spin the mouse-wheel to cycle through units on the same plot"; seen in
+			// Wine (backlog #113: down, down, up gave the same units as comma, comma, period).
+			if (playing && !popup.active() && heldModifiers().ctrl)
+			{
+				keys.push_back({ delta < 0 ? key::Comma : key::Period, false, false, false });
+				return;
+			}
 			zoomBy(float(delta) / 120);
 		}
 

@@ -334,14 +334,16 @@ namespace oc4::host
 		void sendDiploEvent(PlayerTypes eWhoTradingWith, DiploEventTypes eDiploEvent, int iData1, int iData2) override;
 		void sendImplementDealMessage(PlayerTypes eOtherWho, CLinkList<TradeData>* pOurList, CLinkList<TradeData>* pTheirList) override;
 		void sendKillDeal(int iDealID, bool bFromDiplomacy) override;
-		// The modifier keys of the player's input being handled (set by the host around it; the
-		// game's actions read them: Shift queues a mission, Alt applies to the whole stack).
 		// A single player game: everyone is connected.
 		PlayerTypes getFirstBadConnection() override { return NO_PLAYER; }
 		int getConnState(PlayerTypes) override { return 0; }
-		bool altKey() override { return m_alt; }
-		bool shiftKey() override { return m_shift; }
-		bool ctrlKey() override { return m_ctrl; }
+		// The modifier keys: those of the player's input being handled (set by the host around
+		// it, a script's too; the game's actions read them: Shift queues a mission, Alt applies to
+		// the whole stack), and those held now. Every Python event carries them
+		// (CvDllPythonEvents::postEvent), and BUG's plot list reads the last event's.
+		bool altKey() override;
+		bool shiftKey() override;
+		bool ctrlKey() override;
 		void setModifierKeys(bool shift, bool ctrl, bool alt)
 		{
 			m_shift = shift;

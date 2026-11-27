@@ -89,13 +89,14 @@ class _Widget(object):
 	__slots__ = ('name', 'kind', 'parent', 'mode', 'x', 'y', 'z', 'w', 'h', 'style', 'pstyle', 'text', 'help', 'tex', 'tex2',
 		'wt', 'd1', 'd2', 'opt', 'flags', 'font', 'shown', 'enabled', 'state', 'hittest', 'seq', 'vertical', 'scroll', 'children',
 		'bars', 'lists', 'columns', 'rows', 'headers', 'iconw', 'iconh', 'items', 'selected', 'color', 'size', 'defw', 'defh', 'points',
-		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed')
+		'offset', 'extent', 'picked', 'hoffset', 'hextent', 'cells', 'sort', 'inset', 'maxChars', 'allowed', 'rowHeight')
 
 	def __init__(self, name, kind):
 		self.name = name
 		self.kind = kind
 		self.parent = None
 		self.mode = 'abs'      # abs / rel (to the parent) / flow (in the parent's layout)
+		self.rowHeight = 0     # a list box's rows, 0 for the usual
 		self.x = self.y = self.w = self.h = 0
 		self.z = 0.0
 		self.style = ''
@@ -1644,14 +1645,15 @@ def _display_widget(s, w, ox, oy, clip, flow, out, cell=None):
 	if kind == 'listbox':
 		box = _clipTo(clip, (x, y, x + width, y + height)) if height else clip
 		items = w.items or []
-		w.extent = len(items) * _LIST_ROW
-		_scrolls(w, x, y, x + width, y + height if height else y + w.extent, s.id, _LIST_ROW, out)
+		row = w.rowHeight or _LIST_ROW  # (the host's own lists set theirs: oc4flyout)
+		w.extent = len(items) * row
+		_scrolls(w, x, y, x + width, y + height if height else y + w.extent, s.id, row, out)
 		cy = y - w.offset
 		for i, item in enumerate(items):
-			if not height or (cy + _LIST_ROW > y and cy < y + height):
-				out.append((base + (i,), 'cell', x, cy, x + width, cy + _LIST_ROW, box, w.style, item[0], '', '', 2, item[4], w.selected == i, True, 0, None,
+			if not height or (cy + row > y and cy < y + height):
+				out.append((base + (i,), 'cell', x, cy, x + width, cy + row, box, w.style, item[0], '', '', 2, item[4], w.selected == i, True, 0, None,
 					item[1], item[2], item[3], False, w.z, w.seq))
-			cy += _LIST_ROW
+			cy += row
 		return
 	if kind == 'multiline' and w.mode != 'flow' and width > 0 and height > 0:
 		# (in a box of its own: clipped there, and it scrolls when it is longer)

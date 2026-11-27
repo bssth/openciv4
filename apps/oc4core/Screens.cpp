@@ -195,6 +195,13 @@ namespace oc4::host
 		return places;
 	}
 
+	namespace
+	{
+		// The plot's menu up: the game core's items (CvGame::startFlyoutMenu), the one chosen
+		// done by CvGame::applyFlyoutMenu.
+		std::vector<CvFlyoutMenuData> g_flyout;
+	}
+
 	void registerScreenFunctions(Utility& utility)
 	{
 		auto host = py::reinterpret_borrow<py::module_>(PyImport_AddModule("oc4host"));
@@ -389,6 +396,14 @@ namespace oc4::host
 				ui.selectGroup(u, shift, ctrl, alt);
 		});
 		host.def("ui_clear_selection", [&ui] { ui.clearSelectionList(); });
+		host.def("flyout_choose", [](int i) {
+			if (i >= 0 && size_t(i) < g_flyout.size())
+			{
+				const CvFlyoutMenuData item = g_flyout[size_t(i)];
+				g_flyout.clear();
+				GC.getGame().applyFlyoutMenu(item);
+			}
+		});
 		host.def("ui_insert_selection", [&ui](int owner, int id, bool clear, bool toggle, bool group) {
 			if (CvUnit* u = unitOf(owner, id))
 				ui.insertIntoSelectionList(u, clear, toggle, group, false, false);
@@ -1380,6 +1395,12 @@ if _walls:
 
 	void Screens::click(const Item& it, bool right, bool shift, bool ctrl, bool alt)
 	{
+		// (a click anywhere but on the plot's menu closes it)
+		if (!it.name.starts_with("OC4Flyout"))
+			hideFlyout();
+		// (the button pressed, heard by the scripts first, as the original's: BUG's plot list takes
+		// Shift, Ctrl and Alt from it)
+		mouseEvent(right ? 3 : 1, m_mouse.first, m_mouse.second, -1, -1, true, shift, ctrl, alt);
 		// What the script hears: a click (NOTIFY_CLICKED, the part), or an item of a list
 		// chosen (NOTIFY_LISTBOX_ITEM_SELECTED, its index; a table's column as the mouse's x).
 		constexpr int kClicked = 0, kListItem = 11;
@@ -1500,7 +1521,7 @@ if _walls:
 					 py::cast(it.widget), py::cast(it.data1), py::cast(it.data2), py::cast(it.option) })
 				args.append(o);
 			// (the host's own screens: the menu's, the turn log's)
-			const char* handler = it.name.starts_with("OC4WB") ? "oc4wb" : it.screen == kOptionsScreen ? "oc4options" : m_menu ? "oc4menu" :
+			const char* handler = it.name.starts_with("OC4WB") ? "oc4wb" : it.name.starts_with("OC4Flyout") ? "oc4flyout" : it.screen == kOptionsScreen ? "oc4options" : m_menu ? "oc4menu" :
 				it.screen == kTurnLogScreen ? "oc4turnlog" : "CvScreensInterface";
 			py::module_::import(handler).attr("handleInput")(py::tuple(args));
 		}
@@ -1548,6 +1569,72 @@ if _walls:
 		return taken;
 	}
 
+	bool Screens::showFlyout(const CvPlot& plot, int mouseX, int mouseY)
+	{
+		hideFlyout();
+		if (!m_active || m_menu)
+			return false;
+		GC.getGame().startFlyoutMenu(&plot, g_flyout);
+		if (g_flyout.empty())
+			return false;
+		try
+		{
+			// (each: its text, and 0 an item to do, 1 the start of a submenu, 2 its end: the game core
+			// puts a submenu's items between a NO_FLYOUT with a title and one without)
+			py::list texts;
+			for (const CvFlyoutMenuData& item : g_flyout)
+				texts.append(py::make_tuple(wide(std::wstring(item.m_strTitle.GetCString())),
+					item.m_eFlyout != NO_FLYOUT ? 0 : item.m_strTitle.empty() ? 2 : 1));
+			py::module_::import("oc4flyout").attr("show")(texts, mouseX, mouseY);
+		}
+		catch (py::error_already_set& e)
+		{
+			printPythonError(e);
+			g_flyout.clear();
+			return false;
+		}
+		return true;
+	}
+
+	bool Screens::hideFlyout()
+	{
+		if (!m_active)
+			return false;
+		g_flyout.clear();
+		try
+		{
+			return py::module_::import("oc4flyout").attr("hide")().cast<bool>();
+		}
+		catch (py::error_already_set& e)
+		{
+			printPythonError(e);
+		}
+		return false;
+	}
+
+	bool Screens::mouseEvent(int type, int mouseX, int mouseY, int plotX, int plotY, bool interfaceConsumed, bool shift, bool ctrl, bool alt)
+	{
+		if (!m_active || m_menu)
+			return false;
+		bool taken = false;
+		m_utility.setModifierKeys(shift, ctrl, alt);
+		try
+		{
+			const py::list shown = py::module_::import("oc4screens").attr("shownScreens")().cast<py::list>();
+			// (the handlers read the last six: debug, unused, Alt, Ctrl, Shift, cheats)
+			const py::object r = py::module_::import("CvEventInterface")
+									 .attr("onEvent")(py::make_tuple("mouseEvent", type, mouseX, mouseY, plotX, plotY, interfaceConsumed,
+										 py::tuple(shown), false, false, alt, ctrl, shift, false));
+			taken = !r.is_none() && PyObject_IsTrue(r.ptr()) == 1;
+		}
+		catch (py::error_already_set& e)
+		{
+			printPythonError(e);
+		}
+		m_utility.setModifierKeys(false, false, false);
+		return taken;
+	}
+
 	bool Screens::diploKey(unsigned key)
 	{
 		if (!m_active || !m_utility.diplomacy().active())
@@ -1571,6 +1658,8 @@ if _walls:
 		{
 			py::module_ screens = py::module_::import("oc4screens");
 			if (screens.attr("closeDropdown")().cast<bool>())
+				return true;
+			if (hideFlyout())
 				return true;
 			if (m_menu)
 				return py::module_::import("oc4menu").attr("escape")().cast<bool>();

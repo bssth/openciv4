@@ -31,7 +31,7 @@
 // opens it, Esc closes it), or with --own-interface the window's simple one.
 // --keys are typed in on your turns then (letters and Space as keys, '^', '@' and '+' before
 // one hold Ctrl, Alt and Shift, '>' ends the turn, '~' is Esc, "(x,y)" right clicks that plot,
-// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e", "%t" and "%b" type an arrow, Return, Tab or Backspace into the window ("^%l" with Ctrl held, as a game hotkey), "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
+// "[x,y]" left clicks it ("+[x,y]" with Shift held: '^', '@' and '+' as for keys), "%u", "%d", "%l", "%r", "%e", "%t", "%b", "%," and "%." type an arrow, Return, Tab, Backspace, comma or period into the window ("^%l" with Ctrl held, as a game hotkey), "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
 // popup nothing answers gets its first, 'text' goes into its next edit box, "{Name}" or
 // "{Name/part}" clicks the interface's widget so named, "^{Name}" with Ctrl held, "?{Name}" rests
 // the mouse on it); with
@@ -393,6 +393,8 @@ namespace
 		case 'e': return render::key::Return;
 		case 't': return render::key::Tab;
 		case 'b': return render::key::Back;
+		case ',': return render::key::Comma;
+		case '.': return render::key::Period;
 		default: return 0;
 		}
 	}
@@ -1267,10 +1269,14 @@ namespace
 						script.erase(0, std::min(script.find_first_not_of("0123456789", 1), script.size()));
 					}
 				}
-				else if (const size_t close = script.find_first_of(")]"); (script.front() == '(' || script.front() == '[') && close != std::string::npos &&
-					std::sscanf(script.c_str() + 1, "%d,%d", &click.x, &click.y) == 2)
+				else if (const size_t at = script.find_first_not_of("^@+"), close = script.find_first_of(")]");
+						 at != std::string::npos && (script[at] == '(' || script[at] == '[') && close != std::string::npos &&
+						 std::sscanf(script.c_str() + at + 1, "%d,%d", &click.x, &click.y) == 2)
 				{
-					click.right = script.front() == '(';
+					// ('^', '@' and '+' before it hold Ctrl, Alt and Shift)
+					const std::string held = script.substr(0, at);
+					click.right = script[at] == '(';
+					click.shift = held.find('+') != std::string::npos, click.ctrl = held.find('^') != std::string::npos, click.alt = held.find('@') != std::string::npos;
 					clicks.push_back(click);
 					script.erase(0, close + 1);
 				}
@@ -1394,6 +1400,15 @@ namespace
 						ui.clearSelectionList();
 					continue;
 				}
+				// A mouse button on the map, heard by the scripts first, as the original's (they may take
+				// it: the event manager's cheats, Ctrl+Alt on a city, Ctrl+Shift on a plot).
+				if (!click.either && screens.active())
+				{
+					screens.hideFlyout(); // (any click on the map closes the plot's menu)
+					const auto [mx, my] = window.mousePosition();
+					if (screens.mouseEvent(click.right ? 3 : 1, mx, my, click.x, click.y, false, click.shift, click.ctrl, click.alt))
+						continue;
+				}
 				// The gamepad's plot cursor: one's own units or city there are selected, as a left click;
 				// anywhere else the selected units go there, as a right one (an interface mode's plot is a left click).
 				if (click.either)
@@ -1427,7 +1442,9 @@ namespace
 				}
 				// A click on one's city: its screen (the units there are in the plot list then); on
 				// one of the figures in it, as anywhere, its unit.
-				if (!click.right && !click.onFigure && !opt.ownInterface && screens.active())
+				// (Shift with a left click is the plot's menu, a city's too: seen in Wine, backlog #113)
+				const bool plotMenu = !click.right && click.shift && !click.ctrl && !click.alt;
+				if (!click.right && !plotMenu && !click.onFigure && !opt.ownInterface && screens.active())
 					if (CvCity* city = plot->getPlotCity(); city && city->getOwner() == me)
 					{
 						ui.selectCity(city, true);
@@ -1435,17 +1452,36 @@ namespace
 					}
 				if (!click.right)
 				{
+					// The unit the plot shows (CvPlot::updateCenterUnit's first choices): one of yours
+					// there that is selected, else your best defender there. Seen in Wine (backlog #113):
+					// a click on a stack with its Worker selected keeps the Worker; Ctrl and Alt then take
+					// its type or the whole stack (CvGame::selectGroup).
 					CvUnit* own = nullptr;
+					for (int i = 0; i < plot->getNumUnits() && !own; ++i)
+						if (CvUnit* u = plot->getUnitByIndex(i); u && u->getOwner() == me && u->IsSelected())
+							own = u;
+					if (!own)
+						own = plot->getBestDefender(me, NO_PLAYER, nullptr, false, false, true);
+					if (!own)
+						own = plot->getBestDefender(me);
 					for (int i = 0; i < plot->getNumUnits() && !own; ++i)
 						if (CvUnit* u = plot->getUnitByIndex(i); u && u->getOwner() == me)
 							own = u;
-					if (own)
+					// Shift with a left click: the plot's menu at the mouse (CvGame::startFlyoutMenu), the
+					// selection and the camera as they are (seen in Wine, backlog #113).
+					const bool menu = plotMenu;
+					if (menu)
+					{
+						const auto [mx, my] = window.mousePosition();
+						screens.showFlyout(*plot, mx, my);
+					}
+					else if (own)
 						ui.selectGroup(own, click.shift, click.ctrl, click.alt);
 					else
 						ui.clearSelectionList();
 					// (as the original's: the camera goes to the plot clicked, a unit there or not;
 					// a scripted game told where to look keeps looking there)
-					if (opt.lookX < 0 || opt.viewSeconds <= 0)
+					if (!menu && (opt.lookX < 0 || opt.viewSeconds <= 0))
 						window.centerOn(plot->getX(), plot->getY());
 				}
 				else if (ui.getHeadSelectedUnit())

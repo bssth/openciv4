@@ -18,6 +18,8 @@ namespace oc4::render
 		constexpr uint32_t kAtlasCell = 64;
 	}
 
+	std::atomic<uint64_t> ButtonArt::s_next{ 0 };
+
 	const ButtonArt::Picture* ButtonArt::picture(const std::string& file)
 	{
 		const std::string key = makeAssetKey(file);
@@ -81,7 +83,7 @@ namespace oc4::render
 				}
 			icon.bgra[i + 3] = 255; // the decal's alpha is a colour mask, not cloth transparency
 		}
-		icon.key = kFlagKeys + ++m_next;
+		icon.key = kFlagKeys + ++s_next;
 		return &icon;
 	}
 
@@ -240,7 +242,7 @@ namespace oc4::render
 		for (size_t i = 0; i + 3 < icon.bgra.size(); i += 4) // premultiplied, for Direct2D
 			for (size_t c = 0; c < 3; ++c)
 				icon.bgra[i + c] = uint8_t(icon.bgra[i + c] * icon.bgra[i + 3] / 255);
-		icon.key = kIconKeys + ++m_next;
+		icon.key = kIconKeys + ++s_next;
 		return &icon;
 	}
 }
