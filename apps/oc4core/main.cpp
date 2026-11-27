@@ -904,7 +904,7 @@ namespace
 		// A game played by hand is saved at each turn's start (Documents\My Games\openciv4\Saves\
 		// auto, ten in turn), as the original does; a scripted one is not.
 		if (opt.viewSeconds <= 0)
-			utility.engine().onAutoSave = [&session, &game](bool) {
+			utility.engine().onAutoSave = [&session, &game, &ui](bool) {
 				PWSTR documents = nullptr;
 				if (FAILED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &documents)))
 					return;
@@ -925,6 +925,10 @@ namespace
 					if (game.getGameTurn() % 25 == 0)
 						fs::copy_file(path, folder / std::format(L"{}_turn{}.CivBeyondSwordSave", stem, game.getGameTurn()), fs::copy_options::overwrite_existing);
 					std::printf("  autosaved turn %d: %s\n", game.getGameTurn(), path.string().c_str());
+					// (seen in Wine: "Autosaving..." among the event messages at the top whenever an
+					// autosave is written, the first one included; TXT_KEY_AUTOSAVING)
+					ui.addMessage(game.getActivePlayer(), true, -1, gDLL->getText("TXT_KEY_AUTOSAVING"), nullptr, MESSAGE_TYPE_DISPLAY_ONLY,
+						nullptr, NO_COLOR, -1, -1, false, false);
 				}
 				catch (const std::exception& e)
 				{
