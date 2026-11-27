@@ -43,6 +43,10 @@ namespace oc4::render
 		void line(float x0, float y0, float x1, float y1, Color color, float alpha, float width = 1);
 		// A filled four-cornered shape (its corners in order).
 		void quad(const float x[4], const float y[4], Color color, float alpha);
+		// A filled convex shape (its corners in order), and a line through points (not closed),
+		// each drawn in one piece (no darker seams where parts meet).
+		void polygon(const std::vector<std::array<float, 2>>& points, Color color, float alpha);
+		void polyline(const std::vector<std::array<float, 2>>& points, Color color, float alpha, float width = 1);
 		// BGRA8 pixels (premultiplied alpha), stretched over the rectangle; `version` tells
 		// when they changed (the bitmap is kept until then). Each picture has its own `key`.
 		void image(uint64_t key, const std::vector<uint8_t>& bgra, uint32_t width, uint32_t height, uint64_t version, float x0, float y0, float x1,
@@ -88,6 +92,8 @@ namespace oc4::render
 		void resetShadow() { setShadow({ 0, 0, 0 }, 0.8f); }
 		// The face for all text, and the pixel sizes of the markup's <font=0..4> (the theme's).
 		void setFonts(std::wstring family, const std::array<float, 5>& sizes);
+		// Folders whose fonts count as installed (the game's own, Wine's): Fonts::addFolders.
+		void addFontFolders(const std::vector<std::filesystem::path>& folders);
 
 		// Drawing only inside the rectangle until unclip.
 		void clip(float x0, float y0, float x1, float y1);
@@ -117,7 +123,7 @@ namespace oc4::render
 		void vertex(float x, float y, uint32_t color, float u = 0, float v = 0);
 		void pixelVertex(float x, float y, uint32_t color, float u, float v); // (x, y in pixels)
 		void fillConvex(const std::vector<std::array<float, 2>>& points, uint32_t color);
-		void strokeClosed(const std::vector<std::array<float, 2>>& points, float width, uint32_t color);
+		void strokeClosed(const std::vector<std::array<float, 2>>& points, float width, uint32_t color, bool closed = true);
 		void flush();
 		uint32_t premultiplied(Color c, float alpha) const;
 

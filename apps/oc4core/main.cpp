@@ -31,13 +31,17 @@
 // opens it, Esc closes it), or with --own-interface the window's simple one.
 // --keys are typed in on your turns then (letters and Space as keys, '^', '@' and '+' before
 // one hold Ctrl, Alt and Shift, '>' ends the turn, '~' is Esc, "(x,y)" right clicks that plot,
-// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e", "%t" and "%b" type an arrow, Return, Tab or Backspace into the window ("^%l" with Ctrl held, as a game hotkey), "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
+// "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e", "%t" and "%b" type an arrow, Return, Tab or Backspace into the window ("^%l" with Ctrl held, as a game hotkey), "<x,y>" clicks that pixel of the window (a figure there: its unit), "<x,y:x2,y2>" drags from one to the other with the left button, "#n" picks the n-th button of the popup up (OK if it has none), a
 // popup nothing answers gets its first, 'text' goes into its next edit box, "{Name}" or
 // "{Name/part}" clicks the interface's widget so named, "^{Name}" with Ctrl held, "?{Name}" rests
 // the mouse on it); with
 // --screenshot and --view-seconds that game is played offscreen. OC4_PLAY_LOG=1 prints the
 // popups as they come, the actions the keys run and the widgets clicked; OC4_UI_DUMP=<file>
 // writes the interface's widgets there when they change.
+// In --keys, "?<x,y>" also moves the mouse to that pixel of the window, "/<x,y>" presses the
+// right button there and holds it, "\<x,y>" lets it go there (a drag, as the mouse's), "!<x,y>"
+// and ";<x,y>" do the same with the left button, and "%x" types Esc into the window (where '~'
+// is the game's Esc). The mouse's ("?<x,y>", "<x,y>", "!<x,y>", ";<x,y>") reaches a popup up.
 //
 // --menu (and no options at all) opens the window on a temporary main menu: a new game, with
 // the leader, map script, world and difficulty to choose, or a saved one, played as with
@@ -73,6 +77,7 @@
 
 #include "CvGameCoreDLL.h"
 #include "CvArtFileMgr.h"
+#include "CvEventReporter.h"
 #include "CvGameAI.h"
 #include "CvPopupInfo.h"
 #include "CvGameTextMgr.h"
@@ -107,6 +112,7 @@ extern char** environ;
 #include <functional>
 #include <optional>
 #include <set>
+#include <tuple>
 #include <unordered_map>
 #include <string>
 
@@ -364,6 +370,9 @@ namespace
 		for (fs::path* p : { &o.civ4Root, &o.pythonHome, &o.logDir, &o.probeSave, &o.load, &o.save, &o.exec, &o.execFirst, &o.profileOut, &o.screenshot })
 			if (!p->empty())
 				*p = fs::absolute(*p);
+		// (--map is a map script's name, or a scenario's file: a file here is resolved too)
+		if (std::error_code ec; !o.game.mapScript.empty() && fs::is_regular_file(o.game.mapScript, ec))
+			o.game.mapScript = fs::absolute(o.game.mapScript).string();
 		return o;
 	}
 
@@ -393,6 +402,7 @@ namespace
 		case 'e': return render::key::Return;
 		case 't': return render::key::Tab;
 		case 'b': return render::key::Back;
+		case 'x': return render::key::Escape; // (into the window: what holds the right button sees it first)
 		default: return 0;
 		}
 	}
@@ -446,6 +456,9 @@ namespace
 	// apart while one is on, as the original's engine does; with nothing shown they run flat out.
 	// (Measured in the original under Wine: a game update every 0.26 s, a shown move every 4 updates.)
 	constexpr std::chrono::milliseconds kShownMoveSlice{ 250 };
+	// (OpenCiv4's own option Quick enemy moves: 0.6 s a move instead of 1 s; the camera still goes to
+	// each and the unit's walk ends before the next starts, so the player can follow them)
+	constexpr std::chrono::milliseconds kQuickShownMoveSlice{ 150 };
 	bool shownMoveOn()
 	{
 		for (int p = 0; p < MAX_PLAYERS; ++p)
@@ -585,11 +598,11 @@ namespace
 			const auto look = window.look();
 			const float closeness = std::clamp((cameraTop - look.distance) / (cameraTop - cameraNearest), 0.0f, 1.0f);
 			sounds.update({ look.x, look.y, look.distance, closeness, look.eyeX, look.eyeY, look.eyeZ }, era);
-			std::vector<std::pair<std::string, float>> lines;
+			std::vector<render::MapWindow::Message> lines;
 			// (none over a talk: the leader's face is where they are; the turn log keeps them)
 			if (!utility.diplomacy().active())
 				for (const auto& m : ui.shownMessages())
-					lines.push_back({ host::gameMarkup(m.text.c_str()), m.alpha });
+					lines.push_back({ host::gameMarkup(m.text.c_str()), { m.color.r, m.color.g, m.color.b } });
 			window.setMessages(std::move(lines));
 			// (and what the game's controls show of the map)
 			window.setLayers({ ui.showYields, utility.engine().resourceLayer, utility.engine().unitLayer, ui.bareMap, utility.engine().grid });
@@ -598,7 +611,8 @@ namespace
 				return i >= 0 && utility.getGraphicOption(static_cast<GraphicOptionTypes>(i));
 			};
 			window.setGraphics({ option("GRAPHICOPTION_HEALTH_BARS"), option("GRAPHICOPTION_FROZEN_ANIMATIONS"), !option("GRAPHICOPTION_EFFECTS_DISABLED"),
-				utility.graphicOptionChosen(GC.getInfoTypeForString("GRAPHICOPTION_FULLSCREEN", true)) });
+				utility.graphicOptionChosen(GC.getInfoTypeForString("GRAPHICOPTION_FULLSCREEN", true)), !option("GRAPHICOPTION_GLOBE_VIEW_BUILDINGS_DISABLED"),
+				option("GRAPHICOPTION_LOWRES_TEXTURES"), utility.movieQuality() >= 2, utility.antiAliasing() });
 		};
 		{
 			std::array<std::string, 3> symbols;
@@ -704,6 +718,7 @@ namespace
 		};
 		host::Screens::setTextWidth([&window](const std::string& markup, int font) { return window.textWidth(markup, font); });
 		host::Screens::setTextHeight([&window](const std::string& markup, int width, int font) { return window.textHeight(markup, width, font); });
+		host::Screens::setTableRow([&window](const std::string& style) { return window.tableRow(style); });
 		window.setUiWheel([&screens](int x, int y, int delta) { return screens.wheel(x, y, delta); });
 		struct ForgetWheel
 		{
@@ -763,6 +778,10 @@ namespace
 
 		std::vector<int> actionIds; // the action of each button the window shows
 		std::optional<std::pair<int, int>> pathShown; // where the way the window shows leads
+		std::optional<std::vector<IDInfo>> selectedBeforeClick; // (the units selected before the last left click on the map)
+		bool heldSeen[2] = {};       // (the mouse buttons a frame saw held, for the scripts' isLeftMouseDown, ...)
+		std::tuple<int, int, int> highlighted{ -2, -2, -2 }; // (the plot the interface mode outlines, and the mode)
+		bool pickPress = false;      // (a press begun while a script picks a plot, still held)
 		std::pair<const void*, int> pathFrom{};        // (the unit it starts from and its plot: the gamepad's plot cursor shows it all the while)
 		std::tuple<const void*, const void*, int, int> coloredFor{}; // what was selected when the plots were last coloured
 		uint64_t marksShown = ~0ull; // the marks the window has
@@ -857,6 +876,11 @@ namespace
 			if (!k.shift && !k.ctrl && !k.alt && k.key > render::key::Numpad0 && k.key <= render::key::Numpad9 && k.key != render::key::Numpad0 + 5)
 				if (CvUnit* unit = ui.getHeadSelectedUnit())
 				{
+					// (not under the city screen: the units stay selected there but take no orders, as
+					// the original's, seen in Wine; the game core refuses their actions while a city is
+					// selected, CvGame::canHandleAction, and this move is the host's own)
+					if (ui.isCityScreenUp())
+						return;
 					const int d = int(k.key - render::key::Numpad0) - 1;
 					if (CvPlot* to = plotXY(unit->getX(), unit->getY(), d % 3 - 1, d / 3 - 1))
 					{
@@ -901,30 +925,55 @@ namespace
 		host::TurnWorker worker;
 		// (the others' next game update while a move of theirs is shown: shownMoveOn)
 		Clock::time_point nextShownMoveUpdate{};
-		// A game played by hand is saved at each turn's start (Documents\My Games\openciv4\Saves\
-		// auto, ten in turn), as the original does; a scripted one is not.
+		// A game played by hand is saved as the original saves it, or openciv4's own way
+		// (AutoSaves.h, the options' OpenCiv4 tab); a scripted game is not.
 		if (opt.viewSeconds <= 0)
-			utility.engine().onAutoSave = [&session, &game](bool) {
-				PWSTR documents = nullptr;
-				if (FAILED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &documents)))
+			utility.engine().onAutoSave = [&session, &game, &engine = utility.engine()](bool initial) {
+				const host::AutoSaveSettings how = engine.autoSave.get();
+				const int turn = game.getGameTurn();
+				if (!host::autoSaveDue(how, turn, initial))
 					return;
-				const fs::path folder = fs::path(documents) / L"My Games" / L"openciv4" / L"Saves" / L"auto";
-				CoTaskMemFree(documents);
-				// (each game its own: the active civilization and the game's map seed in the name;
-				// every 25th turn kept for good)
-				std::wstring civ;
-				if (const PlayerTypes active = game.getActivePlayer(); active != NO_PLAYER)
-					for (const wchar_t c : std::wstring(GC.getInitCore().getCivShortDesc(active).GetCString()))
-						civ += std::iswalnum(c) ? c : L'_';
-				const std::wstring stem = std::format(L"AutoSave_{}_{:08X}", civ, GC.getInitCore().getMapRandSeed());
-				const fs::path path = folder / std::format(L"{}_{}.CivBeyondSwordSave", stem, game.getGameTurn() % 10);
-				try
+				// (no Documents folder: no autosave, rather than one beside the working directory)
+				const fs::path documents = documentsFolder();
+				if (documents.empty())
 				{
+					std::printf("  autosave skipped: no Documents folder\n");
+					return;
+				}
+				const auto save = [&](const fs::path& folder, const fs::path& path) {
 					fs::create_directories(folder);
 					session.saveGame(path);
-					if (game.getGameTurn() % 25 == 0)
-						fs::copy_file(path, folder / std::format(L"{}_turn{}.CivBeyondSwordSave", stem, game.getGameTurn()), fs::copy_options::overwrite_existing);
-					std::printf("  autosaved turn %d: %s\n", game.getGameTurn(), path.string().c_str());
+					std::printf("  autosaved turn %d: %s\n", turn, utf8Path(path).c_str());
+				};
+				try
+				{
+					if (how.openciv4)
+					{
+						// (Documents\My Games\openciv4\Saves\auto; the active civilization and the
+						// game's map seed in the name, one save in 25 turns kept for good)
+						const fs::path folder = documents / L"My Games" / L"openciv4" / L"Saves" / L"auto";
+						std::wstring civ;
+						if (const PlayerTypes active = game.getActivePlayer(); active != NO_PLAYER)
+							for (const wchar_t c : std::wstring(GC.getInitCore().getCivShortDesc(active).GetCString()))
+								civ += std::iswalnum(c) ? c : L'_';
+						const std::wstring stem = std::format(L"AutoSave_{}_{:08X}", civ, GC.getInitCore().getMapRandSeed());
+						const fs::path path = folder / host::openciv4AutoSaveName(stem, how, turn);
+						save(folder, path);
+						if (host::openciv4KeepsForGood(how, turn))
+							fs::copy_file(path, folder / std::format(L"{}_turn{}.CivBeyondSwordSave", stem, turn), fs::copy_options::overwrite_existing);
+						return;
+					}
+					const fs::path folder = documents / L"My Games" / L"Beyond the Sword" / L"Saves" / L"single" / L"auto";
+					// (the year through the scripts' CyGame: the game core does not export getGameTurnYear)
+					int year;
+					{
+						namespace py = pybind11;
+						py::gil_scoped_acquire gil;
+						year = py::module_::import("CvPythonExtensions").attr("CyGame")().attr("getGameTurnYear")().cast<int>();
+					}
+					save(folder, folder / host::autoSaveName(initial, year));
+					for (const fs::path& old : host::autoSavesBeyond(folder, how.kept))
+						fs::remove(old);
 				}
 				catch (const std::exception& e)
 				{
@@ -1203,12 +1252,21 @@ namespace
 				}
 				changed = true;
 			}
+			// (the plot the camera looks at, for the game's getLookAtPlot: next/previous city with
+			// no city selected picks the city nearest it)
+			{
+				const auto look = window.look();
+				ui.cameraX = int(std::floor(look.x)), ui.cameraY = int(std::floor(look.y));
+			}
 			auto clicks = window.takeClicks();
 			// (a scripted game answers what it does not expect with the popup's first button)
-			if (!script.empty() && script.front() != '#' && script.front() != '\'' && script.front() != '%' && ui.shownPopup() && Clock::now() - typed > std::chrono::milliseconds(1500))
+			// (the mouse on the popup, "?<x,y>", "<x,y>", "!<x,y>" and ";<x,y>", goes to it as it is)
+			const auto onPopup = [&] { return script.front() == '#' || script.front() == '\'' || script.front() == '%' ||
+				((script.front() == '?' || script.front() == '<' || script.front() == '!' || script.front() == ';') && script.size() > 1 && script[1] != '{'); };
+			if (!script.empty() && !onPopup() && ui.shownPopup() && Clock::now() - typed > std::chrono::milliseconds(1500))
 				script.insert(0, "#0");
 			if (const auto now = Clock::now(); player.isTurnActive() && !script.empty() && now - typed > std::chrono::milliseconds(400) &&
-				(script.front() == '#' || script.front() == '\'' || script.front() == '%' || !ui.shownPopup())) // (the rest waits for the popup's answer)
+				(onPopup() || !ui.shownPopup())) // (the rest waits for the popup's answer)
 			{
 				typed = now;
 				render::MapWindow::PlotClick click;
@@ -1274,14 +1332,37 @@ namespace
 					clicks.push_back(click);
 					script.erase(0, close + 1);
 				}
-				else if (int px = 0, py = 0; script.front() == '<' && script.find('>') != std::string::npos && std::sscanf(script.c_str() + 1, "%d,%d", &px, &py) == 2)
+				else if (int px = 0, py = 0; (script.front() == '?' || script.front() == '/' || script.front() == '\\' || script.front() == '!' || script.front() == ';') &&
+					script.size() > 1 && script[1] == '<' && script.find('>') != std::string::npos && std::sscanf(script.c_str() + 2, "%d,%d", &px, &py) == 2)
+				{
+					// "?<x,y>": the mouse moved to that pixel; "/<x,y>" the right button pressed there and
+					// held, "\<x,y>" let go there (a drag, as the mouse's); "!<x,y>" and ";<x,y>" the same
+					// with the left button.
+					if (script.front() == '?')
+						window.mouseMove(px, py);
+					else
+						window.mouseButton(px, py, script.front() == '!' || script.front() == ';', script.front() == '/' || script.front() == '!');
+					script.erase(0, script.find('>') + 1);
+				}
+				else if (int px = 0, py = 0, qx = 0, qy = 0; script.front() == '<' && script.find('>') != std::string::npos &&
+						 std::sscanf(script.c_str() + 1, "%d,%d:%d,%d", &px, &py, &qx, &qy) == 4)
+				{
+					// "<x,y:x2,y2>": the left button pressed at x,y, the mouse moved to x2,y2 and let go (a drag).
+					if (log)
+						std::printf("  drag %d,%d to %d,%d\n", px, py, qx, qy);
+					window.mouseDrag(px, py, qx, qy);
+					script.erase(0, script.find('>') + 1);
+				}
+				else if (int px = 0, py = 0, twice = script.starts_with("*<"); (script.front() == '<' || twice) && script.find('>') != std::string::npos &&
+					std::sscanf(script.c_str() + 1 + twice, "%d,%d", &px, &py) == 2)
 				{
 					// "<x,y>": a left click at that pixel of the window, on what is there (a popup, the
-					// screens, a unit's figure, a plot), as the mouse's.
+					// screens, a unit's figure, a city's bar, a plot), as the mouse's; "*<x,y>" a double click.
 					if (log)
 						if (const auto c = window.clickAt(px, py, false))
-							std::printf("  click at %d,%d: plot %d,%d%s\n", px, py, c->x, c->y, c->onFigure ? " (a unit's figure)" : "");
-					window.mouseClick(px, py);
+							std::printf("  %s at %d,%d: plot %d,%d%s\n", twice ? "double click" : "click", px, py, c->x, c->y,
+								c->onFigure ? " (a unit's figure)" : c->onCityBar ? " (a city's bar)" : "");
+					window.mouseClick(px, py, twice);
 					script.erase(0, script.find('>') + 1);
 				}
 				else if (const size_t mods = script.find_first_not_of("^@+"), end = script.find('}');
@@ -1336,6 +1417,64 @@ namespace
 			// The WorldBuilder: the mouse over the map is its screen's (where it is, its buttons held,
 			// its clicks: CvScreensInterface's mouseOverPlot, leftMouseDown, rightMouseDown), and the
 			// plot its brush is on outlined (WorldBuilderGetHighlightPlot); the game's clicks wait.
+			// Out of it, the mouse over the map as the original engine keeps it for the scripts
+			// (CyInterface's getMouseOverPlot, isLeftMouseDown, isRightMouseDown; BUG's dot map editor
+			// reads them every frame and draws its city where the mouse is): the plot under it, the
+			// screens over the map told when it moves to another, and its buttons held. A click
+			// whose press no frame saw (a scripted one, or one quicker than a frame) is held for this
+			// frame, so that it is seen once.
+			if (!ui.worldBuilder() && !opt.ownInterface)
+			{
+				const auto [hx, hy] = window.hoveredPlot();
+				ui.mouseOverMap = hx >= 0 && window.uiHovered() < 0;
+				int px = ui.mouseOverMap ? hx : ui.mouseX, py = ui.mouseOverMap ? hy : ui.mouseY;
+				bool clicked[2] = {};
+				for (const auto& click : clicks)
+					if (!click.clear && !click.either)
+					{
+						clicked[click.right ? 1 : 0] = true;
+						px = click.x, py = click.y;
+					}
+				if (px != ui.mouseX || py != ui.mouseY)
+				{
+					ui.mouseX = px, ui.mouseY = py;
+					if (px >= 0)
+						screens.mouseOverPlot();
+				}
+				bool down[2];
+				for (int b = 0; b < 2; ++b)
+				{
+					const bool held = render::mouseHeld(b == 0);
+					down[b] = (ui.mouseOverMap && held) || (clicked[b] && !heldSeen[b]);
+					heldSeen[b] = held || (heldSeen[b] && !clicked[b]);
+				}
+				ui.mouseLeft = down[0], ui.mouseRight = down[1];
+			}
+			// An interface mode that outlines the plot under the mouse (its InterfaceModeInfo's
+			// bHighlightPlot: Python's pick plot, ping, sign, the air missions), in the game core's
+			// colour for it (CvGame::getNewHighlightPlot, getPlotHighlightColor: green; dark grey where
+			// the units can't go; none where it isn't known or the script can't pick it), as the
+			// WorldBuilder's brush (Wine: BUG's dot map editor, a green plot under the mouse).
+			// Asked again only when the mode or the plot changes (pick plot asks the scripts).
+			if (ui.worldBuilder())
+				highlighted = { -2, -2, -2 }; // (the WorldBuilder's brush is drawn in that layer meanwhile)
+			else
+			{
+				const InterfaceModeTypes mode = ui.getInterfaceMode();
+				CvPlot* h = ui.mouseOverMap && !opt.ownInterface && mode != NO_INTERFACEMODE && mode != INTERFACEMODE_SELECTION
+					? game.getNewHighlightPlot() : nullptr;
+				if (const std::tuple<int, int, int> now{ h ? h->getX() : -1, h ? h->getY() : -1, int(mode) }; now != highlighted)
+				{
+					highlighted = now;
+					utility.engine().clear(AREA_BORDER_LAYER_HIGHLIGHT_PLOT, true);
+					if (const ColorTypes color = h ? game.getPlotHighlightColor(h) : NO_COLOR; color != NO_COLOR)
+					{
+						const NiColorA c = GC.getColorInfo(color).getColor();
+						utility.engine().mark({ h->getX(), h->getY(), c.r, c.g, c.b, 0.9f, AREA_BORDER_LAYER_HIGHLIGHT_PLOT, true, false });
+					}
+					changed = true;
+				}
+			}
 			window.setWorldBuilder(ui.worldBuilder());
 			if (ui.worldBuilder())
 			{
@@ -1394,6 +1533,23 @@ namespace
 						ui.clearSelectionList();
 					continue;
 				}
+				// The city screen up: the clicks are the game core's, as the original engine hands them
+				// over. A plot the city can work is worked or let go (CvCity::alterWorkingPlot: the
+				// city's own plot gives its citizens back to the governor); a right click takes away
+				// the forced choice; a click outside closes the screen (CITY_SCREEN_CLICK_WILL_EXIT),
+				// as does a double click on the city.
+				if (CvCity* city = ui.isCityScreenUp() ? ui.getHeadSelectedCity() : nullptr)
+				{
+					if (log)
+						std::printf("  city screen %s at %d,%d\n", click.right && !click.either ? "right click" : click.twice ? "double click" : "click", plot->getX(), plot->getY());
+					if (click.right && !click.either)
+						game.handleCityScreenPlotRightPicked(city, plot, click.alt, click.shift, click.ctrl);
+					else if (click.twice)
+						game.handleCityScreenPlotDoublePicked(city, plot, click.alt, click.shift, click.ctrl);
+					else
+						game.handleCityScreenPlotPicked(city, plot, click.alt, click.shift, click.ctrl);
+					continue;
+				}
 				// The gamepad's plot cursor: one's own units or city there are selected, as a left click;
 				// anywhere else the selected units go there, as a right one (an interface mode's plot is a left click).
 				if (click.either)
@@ -1408,7 +1564,27 @@ namespace
 					click.right = ui.getInterfaceMode() == INTERFACEMODE_SELECTION && head && !own;
 				}
 				// The interface mode wants a plot: its mission there (a right click leaves it).
-				if (const InterfaceModeTypes mode = ui.getInterfaceMode(); mode != INTERFACEMODE_SELECTION)
+				// Python's pick plot is the scripts': a left click on a plot they can pick (the game
+				// core's highlight colour for it: revealed, CvGameInterface.canPickPlot) ends the mode
+				// and gives them the plot (CvEventReporter::plotPicked, their onPlotPicked), as the
+				// shipped mods' scripts expect (Gods of Old's prophets set the mode and never end it);
+				// the selected units get no order. BUG's dot map editor reads the mouse itself (a city
+				// placed with the left button, taken away with the right) and sets the mode again
+				// after each click, later in the frame (its screen's update), so it stays on there, as
+				// in the original under Wine.
+				if (const InterfaceModeTypes mode = ui.getInterfaceMode(); mode == INTERFACEMODE_PYTHON_PICK_PLOT)
+				{
+					const bool pick = !click.right && game.getPlotHighlightColor(plot) != NO_COLOR;
+					if (log)
+						std::printf("  %s at %d,%d: %s\n", GC.getInterfaceModeInfo(mode).getType(), plot->getX(), plot->getY(),
+							click.right ? "cancelled" : pick ? "picked" : "not to be picked");
+					if (click.right || pick)
+						ui.setInterfaceMode(INTERFACEMODE_SELECTION);
+					if (pick)
+						CvEventReporter::getInstance().plotPicked(plot);
+					continue;
+				}
+				else if (mode != INTERFACEMODE_SELECTION)
 				{
 					CvSelectionGroup* group = ui.getSelectionList();
 					if (log)
@@ -1425,13 +1601,45 @@ namespace
 						ui.setInterfaceMode(INTERFACEMODE_SELECTION);
 					continue;
 				}
-				// A click on one's city: its screen (the units there are in the plot list then); on
-				// one of the figures in it, as anywhere, its unit.
-				if (!click.right && !click.onFigure && !opt.ownInterface && screens.active())
-					if (CvCity* city = plot->getPlotCity(); city && city->getOwner() == me)
+				// One's city, as the original's: a double click on it or its name bar opens its screen
+				// (the units there are in the plot list then), one click on the bar selects the city
+				// (what it builds in the bottom panel); one click on its plot is any plot's (its
+				// units). One click on one of the figures in it is, as anywhere, its unit's; a double
+				// click there opens the city too (Wine). OpenCiv4's option opens the
+				// screen with one click on the city or its bar.
+				// The first click of a double click is a click (it selects the units there); the city's
+				// screen then opens with the units selected before it, the ones Esc gives back (Wine:
+				// on its plot, its bar or a figure in it).
+				CvCity* ownCity = plot->getPlotCity() && plot->getPlotCity()->getOwner() == me ? plot->getPlotCity() : nullptr;
+				const auto before = std::exchange(selectedBeforeClick, std::nullopt);
+				if (!click.right && !click.twice)
+				{
+					selectedBeforeClick.emplace();
+					for (CLLNode<IDInfo>* n = ui.headSelectionListNode(); n; n = ui.nextSelectionListNode(n))
+						selectedBeforeClick->push_back(n->m_data);
+				}
+				if (!click.right && (!click.onFigure || click.twice) && !opt.ownInterface && screens.active())
+					if (CvCity* city = ownCity)
 					{
-						ui.selectCity(city, true);
-						continue;
+						if (click.twice || utility.cityOneClick())
+						{
+							if (click.twice && before)
+							{
+								ui.clearSelectionList();
+								for (const IDInfo& id : *before)
+									if (CvUnit* u = CvPlayerAI::getPlayerNonInl(id.eOwner).getUnit(id.iID); u && u->getOwner() == me)
+										ui.insertIntoSelectionList(u, false, false, false, false, true);
+							}
+							ui.selectCity(city, true);
+							continue;
+						}
+						if (click.onCityBar)
+						{
+							ui.clearSelectionList();
+							ui.clearSelectedCities();
+							ui.addSelectedCity(city, false);
+							continue;
+						}
 					}
 				if (!click.right)
 				{
@@ -1443,9 +1651,11 @@ namespace
 						ui.selectGroup(own, click.shift, click.ctrl, click.alt);
 					else
 						ui.clearSelectionList();
-					// (as the original's: the camera goes to the plot clicked, a unit there or not;
-					// a scripted game told where to look keeps looking there)
-					if (opt.lookX < 0 || opt.viewSeconds <= 0)
+					// (as the original's: the camera goes to the plot clicked, a unit there or not, but
+					// not to one's own city, its plot or a figure in it (Wine: so a double
+					// click's second click lands where the first did); a scripted game told where to
+					// look keeps looking there)
+					if (!ownCity && (opt.lookX < 0 || opt.viewSeconds <= 0 || std::getenv("OC4_FOLLOW_CAMERA")))
 						window.centerOn(plot->getX(), plot->getY());
 				}
 				else if (ui.getHeadSelectedUnit())
@@ -1485,7 +1695,17 @@ namespace
 			const InterfaceModeTypes pathMode = ui.getInterfaceMode();
 			window.setGoingTo(playing && pathMode > NO_INTERFACEMODE && pathMode < NUM_INTERFACEMODE_TYPES && GC.getInterfaceModeInfo(pathMode).getGotoPlot() &&
 				pathHead && pathHead->getOwner() == me);
-			if (const auto target = playing ? window.pathTarget() : std::nullopt; target != pathShown || (target && from != pathFrom))
+			// None while a script picks a plot (BUG's dot map editor, whose right button takes a city
+			// away): there the original shows no way to it, neither with the button held nor for a
+			// press begun in that mode and still held after the mode ends.
+			std::optional<std::pair<int, int>> pointed = playing ? window.pathTarget() : std::nullopt;
+			if (!pointed)
+				pickPress = false;
+			else if (ui.getInterfaceMode() == INTERFACEMODE_PYTHON_PICK_PLOT)
+				pickPress = true;
+			if (pickPress)
+				pointed.reset();
+			if (const auto target = pointed; target != pathShown || (target && from != pathFrom))
 			{
 				pathShown = target;
 				pathFrom = from;
@@ -1575,11 +1795,12 @@ namespace
 				for (const auto& m : marks)
 				{
 					const auto [x, y] = m.core ? host::windowPlot({ m.x, m.y }) : std::pair{ m.x, m.y };
-					// (the WorldBuilder's plot and brush, and a settler's founding border, in the
-					// original's area border style)
+					// (the WorldBuilder's plot and brush, a settler's founding border, a settler's view of the
+					// cities' plots (Show City Radius), and the layers past the game's own that scripts draw
+					// (BUG's dot map's cities), in the original's area border style)
 					const bool hatched = m.border && (m.layer == AREA_BORDER_LAYER_HIGHLIGHT_PLOT || m.layer == AREA_BORDER_LAYER_WORLD_BUILDER ||
-						m.layer == AREA_BORDER_LAYER_FOUNDING_BORDER);
-					shownMarks.marks.push_back({ x, y, m.layer, { m.r, m.g, m.b }, m.a, m.border, false, hatched });
+						m.layer == AREA_BORDER_LAYER_FOUNDING_BORDER || m.layer == AREA_BORDER_LAYER_CITY_RADIUS || m.layer >= NUM_AREA_BORDER_LAYERS);
+					shownMarks.marks.push_back({ x, y, m.layer, { m.r, m.g, m.b }, m.a, m.border, false, hatched, m.style });
 				}
 				for (const auto& s : signs)
 				{
@@ -1715,7 +1936,9 @@ namespace
 				if (Clock::now() >= nextShownMoveUpdate)
 				{
 					window.setBusy(true);
-					worker.start([&session, &game, &nextShownMoveUpdate] {
+					const auto slice = utility.quickEnemyMoves() ? kQuickShownMoveSlice : kShownMoveSlice;
+					host::Entities::setQuickShownMoves(utility.quickEnemyMoves());
+					worker.start([&session, &game, &nextShownMoveUpdate, slice] {
 						const auto until = Clock::now() + std::chrono::milliseconds(100);
 						do
 							if (host::Entities::battleWait())
@@ -1727,7 +1950,7 @@ namespace
 								session.update();
 								if (wasShown || shownMoveOn())
 								{
-									nextShownMoveUpdate = Clock::now() + kShownMoveSlice;
+									nextShownMoveUpdate = Clock::now() + slice;
 									break;
 								}
 							}
@@ -1894,6 +2117,7 @@ namespace
 		host::Screens screens(utility);
 		host::Screens::setTextWidth([&window](const std::string& markup, int font) { return window.textWidth(markup, font); });
 		host::Screens::setTextHeight([&window](const std::string& markup, int width, int font) { return window.textHeight(markup, width, font); });
+		host::Screens::setTableRow([&window](const std::string& style) { return window.tableRow(style); });
 		window.setUiWheel([&screens](int x, int y, int delta) { return screens.wheel(x, y, delta); });
 		std::vector<std::pair<fs::path, std::string>> saveFolders;
 		if (const fs::path documents = documentsFolder(); !documents.empty())
@@ -1919,7 +2143,8 @@ namespace
 		host::Sounds& sounds = utility.sounds();
 		if (const char* s = std::getenv("OC4_SOUND"); s ? std::string_view(s) != "0" : opt.viewSeconds <= 0)
 			sounds.start(s && std::string_view(s) == "mute");
-		sounds.setTalkMusic(-1, utility.audioScripts().index("AS2D_OPENING_MENU", AUDIOTAG_2DSCRIPT));
+		// (the opening menu's the options chose: Options -> Graphics -> Opening Menu)
+		sounds.setTalkMusic(-1, utility.audioScripts().index(screens.menuSoundtrack().c_str(), AUDIOTAG_2DSCRIPT));
 		std::optional<host::MenuChoice> choice;
 		auto last = Clock::now(), typed = last;
 		const auto start = last;

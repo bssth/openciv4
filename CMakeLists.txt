@@ -311,6 +311,10 @@ endif()
 if(WIN32)
 	target_link_libraries(oc4core PRIVATE dbghelp bcrypt winmm shell32 ole32 advapi32 ws2_32)
 endif()
+if(APPLE)
+	# (the user's time format for the interface clock: CFDateFormatter)
+	target_link_libraries(oc4core PRIVATE "-framework CoreFoundation")
+endif()
 # Includes the SDK headers, so it shares the game core's dialect (no UNICODE, lenient conformance).
 target_compile_definitions(oc4core PRIVATE OC4_GAMECORE_IMPORT _USRDLL _CRT_SECURE_NO_WARNINGS "OC4_DEFAULT_PYTHON_HOME=\"${OC4_PYTHON27_DIR}\""
 	"OC4_GAME_CORE_DLL=\"${OC4_GAME_CORE_NAME}.dll\"")
@@ -374,11 +378,35 @@ target_include_directories(edge_scroll_test PRIVATE src)
 add_test(NAME edge_scroll COMMAND edge_scroll_test)
 set_target_properties(edge_scroll_test PROPERTIES FOLDER "tests")
 
+add_executable(double_click_test tests/double_click_test.cpp)
+target_include_directories(double_click_test PRIVATE src)
+add_test(NAME double_click COMMAND double_click_test)
+set_target_properties(double_click_test PROPERTIES FOLDER "tests")
+
 add_executable(auto_end_turn_test tests/auto_end_turn_test.cpp)
 target_include_directories(auto_end_turn_test PRIVATE apps/oc4core)
 target_link_libraries(auto_end_turn_test PRIVATE oc4_options)
 add_test(NAME auto_end_turn COMMAND auto_end_turn_test)
 set_target_properties(auto_end_turn_test PROPERTIES FOLDER "tests")
+
+add_executable(auto_saves_test tests/auto_saves_test.cpp)
+target_include_directories(auto_saves_test PRIVATE apps/oc4core)
+target_link_libraries(auto_saves_test PRIVATE oc4_options)
+add_test(NAME auto_saves COMMAND auto_saves_test)
+set_target_properties(auto_saves_test PROPERTIES FOLDER "tests")
+
+# The player options kept in the player's profile, and the options screen's OpenCiv4 tab
+# (oc4options.py, with a stand-in host).
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+	add_test(NAME player_options COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/player_options_test.py
+		${CMAKE_CURRENT_SOURCE_DIR}/apps/oc4core/python)
+	# CivilizationIV.ini's settings on the OpenCiv4 tab, kept in the profile.
+	add_test(NAME ini_options COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/ini_options_test.py
+		${CMAKE_CURRENT_SOURCE_DIR}/apps/oc4core/python)
+	add_test(NAME options_other COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/options_other_test.py
+		${CMAKE_CURRENT_SOURCE_DIR}/apps/oc4core/python)
+endif()
 
 add_executable(xml_decode_test tests/xml_decode_test.cpp)
 target_include_directories(xml_decode_test PRIVATE apps/oc4core)
@@ -414,6 +442,22 @@ target_include_directories(flag_art_test PRIVATE src)
 target_link_libraries(flag_art_test PRIVATE oc4_options oc4_render)
 add_test(NAME flag_art COMMAND flag_art_test)
 set_target_properties(flag_art_test PROPERTIES FOLDER "tests")
+# The minimap's toggles kept in the player's profile (oc4options.py, with a stand-in host).
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+	add_test(NAME minimap_toggles COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/minimap_toggles_test.py
+		${CMAKE_CURRENT_SOURCE_DIR}/apps/oc4core/python)
+endif()
+add_executable(game_fonts_test tests/game_fonts_test.cpp)
+target_include_directories(game_fonts_test PRIVATE src)
+target_link_libraries(game_fonts_test PRIVATE oc4_options oc4_render)
+add_test(NAME game_fonts COMMAND game_fonts_test)
+set_target_properties(game_fonts_test PROPERTIES FOLDER "tests")
+add_executable(theme_table_test tests/theme_table_test.cpp)
+target_include_directories(theme_table_test PRIVATE src)
+target_link_libraries(theme_table_test PRIVATE oc4_options oc4_render)
+add_test(NAME theme_table COMMAND theme_table_test)
+set_target_properties(theme_table_test PROPERTIES FOLDER "tests")
 
 if(WIN32 AND TARGET freetype)
 	add_executable(text_layout_freetype_test tests/text_layout_test.cpp src/render/TextLayout.cpp src/render/FontFreeType.cpp src/render/FontVdmx.cpp)

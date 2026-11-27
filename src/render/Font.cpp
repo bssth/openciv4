@@ -113,6 +113,9 @@ namespace oc4::render
 
 	Fonts::~Fonts() = default;
 
+	// (Windows has the game's fonts installed: Sylfaen ships with it)
+	void Fonts::addFolders(const std::vector<std::filesystem::path>&) {}
+
 	int Fonts::face(const std::wstring& family, bool bold, bool italic) { return m->make(family, bold, italic, true); }
 
 	const Fonts::Metrics& Fonts::metrics(int face) const { return m->faces[size_t(face)].metrics; }

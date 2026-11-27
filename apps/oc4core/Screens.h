@@ -12,6 +12,7 @@
 #include "GameSession.h"
 #include "render/MapWindow.h"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -38,6 +39,9 @@ namespace oc4::host
 
 	// The oc4host functions CyInterface (oc4screens.py) is built on; before the scripts load.
 	void registerScreenFunctions(Utility& utility);
+	// The minimap's toggles the player's profile keeps: the plot grid, the bare map, the yields,
+	// the scores (CyUserProfile's getGrid, getMap, getYields, getScores).
+	std::array<bool, 4> mapToggles(Utility& utility);
 
 	// Which soundscape (an index of the soundscape table; -1: none) each terrain, feature and
 	// improvement type has, and each era's cities by size (small, medium, large): the types
@@ -75,12 +79,15 @@ namespace oc4::host
 		static void setTextWidth(std::function<int(const std::string& markup, int font)> width);
 		// How high a text is when it wraps at a width, in a widget's font (FontTypes).
 		static void setTextHeight(std::function<int(const std::string& markup, int width, int font)> height);
+		static void setTableRow(std::function<std::array<float, 4>(const std::string& style)> row);
 		// The main interface up; false if the scripts failed (the host keeps its own then).
 		bool start(int width, int height);
 		bool active() const { return m_active; }
 		// The temporary main menu instead (the original's is the engine's own, no script's):
 		// a title, the map scripts to choose from and the folders with saved games (each with a
 		// label). Its choice, once made, from takeMenuChoice; closeMenu takes it down.
+		// The opening menu's music the options chose (its 2D sound script: AS2D_OPENING_MENU...).
+		std::string menuSoundtrack();
 		bool startMenu(int width, int height, const std::string& title, const std::vector<std::string>& mapScripts,
 			const std::vector<std::pair<std::filesystem::path, std::string>>& saveFolders, const std::vector<std::string>& mods,
 			const std::string& message = {}, const std::string& page = {});
@@ -106,6 +113,10 @@ namespace oc4::host
 		// manager's kbdEvent, down and up, with the mouse and the plot under it (BUG's shortcuts
 		// are there). True if they took it (it goes no further then).
 		bool keyEvent(int key, bool shift, bool ctrl, bool alt, int mouseX, int mouseY, int plotX, int plotY);
+		// The mouse onto another plot of the map: CvScreensInterface's mouseOverPlot for each screen
+		// shown over the main interface, as the original engine tells them (BUG's dot map editor
+		// draws the city it would place there).
+		void mouseOverPlot();
 
 		bool menuUp(); // the main menu, a talk or a screen over the map: the arrows are its
 
@@ -119,10 +130,12 @@ namespace oc4::host
 			int widget = -1, data1 = -1, data2 = -1;
 			bool option = false;
 			bool checkbox = false;
+			float x0 = 0, y0 = 0, x1 = 0, y1 = 0; // (where it is drawn: a tooltip goes beside it)
 			std::string movie; // (a movie's file)
 		};
 		void rebuild(render::MapWindow& window);
 		void click(const Item& item, bool right, bool shift, bool ctrl, bool alt);
+		void moveOnOff(render::MapWindow& window); // NOTIFY_CURSOR_MOVE_ON/_OFF as the mouse goes onto a widget and off it
 		// The script's handleInput for the item (a NotifyCode, its data).
 		void scriptInput(const Item& item, int notify, int data, int column, bool right, bool shift, bool ctrl, bool alt);
 		std::string help(const Item& item) const;
@@ -131,11 +144,14 @@ namespace oc4::host
 		bool m_active = false;
 		bool m_menu = false; // the main menu, not the game's screens
 		int m_mainId = -1, m_failures = 0;
+		int m_techChooserId = -1;
+		std::string m_research; // the active player's research when the tech advisor was last told (empty: not up)
 		long long m_version = -1;
 		std::pair<int, int> m_laidOut{ -1, -1 }, m_seenSize{ -1, -1 }; // the size the screens were made for; the window's
 		std::chrono::steady_clock::time_point m_sizeChanged;
 		std::vector<Item> m_items;
 		int m_hovered = -1;
+		std::optional<Item> m_movedOn; // the widget the scripts were told the mouse is on
 		std::pair<int, int> m_mouse{ -1, -1 }; // where the mouse was at the clicks taken
 		unsigned m_diploVersion = 0;           // the talk the diplomacy screen shows
 		std::vector<std::pair<int, std::wstring>> m_talkAnswers; // the player's answers in it, last frame

@@ -372,6 +372,7 @@ namespace oc4::host
 
 	void Utility::sendPlayerOption(PlayerOptionTypes eOption, bool bValue)
 	{
+		setProfilePlayerOption(eOption, bValue); // (the player's choice, kept in the profile: oc4options saves it)
 		const PlayerTypes active = GC.getInitCore().getActivePlayer();
 		if (active == NO_PLAYER)
 			return;
@@ -390,9 +391,9 @@ namespace oc4::host
 
 	bool Utility::getPlayerOption(PlayerOptionTypes ePlayerOption)
 	{
-		if (size_t(ePlayerOption) < m_profileOptions.size())
-			return m_profileOptions[size_t(ePlayerOption)] != 0;
-		return GC.getPlayerOptionInfo(ePlayerOption).getDefault();
+		if (const int state = profilePlayerOptionState(ePlayerOption))
+			return state == 2;
+		return ePlayerOption >= 0 && ePlayerOption < GC.getNumPlayerOptionInfos() && GC.getPlayerOptionInfo(ePlayerOption).getDefault();
 	}
 
 	bool Utility::getGraphicOption(GraphicOptionTypes eGraphicOption)
@@ -403,15 +404,6 @@ namespace oc4::host
 		return eGraphicOption >= 0 && eGraphicOption < GC.getNumGraphicOptions() && GC.getGraphicOptionInfo(eGraphicOption).getDefault();
 	}
 
-	void Utility::setProfileOptionsFromPlayer(PlayerTypes ePlayer)
-	{
-		m_profileOptions.clear();
-		if (ePlayer == NO_PLAYER)
-			return;
-		const CvPlayerAI& player = CvPlayerAI::getPlayerNonInl(ePlayer);
-		for (int i = 0; i < GC.getNumPlayerOptionInfos(); ++i) // (mods may have more than the SDK's enum)
-			m_profileOptions.push_back(player.isOption(static_cast<PlayerOptionTypes>(i)) ? 1 : 0);
-	}
 
 	CvWString Utility::getText(CvWString szIDTag, ...)
 	{

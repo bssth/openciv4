@@ -563,6 +563,8 @@ float4 PSOverlay(Out p) : SV_Target
 		m_noPlots.reset();
 		m_color.reset();
 		m_depth.reset();
+		m_msColor.reset();
+		m_msDepth.reset();
 		m_particleVb.reset();
 		m_overlayVb.reset();
 		if (m_window)
@@ -593,6 +595,50 @@ float4 PSOverlay(Out p) : SV_Target
 			fail("SDL_CreateGPUTexture(depth)");
 		m_depth = std::make_shared<GpuImage>(m_device, depth);
 		m_target = { m_color->texture, m_depth->texture, m_width, m_height };
+		createSampleTargets();
+	}
+
+	SDL_GPUSampleCount Renderer::sampleCount(uint32_t samples)
+	{
+		return samples >= 8 ? SDL_GPU_SAMPLECOUNT_8 : samples >= 4 ? SDL_GPU_SAMPLECOUNT_4 : samples >= 2 ? SDL_GPU_SAMPLECOUNT_2 : SDL_GPU_SAMPLECOUNT_1;
+	}
+
+	void Renderer::createSampleTargets()
+	{
+		m_msColor.reset();
+		m_msDepth.reset();
+		// (as many samples as asked for that the device can do with both formats)
+		while (m_samples > 1 && !(SDL_GPUTextureSupportsSampleCount(m_device, colorFormat(), sampleCount(m_samples)) &&
+				   SDL_GPUTextureSupportsSampleCount(m_device, m_depthFormat, sampleCount(m_samples))))
+			m_samples /= 2;
+		if (m_samples <= 1)
+		{
+			m_samples = 1;
+			return;
+		}
+		SDL_GPUTextureCreateInfo ci{};
+		ci.type = SDL_GPU_TEXTURETYPE_2D;
+		ci.format = colorFormat();
+		ci.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+		ci.width = m_width;
+		ci.height = m_height;
+		ci.layer_count_or_depth = 1;
+		ci.num_levels = 1;
+		ci.sample_count = sampleCount(m_samples);
+		SDL_GPUTexture* color = SDL_CreateGPUTexture(m_device, &ci);
+		ci.format = m_depthFormat;
+		ci.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+		SDL_GPUTexture* depth = color ? SDL_CreateGPUTexture(m_device, &ci) : nullptr;
+		if (!color || !depth)
+		{
+			if (color)
+				SDL_ReleaseGPUTexture(m_device, color);
+			m_samples = 1; // (none: drawn without)
+			return;
+		}
+		m_msColor = std::make_shared<GpuImage>(m_device, color);
+		m_msColor->width = m_width, m_msColor->height = m_height;
+		m_msDepth = std::make_shared<GpuImage>(m_device, depth);
 	}
 
 	void Renderer::resize(uint32_t width, uint32_t height)
@@ -685,23 +731,7 @@ float4 PSOverlay(Out p) : SV_Target
 		m_overlayVs = compile(kOverlayHlsl, "overlay.hlsl", "VSOverlay", SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
 		m_overlayPs = compile(kOverlayHlsl, "overlay.hlsl", "PSOverlay", SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0, 2);
 
-		for (int clamp = 0; clamp < 4; ++clamp)
-		{
-			// TexClamp: bit1 = S wraps, bit0 = T wraps.
-			SDL_GPUSamplerCreateInfo sd{};
-			sd.min_filter = sd.mag_filter = SDL_GPU_FILTER_LINEAR;
-			sd.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
-			sd.address_mode_u = (clamp & 2) ? SDL_GPU_SAMPLERADDRESSMODE_REPEAT : SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-			sd.address_mode_v = (clamp & 1) ? SDL_GPU_SAMPLERADDRESSMODE_REPEAT : SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-			sd.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
-			sd.max_lod = 1000;
-			if (!(m_trilinearSamplers[clamp] = SDL_CreateGPUSampler(m_device, &sd)))
-				fail("SDL_CreateGPUSampler");
-			sd.enable_anisotropy = true;
-			sd.max_anisotropy = 8;
-			if (!(m_samplers[clamp] = SDL_CreateGPUSampler(m_device, &sd)))
-				fail("SDL_CreateGPUSampler");
-		}
+		makeSamplers();
 		SDL_GPUSamplerCreateInfo gd{};
 		gd.min_filter = gd.mag_filter = SDL_GPU_FILTER_LINEAR;
 		gd.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
@@ -720,8 +750,10 @@ float4 PSOverlay(Out p) : SV_Target
 		m_noPlots = createTexture(1, 1, 1, 1, TextureFormat::RGBA16, std::span(&plots, 1));
 	}
 
-	SDL_GPUGraphicsPipeline* Renderer::pipeline(const PipelineKey& key)
+	SDL_GPUGraphicsPipeline* Renderer::pipeline(const PipelineKey& asked)
 	{
+		PipelineKey key = asked;
+		key.samples = passSamples(); // (as many samples as the pass it is drawn in)
 		if (const auto it = m_pipelines.find(key); it != m_pipelines.end())
 			return it->second;
 		const bool overlay = key.kind == 1;
@@ -771,6 +803,7 @@ float4 PSOverlay(Out p) : SV_Target
 		ci.target_info.num_color_targets = 1;
 		ci.target_info.depth_stencil_format = m_depthFormat;
 		ci.target_info.has_depth_stencil_target = true;
+		ci.multisample_state.sample_count = sampleCount(key.samples);
 		SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(m_device, &ci);
 		if (!p)
 			fail("SDL_CreateGPUGraphicsPipeline");
@@ -844,6 +877,14 @@ float4 PSOverlay(Out p) : SV_Target
 		color.store_op = SDL_GPU_STOREOP_STORE;
 		SDL_GPUDepthStencilTargetInfo depth{};
 		depth.texture = m_target.depth;
+		if (passSamples() > 1)
+		{
+			// (anti-aliasing: drawn into the samples, kept for the next pass, resolved into the target)
+			color.texture = m_msColor->texture;
+			color.resolve_texture = m_target.color;
+			color.store_op = SDL_GPU_STOREOP_RESOLVE_AND_STORE;
+			depth.texture = m_msDepth->texture;
+		}
 		depth.load_op = depth.stencil_load_op = m_clearDepth ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
 		depth.store_op = depth.stencil_store_op = SDL_GPU_STOREOP_STORE;
 		depth.clear_depth = 1;
@@ -1197,9 +1238,46 @@ float4 PSOverlay(Out p) : SV_Target
 		SDL_DrawGPUIndexedPrimitives(m_pass, mesh.indexCount, 1, 0, 0, 0);
 	}
 
+	void Renderer::makeSamplers()
+	{
+		for (int clamp = 0; clamp < 4; ++clamp)
+		{
+			for (SDL_GPUSampler* s : { m_samplers[clamp], m_trilinearSamplers[clamp] })
+				if (s)
+					SDL_ReleaseGPUSampler(m_device, s);
+			// TexClamp: bit1 = S wraps, bit0 = T wraps.
+			SDL_GPUSamplerCreateInfo sd{};
+			sd.min_filter = sd.mag_filter = SDL_GPU_FILTER_LINEAR;
+			sd.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
+			sd.address_mode_u = (clamp & 2) ? SDL_GPU_SAMPLERADDRESSMODE_REPEAT : SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+			sd.address_mode_v = (clamp & 1) ? SDL_GPU_SAMPLERADDRESSMODE_REPEAT : SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+			sd.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+			sd.min_lod = minLod(); // (low resolution textures: from the half size level)
+			sd.max_lod = 1000;
+			if (!(m_trilinearSamplers[clamp] = SDL_CreateGPUSampler(m_device, &sd)))
+				fail("SDL_CreateGPUSampler");
+			sd.enable_anisotropy = true;
+			sd.max_anisotropy = 8;
+			if (!(m_samplers[clamp] = SDL_CreateGPUSampler(m_device, &sd)))
+				fail("SDL_CreateGPUSampler");
+		}
+		++m_samplerGeneration;
+	}
+
 	void Renderer::beginFrame(const Camera& camera, Vec3 clearColor)
 	{
 		endPass();
+		if (m_lowResWanted != m_lowRes)
+		{
+			m_lowRes = m_lowResWanted;
+			makeSamplers();
+		}
+		if (m_samplesWanted != m_samplesAsked && !m_inView)
+		{
+			// (as many as asked for, or the device's most)
+			m_samplesAsked = m_samples = m_samplesWanted;
+			createSampleTargets();
+		}
 		m_camera = camera;
 		m_deferred.clear();
 		m_deferredWorlds.clear();
