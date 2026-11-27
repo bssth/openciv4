@@ -34,6 +34,7 @@ namespace oc4::render
 			// A city's screen is up: as the original, no units (nor their flags and health) and no
 			// city bars on the map; the cities, signs and plots stay.
 			bool cityScreen = false;
+			bool globeBuildings = true; // the cities' models in the globe view (Globe View Buildings Disabled: none)
 		};
 
 		MapView(Renderer& renderer, const AssetResolver& assets);

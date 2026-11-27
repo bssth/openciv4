@@ -165,8 +165,33 @@ namespace oc4::host
 
 	CvPlot* Interface::getSelectionPlot()
 	{
+		// (cities selected, as next/previous city leaves them: the first city's plot)
+		if (CvCity* city = getHeadSelectedCity())
+			return city->plot();
 		CvUnit* head = getHeadSelectedUnit();
 		return head ? head->plot() : nullptr;
+	}
+
+	CvPlot* Interface::getLookAtPlot()
+	{
+		return cameraX >= 0 ? GC.getMap().plot(cameraX, cameraY) : nullptr;
+	}
+
+	void Interface::selectLookAtCity(bool bAdd)
+	{
+		CvPlot* at = getLookAtPlot();
+		if (!at)
+			return;
+		CvCity* city = GC.getMap().findCity(at->getX(), at->getY(), GC.getGame().getActivePlayer(), NO_TEAM, false);
+		if (!city)
+			return;
+		if (bAdd)
+		{
+			clearSelectedCities();
+			addSelectedCity(city, false);
+		}
+		else
+			selectCity(city, false);
 	}
 
 	bool Interface::soundPlace(const NiPoint3& point, std::optional<Sounds::Place>& place)
@@ -215,7 +240,8 @@ namespace oc4::host
 				pszIcon, eFlashColor, iFlashX, iFlashY, bShowOffScreenArrows, bShowOnScreenArrows));
 		if (ePlayer != GC.getGame().getActivePlayer())
 			return;
-		show(szString.c_str(), iLength);
+		if (!noEventMessages)
+			show(szString.c_str(), iLength, eFlashColor);
 		if (sounds && pszSound && *pszSound)
 			sounds->play(pszSound);
 	}
@@ -235,7 +261,11 @@ namespace oc4::host
 	}
 
 	// (the messages of the last turn again, when a game is loaded: CvPlayer::showMissedMessages)
-	void Interface::showMessage(CvTalkingHeadMessage& msg) { show(msg.getDescription(), msg.getLength()); }
+	void Interface::showMessage(CvTalkingHeadMessage& msg)
+	{
+		if (!noEventMessages)
+			show(msg.getDescription(), msg.getLength(), msg.getFlashColor());
+	}
 
 	void Interface::clearEventMessages()
 	{
@@ -243,14 +273,22 @@ namespace oc4::host
 		m_shown.clear();
 	}
 
-	void Interface::show(const std::wstring& text, int seconds)
+	// As the original: a message's line shows at once, in its flash colour (white if it has
+	// none; colours in its text stay), for its length in seconds, and goes at once; the newest
+	// six are shown, newest at the top, and one pushed out by newer ones does not come back.
+	void Interface::show(const std::wstring& text, int seconds, ColorTypes color)
 	{
 		if (text.empty())
 			return;
 		if (seconds <= 0)
 			seconds = GC.getEVENT_MESSAGE_TIME();
+		NiColorA colour(1, 1, 1, 1);
+		if (color > NO_COLOR && color < GC.getNumColorInfos())
+			colour = GC.getColorInfo(color).getColor();
 		std::lock_guard lock(m_shownMutex);
-		const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(seconds, 1));
+		const auto now = std::chrono::steady_clock::now();
+		std::erase_if(m_shown, [&](const Shown& s) { return s.until <= now; });
+		const auto until = now + std::chrono::seconds(std::max(seconds, 1));
 		// (the same one again while it is up, as a mod's weather has it plot after plot: one line,
 		// counted, moved to the newest)
 		int count = 1;
@@ -259,8 +297,8 @@ namespace oc4::host
 			count = same->count + 1;
 			m_shown.erase(same);
 		}
-		m_shown.push_back({ text, until, count });
-		while (m_shown.size() > 12) // (the oldest go first when many come at once)
+		m_shown.push_back({ text, colour, until, count });
+		while (m_shown.size() > kShownLines)
 			m_shown.pop_front();
 	}
 
@@ -269,9 +307,9 @@ namespace oc4::host
 		const auto now = std::chrono::steady_clock::now();
 		std::lock_guard lock(m_shownMutex);
 		std::vector<ShownMessage> out;
-		for (const Shown& s : m_shown)
-			if (const float left = std::chrono::duration<float>(s.until - now).count(); left > 0)
-				out.push_back({ s.count > 1 ? s.text + L" (x" + std::to_wstring(s.count) + L")" : s.text, std::min(1.0f, left) }); // (the last second fades it)
+		for (auto s = m_shown.rbegin(); s != m_shown.rend(); ++s)
+			if (s->until > now)
+				out.push_back({ s->count > 1 ? s->text + L" (x" + std::to_wstring(s->count) + L")" : s->text, s->color });
 		return out;
 	}
 
@@ -443,6 +481,16 @@ namespace oc4::host
 			m.plots.erase(m.plots.begin(), m.plots.end() - 32);
 	}
 
+	namespace
+	{
+		std::atomic<bool> g_quickShownMoves{ false };
+	}
+
+	void Entities::setQuickShownMoves(bool on)
+	{
+		g_quickShownMoves = on;
+	}
+
 	void Entities::ExecuteMove(CvUnitEntity* pEntity, float, bool bCombat)
 	{
 		// CvSelectionGroup::groupMove's, once the group's moves this update are done: the original
@@ -453,7 +501,8 @@ namespace oc4::host
 		if (!unit || bCombat || unit->getOwner() < 0)
 			return;
 		const CvPlayer& owner = CvPlayerAI::getPlayerNonInl(unit->getOwner()); // (exported: GET_PLAYER inlines a static the Windows DLL does not export)
-		const float seconds = owner.isHuman() && owner.isOption(PLAYEROPTION_QUICK_MOVES) ? 0.5f : 1.0f;
+		// (the others' with OpenCiv4's Quick enemy moves too: their walk ends before the next shown move)
+		const float seconds = (owner.isHuman() && owner.isOption(PLAYEROPTION_QUICK_MOVES)) || (!owner.isHuman() && g_quickShownMoves) ? 0.5f : 1.0f;
 		std::lock_guard lock(g_movementMutex);
 		if (const auto it = g_movements.find(movementKey(unit->getIDInfo())); it != g_movements.end())
 			it->second.seconds = seconds;
@@ -808,6 +857,10 @@ namespace oc4::host
 		if (pNewValue)
 		{
 			leaveInterfaceMode(); // (as the original's: a city selected ends Go To)
+			// The selected units stay selected under the city's screen, as the original's (seen in
+			// Wine: CyInterface().selectCity with a warrior selected, its head still the warrior).
+			// They take no orders there: CvGame::canHandleAction refuses a unit's action while a
+			// city is selected, and the screen's clicks are the city's (main.cpp).
 			m_cities.insertAtEnd(pNewValue->getIDInfo());
 			m_cityScreen = true;
 			lookAtX = pNewValue->getX();
@@ -959,10 +1012,10 @@ namespace oc4::host
 		popupOf(pPopup)->okButton = bCreateOkButton;
 	}
 
-	void Interface::popupAddDDS(CvPopup* pPopup, const char* szIconFilename, int, int, CvWString szHelpText)
+	void Interface::popupAddDDS(CvPopup* pPopup, const char* szIconFilename, int iWidth, int iHeight, CvWString szHelpText)
 	{
 		if (pPopup && szIconFilename)
-			popupOf(pPopup)->items.push_back({ .kind = Popup::Item::Kind::Image, .help = szHelpText, .icon = szIconFilename });
+			popupOf(pPopup)->items.push_back({ .kind = Popup::Item::Kind::Image, .help = szHelpText, .icon = szIconFilename, .width = iWidth, .height = iHeight });
 	}
 
 	void Interface::popupAddSeparator(CvPopup* pPopup, int)
@@ -979,11 +1032,11 @@ namespace oc4::host
 	}
 
 	void Interface::popupAddGenericButton(CvPopup* pPopup, CvWString szText, const char* szIcon, int iButtonId, WidgetTypes eWidgetType, int iData1,
-		int iData2, bool bOption, PopupControlLayout, unsigned int)
+		int iData2, bool bOption, PopupControlLayout, unsigned int uiFlags)
 	{
 		if (!pPopup)
 			return;
-		Popup::Item b{ .kind = Popup::Item::Kind::Button, .text = szText, .icon = szIcon ? szIcon : "", .id = iButtonId };
+		Popup::Item b{ .kind = Popup::Item::Kind::Button, .text = szText, .icon = szIcon ? szIcon : "", .id = iButtonId, .flags = uiFlags };
 		b.widget.m_iData1 = iData1;
 		b.widget.m_iData2 = iData2;
 		b.widget.m_bOption = bOption;

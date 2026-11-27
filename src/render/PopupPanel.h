@@ -31,16 +31,20 @@ namespace oc4::render
 		// Input in window pixels. While it is up the panel takes every click and key; the
 		// wheel only over it. The arrows go through what can be chosen, and Return does it.
 		void hover(int x, int y);
+		// The left button pressed on it (a choice shows pressed while it is held), and let go.
+		void press(int x, int y);
+		void release();
 		bool click(int x, int y);
-		bool wheel(int x, int y, int delta);
+		bool wheel(int x, int y, int delta, bool anywhere = false); // (anywhere: not only over it)
 		bool key(unsigned virtualKey);
 		// A character typed (WM_CHAR): into the edit box that has the focus.
 		bool character(wchar_t c);
 		std::optional<MapWindow::PopupAnswer> takeAnswer() { return std::exchange(m_answer, std::nullopt); }
 
 		void draw(Overlay& overlay, const std::function<std::string(int item)>& help);
-		// The keys have chosen something (Tab started it): the arrows are the popup's, not the map's.
-		bool keyboardChoice() const { return m_keyboard; }
+		// The keys have chosen something (Tab started it), or the focus is on a choice with a picture
+		// (the original's arrows move it at once): the arrows are the popup's, not the map's.
+		bool keyboardChoice() const { return m_keyboard || label(m_selected); }
 		// An edit box has the focus: typing goes into it.
 		bool editing() const { return active() && m_focus >= 0; }
 
@@ -53,12 +57,16 @@ namespace oc4::render
 		void answer(int item);
 		void choose(int item); // as a click on it
 		void moveChoice(int delta);
+		// A choice with a picture: the theme's label button (its picture and text, no stone).
+		bool label(int item) const;
 
 		ButtonArt& m_art;
 		Theme& m_theme;
 		bool m_skinsRead = false;
 		Theme::Skin m_glass, m_frame, m_tooltip; // the theme's window and tooltip (empty: our own look)
 		const Theme::Button* m_button = nullptr; // its standard button
+		const Theme::Button* m_label = nullptr;  // its label button (a choice with a picture)
+		Theme::Skin m_shaft, m_gripSkin;         // its scroll bar
 		float m_headerSize = 22, m_textSize = 16, m_helpSize = 14; // its fonts
 		std::optional<MapWindow::PopupView> m_view;
 		std::vector<bool> m_checked; // per item: the radio button chosen, the checkbox ticked
@@ -70,6 +78,8 @@ namespace oc4::render
 		Rect m_panel, m_list, m_ok;
 		std::vector<Rect> m_items; // where each item was drawn (empty: not shown)
 		int m_hover = -1, m_helpItem = -2;
+		int m_selected = -1; // the choice with the focus (gold): the first, then the last under the mouse or the keys
+		int m_pressed = -1;  // the choice the left button went down on
 		bool m_hoverOk = false;
 		bool m_keyboard = false; // what m_hover says was chosen with the keys, not the mouse
 		int m_scrollTo = -1;     // the item to bring into the list at the next draw

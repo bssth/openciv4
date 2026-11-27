@@ -12,6 +12,15 @@
 
 namespace oc4::render
 {
+	// The end of turn message's beat, as the original's (measured in Wine at 120 frames a second):
+	// every 1.5 s it rises over 0.5 s, holds 0.5 s, sinks over 0.5 s. 0 at its lowest, 1 where
+	// the hold starts and ends (1.5 in its middle: callers clamp).
+	static float endTurnBeat(double clock)
+	{
+		const double t = std::fmod(std::max(clock, 0.0), 1.5) / 0.5;
+		return float(std::min(t, 3 - t));
+	}
+
 	namespace
 	{
 		using Kind = MapWindow::UiItem::Kind;
@@ -62,6 +71,30 @@ namespace oc4::render
 			for (int i = 0; i < 5; ++i)
 				m_sizes[size_t(i)] = m_theme.font(i).size;
 			m_tooltip = m_theme.skin("GFC_Control_StandardToolTip_Style", "GFC_CtrlTheme_Bitmap_Control_ToolTip_Skin_Inner_Default");
+			m_listBorder = m_theme.skin("", "SF_CtrlTheme_Civ4_Control_MultiList_ItemBorder_Skin");
+			m_listBorderGlow = m_theme.skin("", "SF_CtrlTheme_Civ4_Control_MultiList_ItemBorderGlow_Skin");
+			m_listFill = m_theme.skin("", "SF_CtrlTheme_Civ4_Control_MultiList_ItemFill_Skin");
+			m_listFillGlow = m_theme.skin("", "SF_CtrlTheme_Civ4_Control_MultiList_ItemFillGlow_Skin");
+			const auto tinted = [&](const Theme::Skin& skin, Color c) {
+				Theme::Skin out = skin;
+				for (Theme::Layer& l : out)
+					l.image = m_theme.modulate(l.image, c);
+				return out;
+			};
+			// (pressed: the fill in a blue half over it; pulsing: a little blue inside, the ring from a
+			// deep to a light blue, a blue halo round it; Wine's colours)
+			m_listPress = tinted(m_listFill, { 0.27f, 0.26f, 0.77f });
+			// (disabled: everything inside the ring and the ring itself half way to black, as Wine draws
+			// a worker's farm and railroad it cannot build; not the theme's ItemDisable, a white wash)
+			m_listDisable = tinted(m_listFill, { 0, 0, 0 });
+			m_pulseInside = tinted(m_listFill, { 0, 0.35f, 1 });
+			m_pulseDeep = tinted(m_listBorder, { 0.13f, 0.45f, 1 });
+			m_pulseLight = tinted(m_listBorder, { 0.01f, 0.59f, 1 });
+			m_pulseHalo = m_listBorderGlow;
+			for (Theme::Layer& l : m_pulseHalo)
+				l.image = m_theme.glow(l.image, { 0, 0.31f, 1 });
+			if (const Theme::Panel* p = m_theme.panel("PANEL_STYLE_HUD_HELP"))
+				m_hudHelp = p->inner;
 			constexpr std::string_view combo = "GFC_Control_StandardComboBox_Style", button = "SF_CtrlTheme_Civ4_Control_ComboBox_Standard_PopupButton_Style";
 			m_comboBox = { m_theme.skin(combo, "GFC_CtrlTheme_Bitmap_Control_ComboBox_Skin_ViewItem_Default"),
 				m_theme.skin(combo, "GFC_CtrlTheme_Bitmap_Control_ComboBox_Skin_ViewItem_Rollover") };
@@ -70,6 +103,8 @@ namespace oc4::render
 			m_dropInner = m_theme.skin("SF_CtrlTheme_Civ4_Control_ComboBox_Standard_PopupBoxTable_Style", "GFC_CtrlTheme_Bitmap_Control_Table_Skin_Inner_Default");
 			m_dropBorder = m_theme.skin("SF_CtrlTheme_Civ4_Control_ComboBox_Standard_PopupBoxTableBorder_Style",
 				"GFC_CtrlTheme_Bitmap_Control_Border_Skin_Full_Default");
+			// (its sides' fill left out: the list's inner skin is drawn under the whole border here)
+			std::erase_if(m_dropBorder, [](const Theme::Layer& l) { return l.sidesFill && !l.image; });
 			m_dropSelect = m_theme.skin(combo, "GFC_CtrlTheme_Bitmap_Control_ComboBox_Skin_PopupItem_Select");
 			constexpr std::string_view scroll = "GFC_Control_StandardScroll_Style";
 			m_shaft = { m_theme.skin(scroll, "GFC_CtrlTheme_Bitmap_Control_Scroll_Skin_VShaft_Default"),
@@ -79,6 +114,17 @@ namespace oc4::render
 				const std::string_view grip = d == 0 ? "SF_CtrlTheme_Civ4_Control_Scroll_VGripButton_Style" : "SF_CtrlTheme_Civ4_Control_Scroll_HGripButton_Style";
 				m_grip[d] = { m_theme.skin(grip, "GFC_CtrlTheme_Bitmap_Control_Button_Skin_Default"),
 					m_theme.skin(grip, "GFC_CtrlTheme_Bitmap_Control_Button_Skin_Rollover") };
+			}
+			constexpr std::string_view slider = "GFC_Control_StandardSlider_Style";
+			for (size_t d = 0; d < 2; ++d)
+			{
+				const std::string track = std::string("GFC_CtrlTheme_Bitmap_Control_Slider_Skin_") + (d == 0 ? "VTrack" : "HTrack");
+				m_sliderTrack[d] = { m_theme.skin(slider, track + "_Inner_Default"), m_theme.skin(slider, track + "_Inner_Disable") };
+				m_sliderFill[d] = { m_theme.skin(slider, track + "_Fill_Default"), m_theme.skin(slider, track + "_Fill_Disable") };
+				const std::string_view grip = d == 0 ? "SF_CtrlTheme_Civ4_Control_Slider_VGripButton_Normal_Style" : "SF_CtrlTheme_Civ4_Control_Slider_HGripButton_Normal_Style";
+				m_sliderGrip[d] = { m_theme.skin(grip, "GFC_CtrlTheme_Bitmap_Control_Button_Skin_Default"),
+					m_theme.skin(grip, "GFC_CtrlTheme_Bitmap_Control_Button_Skin_Rollover"), m_theme.skin(grip, "GFC_CtrlTheme_Bitmap_Control_Button_Skin_Press"),
+					m_theme.skin(grip, "GFC_CtrlTheme_Bitmap_Control_Button_Skin_Disable") };
 			}
 		}
 		// (the screens are made again whenever something on them changes, often between a press
@@ -212,11 +258,13 @@ namespace oc4::render
 		return false;
 	}
 
-	bool UiLayer::solid(int x, int y) const
+	bool UiLayer::solid(int x, int y) const { return solid(x, y, true); }
+
+	bool UiLayer::solid(int x, int y, bool mainInterface) const
 	{
 		for (const Item& it : m_items)
 		{
-			if (!inside(it, x, y))
+			if (!inside(it, x, y) || (!mainInterface && it.mainInterface))
 				continue;
 			if (it.blocks)
 				return true; // (a screen over the map)
@@ -225,7 +273,8 @@ namespace oc4::render
 			case Kind::Panel:
 				if (const Theme::Panel* p = themedPanel(it))
 				{
-					if (!p->inner.empty() || !p->border.empty())
+					if (Theme::covers(p->inner, it.x0, it.y0, it.x1, it.y1, float(x), float(y)) ||
+						Theme::covers(p->border, it.x0, it.y0, it.x1, it.y1, float(x), float(y)))
 						return true;
 				}
 				else if (!emptyPanel(it.style))
@@ -263,10 +312,54 @@ namespace oc4::render
 
 	void UiLayer::drawPlotHelp(Overlay& o, const std::wstring& text)
 	{
-		const float w = m_helpWidth, h = o.richHeight(text, w - 10, m_sizes[2], false);
-		const float x = (m_helpRight ? m_helpX : m_helpX - w) + 5;
-		const float y = std::clamp(m_helpDown ? m_helpY : m_helpY - h - 4, 0.0f, std::max(o.screenHeight() - h, 0.0f));
-		o.richBlock(text, x, y, w - 10, m_sizes[2], false, kText);
+		drawHelp(o, text);
+	}
+
+	void UiLayer::drawHelp(Overlay& o, const std::wstring& text)
+	{
+		// The main interface's: the theme's HUD help panel (help_panel.tga in HelpBG, 35 %), the
+		// map seen through it, the text 4 in from its sides (as in the original: BUG + BULL in
+		// Wine); the city screen's, framed: the theme's tooltip.
+		const bool see = !m_helpFramed && !m_hudHelp.empty();
+		const float inX = see ? 4.0f : 10.0f, inY = 5;
+		const float sw = o.screenWidth(), sh = o.screenHeight();
+		// A help taller than the room it grows into gets wider, then is kept on the screen.
+		const float room = std::max(m_helpDown ? sh - m_helpY : m_helpY, 100.0f);
+		const float widest = std::max(m_helpRight ? sw - m_helpX : m_helpX, m_helpWidth);
+		float w = m_helpWidth, h = o.richHeight(text, w - 2 * inX, m_sizes[2], false) + 2 * inY;
+		while (h > room && w < widest)
+		{
+			w = std::min(w * 1.5f, widest);
+			h = o.richHeight(text, w - 2 * inX, m_sizes[2], false) + 2 * inY;
+		}
+		float x = m_helpRight ? m_helpX : m_helpX - w;
+		float y = std::clamp(m_helpDown ? m_helpY : m_helpY - h, 0.0f, std::max(sh - h, 0.0f));
+		if (m_helpFloating && m_hover >= 0 && size_t(m_hover) < m_items.size())
+		{
+			// A floating help area (the city screen's, setHelpTextArea's bFloating): the help beside
+			// the widget under the mouse, as the original (BUG + BULL in Wine, Roma's screen at
+			// 1600x900): its right edge at the widget's left (on its right when there is no room),
+			// its top at the widget's top, or its bottom at the widget's bottom when it would run off
+			// the screen below (the hurry buttons); as wide as its widest line, wrapped at 240.
+			const Item& it = m_items[size_t(m_hover)];
+			const float ix0 = std::min(it.x0, it.x1), ix1 = std::max(it.x0, it.x1);
+			constexpr float kWrap = 240;
+			w = std::min(std::ceil(o.richWidth(text, m_sizes[2], false)) + 2 * inX + 2, kWrap + 2 * inX);
+			h = o.richHeight(text, w - 2 * inX, m_sizes[2], false) + 2 * inY;
+			x = ix0 - w >= 0 ? ix0 - w : std::min(ix1, std::max(sw - w, 0.0f));
+			y = it.y0 + h <= sh ? it.y0 : it.y1 - h;
+			y = std::clamp(y, 0.0f, std::max(sh - h, 0.0f));
+		}
+		if (see)
+			Theme::draw(o, m_hudHelp, x, y, x + w, y + h);
+		else if (!m_tooltip.empty())
+			Theme::draw(o, m_tooltip, x, y, x + w, y + h);
+		else
+		{
+			o.rect(x, y, x + w, y + h, kPanel, 0.93f, 5);
+			o.frame(x, y, x + w, y + h, kEdge, 0.6f, 5, 1);
+		}
+		o.richBlock(text, x + inX, y + inY, w - 2 * inX, m_sizes[2], false, kText);
 	}
 
 	const Theme::Panel* UiLayer::themedPanel(const Item& it) const
@@ -322,14 +415,51 @@ namespace oc4::render
 		return MapWindow::UiClick{ pressed, m_pressedRight, shift, ctrl, alt };
 	}
 
-	void UiLayer::setHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown)
+	void UiLayer::setHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown, bool framed, bool floating)
 	{
+		m_helpFramed = framed;
+		m_helpFloating = floating;
 		m_help = widen(text);
 		m_helpX = x;
 		m_helpY = y;
 		m_helpWidth = std::max(200.0f, width);
 		m_helpRight = expandRight;
 		m_helpDown = expandDown;
+	}
+
+	void UiLayer::drawListButton(Overlay& o, const Item& it, bool hot, bool pressed, double clock)
+	{
+		// As the original draws a multi list's button (measured in Wine, BUG + BULL): its
+		// picture whole, the ring over its edge in the HUDBorder colour; under the mouse the fill
+		// glow added (+57 of 255: its inside, the ring, and a soft edge just outside); pressed, a
+		// blue fill half over that; disabled, half way to black (its own picture, the one
+		// disableMultiListButton gives).
+		const float x0 = it.x0, y0 = it.y0, x1 = it.x1, y1 = it.y1, a = it.alpha;
+		if (it.pulse)
+		{
+			// The action recommended: a blue glow that beats every 0.6 s, the ring going from a deep to
+			// a light blue, a blue halo just outside it and a little blue inside (Wine, 120 fps film).
+			const float beat = 0.5f - 0.5f * std::cos(float(clock) * 2 * std::numbers::pi_v<float> / 0.6f);
+			Theme::draw(o, m_pulseInside, x0, y0, x1, y1, 0.25f * beat * a);
+			if (const Theme::Skin& h = m_pulseHalo; !h.empty())
+			{
+				// (strong: at its peak the halo covers what is under it where the glow is two thirds white)
+				const float k = 0.75f + 0.75f * beat;
+				Theme::draw(o, h, x0, y0, x1, y1, std::min(k, 1.0f) * a);
+				if (k > 1)
+					Theme::draw(o, h, x0, y0, x1, y1, (k - 1) * a);
+			}
+			Theme::draw(o, m_pulseDeep, x0, y0, x1, y1, a);
+			Theme::draw(o, m_pulseLight, x0, y0, x1, y1, beat * a);
+		}
+		else
+			Theme::draw(o, m_listBorder, x0, y0, x1, y1, a);
+		if (!it.enabled)
+			Theme::draw(o, m_listDisable, x0, y0, x1, y1, 0.5f * a);
+		if (hot)
+			Theme::draw(o, m_listFillGlow, x0, y0, x1, y1, 0.224f * a);
+		if (pressed)
+			Theme::draw(o, m_listPress, x0, y0, x1, y1, 0.5f * a);
 	}
 
 	void UiLayer::draw(Overlay& o, const std::function<void(float, float, float, float, bool)>& minimap, double clock,
@@ -418,8 +548,20 @@ namespace oc4::render
 				icon(it.texture, x0, y0, x1, y1, alpha);
 				break;
 			case Kind::ImageButton:
-				if (icon(it.texture, x0, y0, x1, y1, alpha))
+				if (it.listItem && !m_listBorder.empty() && icon(it.texture, x0, y0, x1, y1, it.alpha))
+					drawListButton(o, it, hot, hot && int(i) == m_pressed, clock);
+				else if (icon(it.texture, x0, y0, x1, y1, alpha))
 				{
+					// (a pulsing button: what the unit is recommended to do; the original's has a blue rim
+					// that glows round it, a little brighter and dimmer a second a beat, the picture tinted blue)
+					if (it.pulse)
+					{
+						const float beat = 0.5f - 0.5f * std::cos(float(clock) * 2 * std::numbers::pi_v<float>);
+						constexpr Color kGlow{ 0.2f, 0.55f, 1.0f };
+						o.rect(x0, y0, x1, y1, kGlow, 0.18f * alpha, 3);
+						o.frame(x0 - 2, y0 - 2, x1 + 2, y1 + 2, kGlow, (0.25f + 0.15f * beat) * alpha, 5, 3);
+						o.frame(x0, y0, x1, y1, { 0.45f, 0.75f, 1.0f }, (0.75f + 0.25f * beat) * alpha, 3, 2);
+					}
 					if (hot)
 						o.frame(x0, y0, x1, y1, kHot, 1, 3, 2);
 				}
@@ -468,6 +610,14 @@ namespace oc4::render
 				}
 				if (it.kind == Kind::Button && it.texture.empty())
 					o.richText(text, (x0 + x1) / 2, ty, size, false, colour, a, Overlay::Align::Center);
+				else if (it.kind == Kind::Edit)
+				{
+					// (an edit box's text kept inside it: a long path is cut at its right edge)
+					o.clip(it.clipped ? std::max(x0, it.clip[0]) : x0, it.clipped ? std::max(y0, it.clip[1]) : y0,
+						it.clipped ? std::min(x1 - 3, it.clip[2]) : x1 - 3, it.clipped ? std::min(y1, it.clip[3]) : y1);
+					o.richText(text, tx, ty, size, false, colour, a);
+					o.unclip(); // (back to its own clip, if it has one: the clips are a stack)
+				}
 				else
 					o.richText(text, tx, ty, size, false, colour, a);
 				o.resetShadow();
@@ -504,7 +654,9 @@ namespace oc4::render
 				break;
 			case Kind::EndTurnText:
 				if (!it.text.empty())
-					o.richText(widen(it.text), sw / 2, y0 + 6, m_sizes[3], false, { 0.85f, 0.85f, 0.8f }, 0.6f + 0.4f * float(std::sin(clock * 3)), Overlay::Align::Center);
+					// (blinking with the end turn button's beat: gone around its darkest)
+					o.richText(widen(it.text), sw / 2, y0 + 6, m_sizes[3], false, { 0.85f, 0.85f, 0.8f },
+						std::clamp((endTurnBeat(clock) - 0.25f) / 0.75f, 0.0f, 1.0f), Overlay::Align::Center);
 				break;
 			case Kind::Multiline:
 				o.richBlock(widen(it.text), x0, y0, std::max(20.0f, w), fontSize(it.font), fontBold(it.font), kText, alpha);
@@ -580,8 +732,40 @@ namespace oc4::render
 				o.line(x0, y0 + h / 2, x1, y0 + h / 2, kEdge, 0.5f);
 				break;
 			case Kind::Slider:
-				o.rect(x0, y0 + h / 2 - 2, x1, y0 + h / 2 + 2, kEdge, 0.6f, 2);
+			{
+				// The theme's slider (GFC_Control_StandardSlider_Style): a track 12 thick in the middle
+				// of its box, its fill from the grip to the side the style names ("down": the bottom
+				// or the right, "up": the top or the left), and the grip, 28 by 14, where it is set.
+				const bool down = it.style.starts_with('v'), fillEnd = it.style.find("down") != std::string::npos,
+					fillStart = it.style.find("up") != std::string::npos;
+				const size_t d = down ? 0 : 1, off = it.enabled ? 0 : 1;
+				constexpr float thick = 12, gripLong = 28, gripShort = 14;
+				const float length = down ? h : w, at = std::clamp(it.barStart, 0.0f, 1.0f);
+				const float centre = (down ? y0 : x0) + gripShort / 2 + at * std::max(0.0f, length - gripShort);
+				const float tx0 = down ? (x0 + x1 - thick) / 2 : x0, ty0 = down ? y0 : (y0 + y1 - thick) / 2;
+				const float tx1 = down ? tx0 + thick : x1, ty1 = down ? y1 : ty0 + thick;
+				if (!m_sliderTrack[d][off].empty())
+				{
+					Theme::draw(o, m_sliderTrack[d][off], tx0, ty0, tx1, ty1, it.alpha);
+					if (fillEnd || fillStart)
+					{
+						const float f0 = fillEnd ? centre : (down ? ty0 : tx0), f1 = fillEnd ? (down ? ty1 : tx1) : centre;
+						if (f1 > f0)
+							Theme::draw(o, m_sliderFill[d][off], down ? tx0 : f0, down ? f0 : ty0, down ? tx1 : f1, down ? f1 : ty1, it.alpha);
+					}
+				}
+				else
+					o.rect(tx0, ty0, tx1, ty1, kEdge, 0.6f * alpha, 2);
+				// (the theme's disabled grip is an empty cell: a disabled one is the plain grip, dimmed)
+				const size_t state = !it.enabled ? 0 : int(i) == m_pressed ? 2 : hot ? 1 : 0;
+				const float gx0 = down ? (x0 + x1 - gripLong) / 2 : centre - gripShort / 2, gy0 = down ? centre - gripShort / 2 : (y0 + y1 - gripLong) / 2;
+				const float gx1 = gx0 + (down ? gripLong : gripShort), gy1 = gy0 + (down ? gripShort : gripLong);
+				if (const Theme::Skin& g = !m_sliderGrip[d][state].empty() ? m_sliderGrip[d][state] : m_sliderGrip[d][0]; !g.empty())
+					Theme::draw(o, g, gx0, gy0, gx1, gy1, alpha);
+				else
+					o.rect(gx0, gy0, gx1, gy1, hot ? kHot : kText, alpha, 2);
 				break;
+			}
 			case Kind::Minimap:
 				if (minimap)
 					minimap(x0, y0, x1, y1, it.style == "__screenmap");
@@ -644,18 +828,27 @@ namespace oc4::render
 			}
 			case Kind::EndTurnButton:
 			{
-				// The engine's own button where the script puts it: green when the turn is done.
+				// The engine's own button where the script puts it: the style's brass ring, and over it
+				// the theme's glass (SF_CtrlTheme_Civ4_Control_Button_EndTurn_Skin, at its size in the
+				// middle) taking the state's colour, added less half (AddSigned): EndTurnDot_Green while
+				// units can still move, steady; EndTurnDot_Red once the turn is over, sinking to
+				// EndTurnDot_DarkRed and back with the end of turn message's beat.
 				const float cx = w > 0 ? (x0 + x1) / 2 : map ? map->x0 - 22 : sw - 240, cy = h > 0 ? (y0 + y1) / 2 : map ? map->y0 + 18 : sh - 140;
 				const float r = w > 0 ? std::min(w, h) / 2 - 1 : 15;
 				const bool green = it.text == "Green";
-				const float pulse = green ? 0.75f + 0.25f * float(std::sin(clock * 5)) : 1.0f;
-				// The theme's glass takes the colour (EndTurnDot_Green / Red: added to it, less half),
-				// the green one pulsing.
-				const Color colour = green ? Color{ 0, std::round(0.75f * pulse * 16) / 16, 0 } : Color{ 0.75f, 0, 0 };
-				const Theme::Button* frame = m_theme.loaded() && !it.style.empty() ? m_theme.button(it.style) : nullptr;
-				if (frame && !frame->skin[0].empty())
+				Color colour = m_theme.colour("SF_CtrlTheme_Civ4_Control_Color_EndTurnDot_Green", { 0, 0.75f, 0 });
+				if (!green)
 				{
-					Theme::Skin glass = frame->skin[hot && !frame->skin[1].empty() ? 1 : 0];
+					const Color red = m_theme.colour("SF_CtrlTheme_Civ4_Control_Color_EndTurnDot_Red", { 0.75f, 0, 0 });
+					const Color dark = m_theme.colour("SF_CtrlTheme_Civ4_Control_Color_EndTurnDot_DarkRed", { 0.39f, 0, 0 });
+					const float k = std::min(endTurnBeat(clock), 1.0f);
+					colour = { dark.r + (red.r - dark.r) * k, dark.g + (red.g - dark.g) * k, dark.b + (red.b - dark.b) * k };
+				}
+				const Theme::Button* frame = m_theme.loaded() && !it.style.empty() ? m_theme.button(it.style) : nullptr;
+				Theme::Skin glass = m_theme.loaded() ? m_theme.skin("", "SF_CtrlTheme_Civ4_Control_Button_EndTurn_Skin") : Theme::Skin{};
+				if (frame && !frame->skin[0].empty() && !glass.empty())
+				{
+					Theme::draw(o, frame->skin[hot && !frame->skin[1].empty() ? 1 : 0], cx - r, cy - r, cx + r, cy + r, it.alpha);
 					for (Theme::Layer& l : glass)
 						l.image = m_theme.addSigned(l.image, colour);
 					Theme::draw(o, glass, cx - r, cy - r, cx + r, cy + r, it.alpha);
@@ -682,27 +875,6 @@ namespace oc4::render
 			o.frame(x0 - 2, it.y0 - 2, x1 + 2, it.y1 + 2, kHot, 1, 3, 2);
 		}
 		if (!m_help.empty())
-		{
-			// A help taller than the room it grows into gets wider, then is kept on the screen.
-			const float room = std::max(m_helpDown ? sh - m_helpY : m_helpY, 100.0f);
-			const float widest = std::max(m_helpRight ? sw - m_helpX : m_helpX, m_helpWidth);
-			float w = m_helpWidth, h = o.richHeight(m_help, w - 20, m_sizes[2], false) + 10;
-			while (h > room && w < widest)
-			{
-				w = std::min(w * 1.5f, widest);
-				h = o.richHeight(m_help, w - 20, m_sizes[2], false) + 10;
-			}
-			const float x = m_helpRight ? m_helpX : m_helpX - w;
-			const float y = std::clamp(m_helpDown ? m_helpY : m_helpY - h, 0.0f, std::max(sh - h, 0.0f));
-			// (in the theme's tooltip)
-			if (!m_tooltip.empty())
-				Theme::draw(o, m_tooltip, x, y, x + w, y + h);
-			else
-			{
-				o.rect(x, y, x + w, y + h, kPanel, 0.93f, 5);
-				o.frame(x, y, x + w, y + h, kEdge, 0.6f, 5, 1);
-			}
-			o.richBlock(m_help, x + 10, y + 5, w - 20, m_sizes[2], false, kText);
-		}
+			drawHelp(o, m_help);
 	}
 }

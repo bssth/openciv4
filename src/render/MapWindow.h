@@ -115,6 +115,8 @@ namespace oc4::render
 			bool onFigure = false; // on a unit's figure (the plot is the unit's)
 			bool either = false;   // (the gamepad's plot cursor: `right` is the host's to say, see PadAction::Kind::PlotAct)
 			bool clear = false;    // (the gamepad's B: no plot's click, the selection let go)
+			bool twice = false;    // the second click of a double click
+			bool onCityBar = false; // on a city's name bar (the plot is the city's)
 		};
 		void setPlaying(bool playing);
 		std::vector<PlotClick> takeClicks();
@@ -140,8 +142,13 @@ namespace oc4::render
 		// Shown in the lower left corner (the selected unit), lines.
 		void setInfo(const std::string& text);
 		// The game's messages to the player, at the top in the middle as the original shows them:
-		// lines with the screens' markup (UTF-8), oldest first, each with its opacity.
-		void setMessages(std::vector<std::pair<std::string, float>> messages);
+		// lines with the screens' markup (UTF-8), newest first, each in its colour.
+		struct Message
+		{
+			std::string text;
+			Color color{ 1, 1, 1 };
+		};
+		void setMessages(const std::vector<Message>& messages);
 
 		// A popup to answer (the game's own: what to build, what to research, ...), over the
 		// map; while it is up, clicks and keys go to it.
@@ -158,12 +165,15 @@ namespace oc4::render
 				std::string icon; // a DDS, or ",<file>,<atlas>,<column>,<row>" (64 pixel cells)
 				int group = 0;    // radio buttons and checkboxes
 				bool checked = false;
+				float width = 0, height = 0; // a picture: the size it is asked at (0: its own)
+				bool centred = false;        // a button: its text centred on it
 			};
 			uint64_t serial = 0; // another popup when it changes
 			std::string header;
 			std::vector<Item> items;
 			bool okButton = false;
-			bool centered = false; // in the middle of the window (the game menu's style), not at the right
+			bool menu = false; // the game menu's style (Window_NoTitleBar_Style): narrower, at the same place
+			bool escape = true; // Esc closes it (not the questions a turn waits for)
 		};
 		void setPopup(const PopupView* popup); // nullptr: none
 		struct PopupAnswer
@@ -187,6 +197,8 @@ namespace oc4::render
 		void askHelp();
 		// The mouse at the window's edge scrolls the map (off for scripted runs).
 		void setEdgeScroll(bool on);
+		// At most this many frames a second (CivilizationIV.ini's SetMaxFrameRate; 0: no cap).
+		void setMaxFrameRate(int fps);
 		// Each terrain's colour on the minimap (BGRA8), by terrain type; empty before the first map.
 		std::vector<uint32_t> terrainColors() const;
 		// The sounds the units' animations call for (an audio script's tag, where: plot units).
@@ -224,6 +236,8 @@ namespace oc4::render
 			int font = 1;       // FontTypes
 			int flags = 1;      // 1 left, 2 right, 4 centred (x0 is the anchor)
 			bool state = false, enabled = true;
+			bool pulse = false; // (a button that glows on and off: the action recommended, GFC's multi list pulse)
+			bool listItem = false; // (a multi list's button: in the theme's MultiList_Item skins)
 			bool interactive = false; // takes clicks and has help
 			bool mainInterface = false; // the main interface's: under a menu the keys do not reach it
 			bool blocks = false;      // a screen's own panel or picture over the main interface: what is under it takes no clicks
@@ -232,6 +246,9 @@ namespace oc4::render
 			float alpha = 1;
 			float barStart = 0, barPercent = 0; // (a scroll bar's: where its grip starts, how long it is, as parts of it)
 			bool barLast = false; // a stacked bar's last part (its rim goes over them all)
+			// A slider (style "v" or "h", then "down"/"up" for the side the theme's fill is on):
+			// barStart is where its grip is along it (0 top / left .. 1); it follows the mouse
+			// while held.
 			// A leader's head: its art (texture the NIF, texture2 the KFM, and the background
 			// KFM), its button where the art cannot be drawn, its attitude (AttitudeTypes), the
 			// gesture last asked of it (LeaderheadAction) and how many have been asked.
@@ -285,6 +302,10 @@ namespace oc4::render
 		struct Graphics
 		{
 			bool healthBars = false, frozen = false, effects = true, fullscreen = false;
+			bool globeBuildings = false; // the cities' models in the globe view
+			bool lowResTextures = false; // textures from their half size level
+			bool lowMovieQuality = false; // no map drawn behind a playing movie
+			int samples = 0; // anti-aliasing: the map's samples a pixel (0, 2, 4, 8)
 		};
 		void setGraphics(Graphics graphics);
 		// Full screen or windowed (the profile's option; the menu's too, not only a game's).
@@ -349,8 +370,13 @@ namespace oc4::render
 		{
 			int item = -1; // -1: on the screens but on none of their widgets
 			bool right = false, shift = false, ctrl = false, alt = false;
+			int x = -1, y = -1; // where the mouse was (a slider's: where it is set to)
 		};
 		std::vector<UiClick> takeUiClicks();
+		// A folder chosen by the player in the system's folder dialog (from `start`), once
+		// chosen: takeChosenFolder has it then (an empty string: cancelled).
+		void chooseFolder(const std::string& start);
+		std::optional<std::string> takeChosenFolder();
 		// How wide a text with the screens' markup is, in the theme's font (size 2 outside its
 		// <font> tags), as the scripts measure theirs.
 		// In a widget's font (FontTypes; -1 the theme's size 2, as the scripts measure).
@@ -367,7 +393,7 @@ namespace oc4::render
 		// Where the mouse is, in window pixels ((-1, -1) before it came in).
 		std::pair<int, int> mousePosition() const;
 		// The help for what is under the mouse, in the screens' help area.
-		void setUiHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown);
+		void setUiHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown, bool framed = false, bool floating = false);
 
 		// The text shown when the mouse rests on a plot (lines; the game's plot help).
 		void setPlotHelp(std::function<std::string(int x, int y)> help);
@@ -376,8 +402,14 @@ namespace oc4::render
 		// The click a press at that pixel of the window would make on the map (a scripted game).
 		std::optional<PlotClick> clickAt(int x, int y, bool right) const;
 		// A left click at that pixel as the mouse makes it (scripted tests): on a popup, the
-		// screens, the action bar or the map, whichever takes it there.
-		void mouseClick(int x, int y);
+		// screens, the action bar or the map, whichever takes it there; with twice, a double click
+		// (its first click, then the second, as the mouse's).
+		void mouseClick(int x, int y, bool twice = false);
+		// The mouse moved to that pixel; a button pressed or let go there (a scripted game's drags).
+		void mouseMove(int x, int y);
+		void mouseButton(int x, int y, bool left, bool down);
+		// The left button pressed at x0,y0, the mouse moved to x1,y1 in steps, let go there (a drag).
+		void mouseDrag(int x0, int y0, int x1, int y1, int steps = 8);
 		// The mouse's cursor over the window: a cursor file (.cur, .ani: the game's res/Cursors);
 		// none, the system's arrow.
 		void setCursorFile(const std::filesystem::path& file);
