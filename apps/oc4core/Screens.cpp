@@ -508,6 +508,7 @@ namespace oc4::host
 		host.def("diplo_end_trade", [&diplo] { diplo.endTrade(); });
 		host.def("diplo_show_all", [&diplo](bool all) { diplo.showAllTrade(all); });
 		host.def("diplo_trading", [&diplo] { return py::make_tuple(diplo.trading(), diplo.showingAll(), diplo.showingCurrent()); });
+		host.def("diplo_edited", [&diplo] { return diplo.edited(); });
 		host.def("diplo_our_empty", [&diplo] { return diplo.ourOfferEmpty(); });
 		host.def("diplo_their_empty", [&diplo] { return diplo.theirOfferEmpty(); });
 		host.def("diplo_at_war", [&diplo] { return diplo.atWar(); });
@@ -527,12 +528,19 @@ namespace oc4::host
 				out.append(py::make_tuple(i.type, i.data, wide(i.text), i.icon, i.heading, i.denied));
 			return out;
 		});
-		host.def("diplo_cancel", [&diplo](int type, int data) {
+		host.def("diplo_cancel", [&diplo](bool theirs, int row) {
 			std::wstring reason;
-			const bool done = diplo.cancelDeal(type, data, reason);
+			const bool done = diplo.cancelDeal(theirs, row, reason);
 			return py::make_tuple(done, wide(reason));
 		});
+		host.def("diplo_deal_row", [&diplo](bool theirs, int row) { return diplo.isDealRow(theirs, row); });
 		host.def("diplo_toggle", [&diplo](bool theirs, bool fromOffer, int type, int data, int amount) { diplo.toggle(theirs, fromOffer, type, data, amount); });
+		host.def("diplo_offer_data", [&diplo](bool theirs) {
+			py::list out;
+			for (const auto& [type, data] : diplo.offerData(theirs))
+				out.append(py::make_tuple(type, data));
+			return out;
+		});
 		host.def("diplo_max_gold", [&diplo](bool theirs, bool perTurn) { return diplo.maxGold(theirs, perTurn); });
 
 		// how wide a text is (CyInterface.determineWidth), in the window's font
@@ -1127,6 +1135,18 @@ if _walls:
 		if (const int hovered = window.uiHovered(); hovered != m_hovered)
 		{
 			m_hovered = hovered;
+			// (in a talk the answer under the mouse is the highlighted one, the keys' too: oc4screens)
+			if (m_utility.diplomacy().active())
+				try
+				{
+					const Item* h = hovered >= 0 && size_t(hovered) < m_items.size() ? &m_items[size_t(hovered)] : nullptr;
+					const int answer = h && h->name.rfind("DiploAnswer", 0) == 0 ? std::atoi(h->name.c_str() + 11) : -1;
+					py::module_::import("oc4screens").attr("diploHover")(answer);
+				}
+				catch (py::error_already_set& e)
+				{
+					printPythonError(e);
+				}
 			const std::string text = hovered >= 0 && size_t(hovered) < m_items.size() ? help(m_items[size_t(hovered)]) : std::string();
 			float x = 7, y = float(height) - 172, w = 350;
 			bool right = true, down = false;

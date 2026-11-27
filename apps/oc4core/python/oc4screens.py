@@ -2832,7 +2832,11 @@ class CyDiplomacy(object):
 	def getData(self): return oc4host.diplo_data()
 	def setAIString(self, szString, args=()): oc4host.diplo_set_ai_string(_text(szString), tuple(args or ()))
 	def setAIComment(self, eComment): oc4host.diplo_set_ai_comment(int(eComment))
-	def clearUserComments(self): oc4host.diplo_clear_user()
+	def clearUserComments(self):
+		# (new answers: the highlight back on the last one, as the original's, even when they are
+		# the same answers again: seen in Wine after an item was put on the table)
+		_diploSel[0] = -1
+		oc4host.diplo_clear_user()
 
 	def addUserComment(self, eComment, iData1, iData2, szString, args=()):
 		oc4host.diplo_add_user(int(eComment), _int(iData1), _int(iData2), _text(szString), tuple(args or ()))
@@ -2852,6 +2856,19 @@ class CyDiplomacy(object):
 	def diploEvent(self, eDiploEvent, iData1, iData2): oc4host.diplo_event(int(eDiploEvent), _int(iData1), _int(iData2))
 	def hasAnnualDeal(self): return bool(oc4host.diplo_annual())
 	def theirVassalTribute(self): return bool(oc4host.diplo_vassal_tribute())
+
+	def _offer(self, theirs, i):
+		# (the i-th item of an offer as the game's TradeData, None past its end: BUG's
+		# DiplomacyUtil reads them so, for its deal events)
+		items = oc4host.diplo_offer_data(bool(theirs))
+		if not 0 <= _int(i, -1) < len(items):
+			return None
+		data = _cpe.TradeData()
+		data.ItemType, data.iData = _cpe.TradeableItems(items[int(i)][0]), items[int(i)][1]
+		return data
+
+	def getPlayerTradeOffer(self, i): return self._offer(False, i)
+	def getTheirTradeOffer(self, i): return self._offer(True, i)
 	def closeScreen(self):
 		if _diploAnswering:
 			_diploAnswering[-1] = True
@@ -2875,6 +2892,7 @@ def _art(name):
 
 
 _diploOpen = set()  # the item lists the player opened in this talk ('their', 'our')
+_diploSel = [-1, None]  # the highlighted answer and the menu it is of
 # The original's frame (DIPLOMACY_NEW_BACKGROUND, 512 x 1024): what of it shows, its title bar,
 # the leader's window between its posts, the box of what the leader says, the answers' box.
 _FRAME_LEFT, _FRAME_TOP, _FRAME_RIGHT, _FRAME_BOTTOM, _FRAME_W, _FRAME_H = 12, 15, 500, 1010, 512, 1024
@@ -3004,7 +3022,15 @@ def diploShow():
 	screen.addScrollPanel('DiploAnswers', u'', cx + 8, ay0, CW - 16, ay1 - ay0, PanelStyles.PANEL_STYLE_EMPTY)
 	answers = []
 	step = 31
-	for i, (comment, data1, data2, answer) in enumerate(oc4host.diplo_user()):
+	user = oc4host.diplo_user()
+	# (the highlighted answer, gold: on a new menu its last one, the way out; the mouse and the
+	# arrow keys move it, Enter takes it: seen in Wine)
+	menu = tuple([(c, d1, d2) for (c, d1, d2, a) in user])
+	if menu != _diploSel[1] or not 0 <= _diploSel[0] < len(user):
+		_diploSel[:] = [len(user) - 1, menu]
+	for i, (comment, data1, data2, answer) in enumerate(user):
+		if i == _diploSel[0]:
+			answer = u'<color=255,230,153,255>' + answer + u'</color>'
 		text = u'<font=3>' + answer + u'</font>'
 		width = _textWidth(text, 3)
 		screen.setTextAt('DiploAnswer%d' % i, 'DiploAnswers', text, _FONT_LEFT, max(0, (CW - 16 - width) / 2), i * step, -0.1, FontTypes.GAME_FONT,
@@ -3030,6 +3056,14 @@ def diploShow():
 			True, True, lx, split + 8, SW, bottom - split - 8)
 		_diploList(screen, 'DiploOurOffer', translator.getText('TXT_KEY_TRADE_YOU_OFFER', ()).upper(), oc4host.diplo_items(False, True),
 			False, True, rx, split + 8, SW, bottom - split - 8)
+		# (under each offer with something on it, once the player changed the table, a CLEAR TABLE
+		# button that takes it all off: seen in Wine, TXT_KEY_TRADE_CLEAR_TABLE, 117 x 26 at the
+		# offer's foot; none on an AI's offer, renegotiated or not, until an item is clicked)
+		if not current and oc4host.diplo_edited():
+			for name, x, items in (('DiploTheirClear', lx, _diplo.get('DiploTheirOffer')), ('DiploOurClear', rx, _diplo.get('DiploOurOffer'))):
+				if items:
+					screen.setButtonGFC(name, translator.getText('TXT_KEY_TRADE_CLEAR_TABLE', ()), '', x + (SW - 117) / 2, bottom - 34, 117, 26,
+						WidgetTypes.WIDGET_GENERAL, -1, -1, _cpe.ButtonStyles.BUTTON_STYLE_STANDARD)
 
 	for n, (offset, hoffset) in kept.items():
 		w = s.widgets.get(n)
@@ -3044,16 +3078,20 @@ def _diploRefresh():
 
 
 def _diploGold(theirs, itemType, text):
-	"""Gold into an offer: how much is asked first (most what its owner can give)."""
+	"""Gold into an offer: how much is asked first (most what its owner can give). As the original
+	(seen in Wine): headed "Gold" (TXT_KEY_TRADE_TITLE_GOLD), the question by whose gold it is
+	("How much gold per turn would you like from them?" for the leader's, "... to offer?" for ours),
+	the box at 0."""
 	perTurn = itemType == int(_cpe.TradeableItems.TRADE_GOLD_PER_TURN)
 	most = oc4host.diplo_max_gold(bool(theirs), perTurn)
 	if most <= 0:
 		return
+	translator = _cpe.CyTranslator()
 	popup = CyPopup(-1, -1)
-	popup.setHeaderString(text)
-	# (the game's question: "How much gold would you like to offer?")
-	popup.setBodyString(_cpe.CyTranslator().getText('TXT_KEY_TRADE_GPT_TO_OFFER' if perTurn else 'TXT_KEY_TRADE_GOLD_TO_OFFER', ()))
-	popup.createSpinBox(0, u'', most, 1, most, 0)
+	popup.setHeaderString(translator.getText('TXT_KEY_TRADE_TITLE_GOLD', ()))
+	question = ('TXT_KEY_TRADE_GPT_' if perTurn else 'TXT_KEY_TRADE_GOLD_') + ('FROM_THEM' if theirs else 'TO_OFFER')
+	popup.setBodyString(translator.getText(question, ()))
+	popup.createSpinBox(0, u'', 0, 1, most, 0)
 
 	def answered(answer):
 		amount = answer.getSpinnerWidgetValue(0)
@@ -3064,6 +3102,32 @@ def _diploGold(theirs, itemType, text):
 	popup._onAnswer = answered
 	popup.launch(True, 0)
 
+
+
+def _diploCancelAsk(theirs, row):
+	"""A current deal's item clicked: the original asks first, in a popup at the top right, "Are you
+	sure you wish to cancel this deal?" with "Absolutely, cancel this deal." and "Hrmmm, perhaps we
+	should rethink this?" (seen in Wine; the game's TXT_KEY_POPUP_CANCEL_DEAL texts). Yes cancels it
+	and the leader greets again, as at a new talk, with its menu (seen in Wine); a deal that can't be
+	cancelled yet says why."""
+	translator = _cpe.CyTranslator()
+	popup = CyPopup(-1, -1)
+	popup.setBodyString(translator.getText('TXT_KEY_POPUP_CANCEL_DEAL', ()))
+	popup.addButton(translator.getText('TXT_KEY_POPUP_CANCEL_DEAL_YES', ()))
+	popup.addButton(translator.getText('TXT_KEY_POPUP_CANCEL_DEAL_NO', ()))
+
+	def answered(answer):
+		if answer.getButtonClicked() != 0 or oc4host.diplo_who() < 0:
+			return
+		done, reason = oc4host.diplo_cancel(theirs, row)
+		if done:
+			import CvDiplomacyInterface
+			CvDiplomacyInterface.beginDiplomacy((oc4host.diplo_comment(), 0))
+		elif reason:
+			CyInterface().addImmediateMessage(reason, '')
+
+	popup._onAnswer = answered
+	popup.launch(False, 0)
 
 
 def _diploTrade():
@@ -3104,6 +3168,12 @@ def diploClick(name, part, right=False, shift=False):
 		if int(name[11:]) < len(answers):
 			_diploAnswer(answers[int(name[11:])])
 		return
+	if name in ('DiploTheirClear', 'DiploOurClear'):
+		theirs = name == 'DiploTheirClear'
+		for entry in list(_diplo.get('DiploTheirOffer' if theirs else 'DiploOurOffer', [])):
+			oc4host.diplo_toggle(theirs, True, entry[3], entry[4], 0)
+		_diploRefresh()
+		return
 	rows = _diplo.get(name)
 	row = int(part) >> 8
 	if not rows or not 0 <= row < len(rows):
@@ -3119,15 +3189,10 @@ def diploClick(name, part, right=False, shift=False):
 	kind, theirs, offered, itemType, data, heading, denied, text = rows[row]
 	if heading or (denied and not offered):
 		return
-	# (the current deals shown: a click on one of their items cancels its deal, as it may)
+	# (the current deals shown: a click on an item of one asks whether to cancel its deal)
 	if offered and oc4host.diplo_trading()[2]:
-		done, reason = oc4host.diplo_cancel(itemType, data)
-		if done:
-			import CvDiplomacyInterface
-			CvDiplomacyInterface.dealCanceled()
-		elif reason:
-			CyInterface().addImmediateMessage(reason, '')
-		_diploRefresh()
+		if oc4host.diplo_deal_row(bool(theirs), row):
+			_diploCancelAsk(bool(theirs), row)
 		return
 	_diploTrade()
 	if not offered and itemType in (int(_cpe.TradeableItems.TRADE_GOLD), int(_cpe.TradeableItems.TRADE_GOLD_PER_TURN)):
@@ -3137,49 +3202,45 @@ def diploClick(name, part, right=False, shift=False):
 	_diploRefresh()
 
 
-# (Esc goes back a step first: "Never mind" from the trade table, the deals or "something else" to the
-# greeting; "Something else" from its own questions (their research, their attitude, a target) to it.
-# A first contact has only war or peace to say: Esc is the peace, the greeting returned)
-_DIPLO_ESCAPE = ('NEVERMIND', 'EXIT', 'REJECT', 'REJECT_DEMAND', 'REJECT_OFFER', 'REFUSE_HELP', 'NO_CONVERT', 'NO_JOIN_WAR',
-	'NO_MAKE_PEACE_WITH', 'NO_RENEGOTIATE', 'NO_REVOLUTION', 'NO_STOP_TRADING', 'PEACE')
-_DIPLO_SOMETHING_ELSE_MENUS = ('AI_DIPLOCOMMENT_RESEARCH', 'AI_DIPLOCOMMENT_TARGET', 'AI_DIPLOCOMMENT_ATTITUDE',
-	'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_FURIOUS', 'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_ANNOYED', 'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_CAUTIOUS',
-	'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_PLEASED', 'AI_DIPLOCOMMENT_ATTITUDE_PLAYER_FRIENDLY')
-_DIPLO_ENTER = ('ACCEPT', 'ACCEPT_DEMAND', 'ACCEPT_OFFER', 'GIVE_HELP', 'PEACE', 'COMPLETE_DEAL')
-
-
-def _diploPick(kinds):
-	gc = _cpe.CyGlobalContext()
+def _diploPick(index):
 	answers = _diplo.get('answers', [])
-	for kind in kinds:
-		comment = gc.getInfoTypeForString('USER_DIPLOCOMMENT_' + kind)
-		for entry in answers:
-			if entry[0] == comment:
-				_diploAnswer(entry)
-				return
+	if 0 <= index < len(answers):
+		_diploAnswer(answers[index])
 
 
 def diploEscape():
-	"""Esc in a talk: back to the menu it came from, else its way out, or a no (never war); the talk
-	keeps the key either way."""
-	gc = _cpe.CyGlobalContext()
-	comment = oc4host.diplo_comment()
-	if comment >= 0 and gc.getDiplomacyInfo(comment).getType() in _DIPLO_SOMETHING_ELSE_MENUS:
-		_diploPick(('SOMETHING_ELSE', 'EXIT'))
-		return True
-	_diploPick(_DIPLO_ESCAPE)
+	"""Esc in a talk: its last answer, the way out (Farewell; at a first contact the peace; an
+	offer's or a demand's no), from every menu and sub-menu, the trade table too: seen in Wine,
+	where Esc in the trade table or in "What do you think of..." closed the talk. Never war; the
+	talk keeps the key either way."""
+	answers = _diplo.get('answers', [])
+	if answers and answers[-1][0] != _cpe.CyGlobalContext().getInfoTypeForString('USER_DIPLOCOMMENT_WAR'):
+		_diploPick(len(answers) - 1)
 	return True
 
 
+def diploHover(index):
+	"""The host: the mouse rests on answer `index` (-1: on none). It is the highlighted one then, and
+	stays so when the mouse leaves (seen in Wine)."""
+	if 0 <= index < len(_diplo.get('answers', [])) and index != _diploSel[0]:
+		_diploSel[0] = index
+		diploShow()
+
+
 def diploKey(key):
-	"""The host: a key (a Windows key code) while a talk is up, which keeps it. Enter: a yes; 1 to 9
-	the answer so numbered."""
-	if key == 0x0D:
-		_diploPick(_DIPLO_ENTER)
+	"""The host: a key (a Windows key code) while a talk is up, which keeps it. Up and Down move the
+	highlight (no wrap), Enter takes the highlighted answer (seen in Wine); 1 to 9 the answer so
+	numbered."""
+	answers = _diplo.get('answers', [])
+	if key in (0x26, 0x28):
+		index = max(0, min(len(answers) - 1, _diploSel[0] + (1 if key == 0x28 else -1)))
+		if index != _diploSel[0]:
+			_diploSel[0] = index
+			diploShow()
+	elif key == 0x0D:
+		_diploPick(_diploSel[0])
 	elif 0x31 <= key <= 0x39:
-		answers = _diplo.get('answers', [])
-		if key - 0x31 < len(answers):
-			_diploAnswer(answers[key - 0x31])
+		_diploPick(key - 0x31)
 	elif key == 0x1B:
 		diploEscape()
 	return True
