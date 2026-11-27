@@ -599,6 +599,59 @@ namespace oc4::host
 	// A farm as CIV4PlotLSystem.xml lays it out: its farmhouse (Leaf_Farm_4x4's goal) and the
 	// crops grown out from its 4x4 node; rice and wheat only the buildings, in a corner. -1: none
 	// (not a farm, or nothing of it in the file: the improvement's own model is drawn).
+	// Where rivers run by a plot (bits as in plotLayout's key).
+	static uint8_t riversBy(const CvPlot& plot)
+	{
+		CvMap& map = GC.getMap();
+		const int x = plot.getX(), y = plot.getY();
+		const auto north = [&](int dx, int dy) { const CvPlot* p = map.plot(x + dx, y + dy); return p && p->isNOfRiver(); };
+		const auto west = [&](int dx, int dy) { const CvPlot* p = map.plot(x + dx, y + dy); return p && p->isWOfRiver(); };
+		// (an edge's river: on this plot's south edge it is north of the river; on its west edge
+		// the plot to the west is west of it)
+		const bool s = north(0, 0), e = west(0, 0), n = north(0, 1), w = west(-1, 0);
+		uint8_t bits = uint8_t(s | e << 1 | n << 2 | w << 3);
+		// (a corner's: a river on an edge of a neighbour that starts at the corner)
+		if (!s && !e && (north(1, 0) || west(0, -1)))
+			bits |= 1 << 4;
+		if (!n && !e && (north(1, 1) || west(0, 1)))
+			bits |= 1 << 5;
+		if (!n && !w && (north(-1, 1) || west(-1, 1)))
+			bits |= 1 << 6;
+		if (!s && !w && (north(-1, 0) || west(-1, -1)))
+			bits |= 1 << 7;
+		return bits;
+	}
+
+	// How far a river's bed reaches into a plot from the edge it runs along, in plots (fitted by
+	// eye to Wine's gaps, not measured exactly: the crops beside a river stop short of its sand,
+	// testgames/shots/wine-farmriver/).
+	constexpr float kRiverBed = 0.2f;
+
+	// Whether a leaf of crops (GLeaf_WxH at x, y in the plot's 12x12 cells, turned by degrees,
+	// then the whole plot's pieces by twist, in radians) reaches a river's bed by the plot.
+	static bool leafOnRiver(const std::string& node, float x, float y, float degrees, float twist, uint8_t rivers)
+	{
+		if (!rivers)
+			return false;
+		int w = 0, h = 0;
+		std::sscanf(node.c_str() + 6, "%dx%d", &w, &h);
+		const float a = degrees * std::numbers::pi_v<float> / 180, ca = std::cos(a), sa = std::sin(a);
+		const float ct = std::cos(twist), st = std::sin(twist);
+		const float edge = 0.5f - kRiverBed;
+		for (const auto& [cx, cy] : { std::pair{ -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } })
+		{
+			const float lx = x + (cx * w * 0.5f) * ca - (cy * h * 0.5f) * sa, ly = y + (cx * w * 0.5f) * sa + (cy * h * 0.5f) * ca;
+			const float px = (lx * ct - ly * st) / 12, py = (lx * st + ly * ct) / 12;
+			if (((rivers & 1) && py < -edge) || ((rivers & 2) && px > edge) || ((rivers & 4) && py > edge) || ((rivers & 8) && px < -edge))
+				return true;
+			const auto closeTo = [&](float qx, float qy) { return std::hypot(px - qx, py - qy) < kRiverBed; };
+			if (((rivers & 16) && closeTo(0.5f, -0.5f)) || ((rivers & 32) && closeTo(0.5f, 0.5f)) || ((rivers & 64) && closeTo(-0.5f, 0.5f)) ||
+				((rivers & 128) && closeTo(-0.5f, -0.5f)))
+				return true;
+		}
+		return false;
+	}
+
 	int MapCapture::plotLayout(const CvPlot& plot, int bonus, int shownImprovement, bool worked, int shownOwner)
 	{
 		// The improvement the player sees there (CvPlot::getVisibleImprovementState), as the
@@ -615,8 +668,11 @@ namespace oc4::host
 		const int artStyle = owner != NO_PLAYER ? int(player(owner).getArtStyleType()) : -1;
 		const bool irrigated = plot.isIrrigationAvailable();
 		const uint32_t variant = (uint32_t(plot.getX()) * 73856093u) ^ (uint32_t(plot.getY()) * 19349663u);
+		// Where a river runs by the plot: along its edges (bits 0-3: south, east, north, west)
+		// and from its corners only (bits 4-7: south-east, north-east, north-west, south-west).
+		const uint8_t rivers = riversBy(plot);
 		const uint64_t key = uint64_t(uint8_t(era)) | uint64_t(uint16_t(bonus + 1)) << 8 | uint64_t(worked) << 24 | uint64_t(irrigated) << 25 |
-			uint64_t(variant % 64) << 26 | uint64_t(uint16_t(improvement)) << 32 | uint64_t(uint8_t(artStyle + 1)) << 48;
+			uint64_t(variant % 64) << 26 | uint64_t(uint16_t(improvement)) << 32 | uint64_t(uint8_t(artStyle + 1)) << 48 | uint64_t(rivers) << 56;
 		if (const auto it = m_plotLayouts.find(key); it != m_plotLayouts.end())
 			return it->second;
 
@@ -671,6 +727,12 @@ namespace oc4::host
 			};
 			std::vector<Leaf> leaves;
 			std::vector<Slot> slots;
+			// (the crops' leaves are water tested, CIV4PlotLSystem.xml: RegionTest 0, unlike
+			// 0NW; in Wine no crop lies on a river's bed beside the plot)
+			const auto onRiver = [&](const Leaf& l) {
+				const float twist = std::strtof(goal->scalar("fTwist").c_str(), nullptr);
+				return leafOnRiver(l.node, l.x, l.y, l.degrees, twist, rivers);
+			};
 			// Down from a node to its leaves of crops (the buildings' leaves, BLeaf_*, have no
 			// farm in them; the farm's own production is the goal's alone).
 			const auto expand = [&](auto&& self, const std::string& node, float x, float y, float degrees, int slot, int depth) -> void {
@@ -724,7 +786,7 @@ namespace oc4::host
 					std::tie(ox, oy, odeg) = std::tuple{ slots[size_t(chosen)].x, slots[size_t(chosen)].y, slots[size_t(chosen)].degrees };
 				else
 					std::tie(ox, oy) = std::pair{ -2.0f, -2.0f };
-				std::erase_if(leaves, [&](const Leaf& l) { return l.slot == chosen && chosen >= 0; });
+				std::erase_if(leaves, [&](const Leaf& l) { return (l.slot == chosen && chosen >= 0) || onRiver(l); });
 				// The farm's own crops, then the leaves nearest it (a little at random) until the
 				// crops cover the ground the farmhouse asks for.
 				if (production("Node_4x4", [&](const LProduction& p) {
@@ -735,6 +797,7 @@ namespace oc4::host
 					expand(expand, "GNode_4x4", ox, oy, odeg, -2, 0);
 					crops.assign(leaves.begin() + std::ptrdiff_t(before), leaves.end());
 					leaves.resize(before);
+					std::erase_if(crops, onRiver);
 					std::vector<std::pair<float, const Leaf*>> nearest;
 					for (const Leaf& l : leaves)
 						nearest.push_back({ std::hypot(l.x - ox, l.y - oy) + float(next() % 1000) / 1000 * 2.5f, &l });
