@@ -183,7 +183,7 @@ Ctrl+Shift+F shows the frame rate and the longest frame of the last half second 
 from the start).
 
 W A S D can pan the map as the arrows do, an option that is off by default: "Pan the map with
-W A S D" on the options' Game tab turns it on and off, and while it is on Ctrl+Shift+W turns it off
+W A S D" on the options' OpenCiv4 tab turns it on and off, and while it is on Ctrl+Shift+W turns it off
 too (a note at the top says so; with the option off, Ctrl+Shift+W is the game's own); it is kept in profile.ini as `wasdPan`, and `--wasd-pan` turns it on for one run. Only
 the letters pressed alone pan, so while it is on their own hotkeys (S Sentry, A Automate, W the
 next unit, D destroy) need the unit's buttons; with Shift, Ctrl or Alt they are still the game's
@@ -197,16 +197,33 @@ only when a unit moved in it (and "Wait at End of Turn" is off); with this on, a
 going until something needs you. A popup, a talk, a screen or the city screen pauses it, and a
 key or click while it waits keeps that turn; hot seat and by-email games never use it. Ctrl+Shift+E
 turns it on and off (with a note at the top), and so does "End idle turns automatically" on the
-options' Game tab; it is kept in profile.ini as `autoEndTurn`, and `--auto-end-turn` turns it on
+options' OpenCiv4 tab; it is kept in profile.ini as `autoEndTurn`, and `--auto-end-turn` turns it on
 for one run. `OC4_PLAY_LOG=1` prints "idle, ended by itself" for each such turn. Decisions: it is
 in the engine (`apps/oc4core/AutoEndTurn.h`, called from the play loop), not the game core, so the
 game's rules, AI and saves are untouched; it sends the same end-turn control as Enter. Tested by
 `tests/auto_end_turn_test.cpp`.
 
 The mouse at the window's edge scrolls the map, as in the original; "Scroll the map at the screen
-edge" on the options' Game tab turns it off (on by default). It is kept in profile.ini as
+edge" on the options' OpenCiv4 tab turns it off (on by default). It is kept in profile.ini as
 `edgeScroll`, and `--no-edge-scroll` turns it off for one run (scripted runs with `--view-seconds`
 never edge scroll). The rule is `src/render/EdgeScroll.h`, tested by `tests/edge_scroll_test.cpp`.
+
+Your cities on the map open as in the original: a double click on the city or its name bar opens
+its screen, one click on the bar selects the city (what it builds in the bottom panel), and one click
+on its plot is any plot's (the units there). "Open a city with a single click" on the options'
+OpenCiv4 tab opens the screen with one click instead (off by default; `cityOneClick` in profile.ini).
+A double click is as forgiving as the original's: up to 500 ms between the presses (their own times,
+not a frame's), a few points apart, and its second click counts on what the first was on; a click on
+your own city (its plot, bar or a unit's figure in it) leaves the camera where it is, as the
+original's, so the city stays under the mouse. The rule is `src/render/DoubleClick.h`, tested by
+`tests/double_click_test.cpp`.
+
+The player options (Options → Game: Wait at End of Turn, Quick Combat, …) are kept in the player's
+profile, as the original keeps them in its own (`Profiles\<name>.pfl`): a choice is written at
+once to the profile's file (`Profiles/<name>.ini` beside profile.ini, `player.N=`), and every game, new or loaded, starts with the profile's, which
+the game core sends to the active player (a save's own options are overwritten, as in the original).
+OpenCiv4's own options (W A S D, idle turns, edge scrolling, one click on a city) are on a tab of their own, OpenCiv4,
+after the original's four. Tested by `tests/player_options_test.py`.
 
 The globe view's colour layers (Culture, Trade, Religion) are drawn on the globe itself.
 

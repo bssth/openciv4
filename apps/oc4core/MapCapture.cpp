@@ -18,6 +18,7 @@
 #include "CvPlayerAI.h"
 #include "CvPlot.h"
 #include "CvSelectionGroup.h"
+#include "CvTeamAI.h"
 #include "CvUnit.h"
 
 #include <windows.h>
@@ -1349,6 +1350,11 @@ namespace oc4::host
 					u.y = plot->getY();
 					u.owner = shown->getOwner();
 					u.shownOwner = shown->getVisualOwner(GC.getGame().getActiveTeam());
+					// (an enemy of the active team in its land, seen there: the red ring under it, unless
+					// the No Enemy Glow option is on)
+					if (active != NO_TEAM && v.visible && plot->getOwner() != NO_PLAYER && player(plot->getOwner()).getTeam() == active &&
+						CvTeamAI::getTeamNonInl(active).isAtWar(shown->getTeam()) && !gDLL->getGraphicOption(GRAPHICOPTION_NO_ENEMY_GLOW))
+						u.enemy = true;
 					u.air = shown->getDomainType() == DOMAIN_AIR;
 					u.direction = int(shown->getFacingDirection(false));
 					u.resting = Entities::resting(*shown);
@@ -1574,24 +1580,25 @@ namespace oc4::host
 		v.serial = popup.serial;
 		v.header = gameMarkup(popup.header.c_str());
 		v.okButton = popup.okButton;
-		v.centered = popup.style == "Window_NoTitleBar_Style";
+		v.menu = popup.style == "Window_NoTitleBar_Style";
 		itemOf.clear();
 		const ButtonPopupTypes type = popup.info ? popup.info->getButtonPopupType() : BUTTONPOPUP_TEXT;
+		// (Esc closes only the game's menu, seen in Wine (testgames/shots/wine-escpopup/): every other
+		// popup tried ignored it: a text popup with OK, a script popup with and without OK, the research
+		// and build questions (and the civic question, backlog #52). The menu's own "are you sure" was
+		// not seen and keeps Esc.)
+		v.escape = type == BUTTONPOPUP_MAIN_MENU || type == BUTTONPOPUP_CONFIRM_MENU;
 		for (size_t i = 0; i < popup.items.size(); ++i)
 		{
 			const Item& it = popup.items[i];
-			// In the research popup the buttons that are not a choice open the technology tree:
-			// not yet. (The production popup's examining the city opens its screen.)
-			const WidgetTypes w = it.widget.m_eWidgetType;
-			const bool choice = type != BUTTONPOPUP_CHOOSETECH || w == WIDGET_RESEARCH;
-			if (it.kind == Item::Kind::Button && !choice)
-				continue;
 			View::Item& out = v.items.emplace_back();
 			out.kind = static_cast<View::Item::Kind>(it.kind);
 			out.text = it.kind == Item::Kind::Edit ? gameText(it.text.c_str()) : gameMarkup(it.text.c_str()); // (the screens' markup but in an edit box)
 			out.icon = it.icon;
 			out.group = it.kind == Item::Kind::Radio ? int(it.control) * 1000 + it.group : it.group; // (a pulldown's group is not the radio buttons')
 			out.checked = it.checked;
+			out.width = float(it.width), out.height = float(it.height);
+			out.centred = (it.flags & DLL_FONT_CENTER_JUSTIFY) != 0;
 			itemOf.push_back(int(i));
 		}
 		return v;

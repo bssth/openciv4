@@ -34,6 +34,9 @@ namespace oc4::render
 		int hit(int x, int y) const;
 		// Whether the mouse is on something of the screens (a click there is theirs, not the map's).
 		bool solid(int x, int y) const;
+		// The same, the main interface left out: a screen of its own (the original's popups leave
+		// the main interface no clicks, the screens over it theirs).
+		bool solid(int x, int y, bool mainInterface) const;
 		// Whether the main interface's minimap is what the mouse is on (no button nor screen over it).
 		bool onMainMinimap(int x, int y) const;
 		void hover(int x, int y);
@@ -56,12 +59,16 @@ namespace oc4::render
 		std::pair<int, int> keyChoicePlace() const;
 		// A press and its release on the same item make a click.
 		void press(int x, int y, bool right);
+		// The item pressed and not let go yet (found again when the items are made again), -1 none.
+		int pressed() const { return m_pressed; }
 		std::optional<MapWindow::UiClick> release(int x, int y, bool shift, bool ctrl, bool alt);
 
-		void setHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown);
+		// framed: the help area has art of its own (the city screen's), in the theme's tooltip;
+		// else the main interface's see-through box (PANEL_STYLE_HUD_HELP).
+		void setHelp(const std::string& text, float x, float y, float width, bool expandRight, bool expandDown, bool framed = false, bool floating = false);
 		// The size of a widget's font (FontTypes) as the screens draw it.
 		float textSize(int font) const { return fontSize(font); }
-		// The plot's help where the screens show theirs, over the map without a box (the game's look).
+		// The plot's help where the screens show theirs, in the same box (the game's look).
 		void drawPlotHelp(Overlay& overlay, const std::wstring& text);
 		// minimap(x0, y0, x1, y1, screen) draws the map's minimap there (screen: a screen's own, the
 		// military advisor's); leaderhead(item) a leader's head
@@ -87,7 +94,14 @@ namespace oc4::render
 		Theme& m_theme;
 		std::map<std::string, Theme::Skin, std::less<>> m_namedSkins; // panels styled "@style|property": that skin of the theme
 		bool m_fontsRead = false;
-		Theme::Skin m_tooltip; // the theme's (the help's box)
+		Theme::Skin m_tooltip; // the theme's (the framed help's box)
+		Theme::Skin m_hudHelp; // the main interface's help box (PANEL_STYLE_HUD_HELP: see-through)
+		// A multi list's button (the unit's actions, the city's builds): the theme's MultiList_Item
+		// skins over its picture: its ring (HUDBorder), the glow under the mouse (added), its fill
+		// when pressed, darker when disabled, and the glow round a pulsing one.
+		Theme::Skin m_listBorder, m_listBorderGlow, m_listFill, m_listFillGlow, m_listDisable;
+		Theme::Skin m_listPress, m_pulseInside, m_pulseDeep, m_pulseLight, m_pulseHalo;
+		void drawListButton(Overlay& o, const Item& it, bool hot, bool pressed, double clock);
 		// The theme's pull down (GFC_Control_StandardComboBox_Style): its box and its button, plain
 		// and under the mouse; its open list's box, frame and chosen item.
 		std::array<Theme::Skin, 2> m_comboBox, m_comboButton;
@@ -96,6 +110,11 @@ namespace oc4::render
 		// across, and the grip, plain and under the mouse.
 		std::array<Theme::Skin, 2> m_shaft;
 		std::array<std::array<Theme::Skin, 2>, 2> m_grip;
+		// The theme's sliders (GFC_Control_StandardSlider_Style), up and down [0] and across [1]:
+		// the track, the track with its fill, plain and disabled, and the grip plain, under the
+		// mouse, pressed and disabled.
+		std::array<std::array<Theme::Skin, 2>, 2> m_sliderTrack, m_sliderFill;
+		std::array<std::array<Theme::Skin, 4>, 2> m_sliderGrip;
 		std::array<float, 5> m_sizes{ 10, 12, 14, 16, 22 }; // the markup's <font=0..4> (the theme's)
 		std::vector<Item> m_items;
 		int m_hover = -1, m_pressed = -1;
@@ -107,6 +126,9 @@ namespace oc4::render
 		bool m_pressedRight = false;
 		std::wstring m_help;
 		float m_helpX = 0, m_helpY = 0, m_helpWidth = 350;
-		bool m_helpRight = true, m_helpDown = false;
+		bool m_helpRight = true, m_helpDown = false, m_helpFramed = false;
+		bool m_helpFloating = false; // (the help area floats: the help goes beside the widget under the mouse)
+		// A help in the help area: its box, then its text.
+		void drawHelp(Overlay& o, const std::wstring& text);
 	};
 }

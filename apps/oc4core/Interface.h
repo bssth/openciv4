@@ -60,6 +60,9 @@ namespace oc4::host
 		void selectCity(CvCity* pNewValue, bool bTestProduction) override;
 		void addSelectedCity(CvCity* pNewValue, bool bToggle) override;
 		void clearSelectedCities() override;
+		// Next/previous city (Home, End, BUG's arrows by the minimap) with no city selected: the
+		// active player's city nearest the plot the camera looks at.
+		void selectLookAtCity(bool bAdd) override;
 		bool isCitySelected(CvCity* pCity) override;
 		CvCity* getHeadSelectedCity() override;
 		bool isCitySelection() override { return getHeadSelectedCity() != nullptr; }
@@ -70,6 +73,8 @@ namespace oc4::host
 		// Where the DLL asked the camera to go (lookAtSelectionPlot, lookAtCityOffset), for the
 		// window; -1 none.
 		int lookAtX = -1, lookAtY = -1;
+		// The plot the camera looks at now (the window's, each frame); -1 none.
+		int cameraX = -1, cameraY = -1;
 		// The same for a point between plots (lookAt with a point of the map: a battle's, half way
 		// from the attacker's plot to the defender's), in plots (10.5 the middle of the plot 10).
 		float lookAtPointX = -1, lookAtPointY = -1;
@@ -132,6 +137,8 @@ namespace oc4::host
 				Control control = Control::RadioButtons;
 				CvWidgetDataStruct widget{ -1, -1, false, WIDGET_GENERAL };
 				bool checked = false; // checkbox; the radio item chosen
+				int width = 0, height = 0; // a picture (popupAddDDS): the size it is asked at
+				unsigned int flags = 0;    // a button: its text's DLL_FONT_* (the game menu's are centred)
 			};
 			CvPopupInfo* info = nullptr; // owned (deleted through its virtual destructor, in the DLL)
 			int python = -1;             // a script's popup: its number there
@@ -239,6 +246,15 @@ namespace oc4::host
 		bool updateCursorType() override { return false; }
 		bool isFocusedWidget() override { return false; }
 		bool isFocused() override { return false; }
+		bool isDebugMenuCreated() const override { return false; } // (the options screen asks; there is no debug menu)
+		// The scores by the minimap (CONTROL_SCORES), shown as the player's profile has them.
+		std::atomic<bool> scores = true;
+		bool isScoresVisible() override { return scores; }
+		void toggleScoresVisible() override
+		{
+			scores = !scores;
+			setDirty(Score_DIRTY_BIT, true);
+		}
 		// A battle the active player's unit fights (or one it is attacked in) has the camera's focus:
 		// CvUnit::setCombatUnit tells it so, and only then the game core looks at the battle
 		// (CvInterface::lookAt with CAMERALOOKAT_BATTLE(_ZOOM_IN)) and lets go of it at the end
@@ -247,16 +263,23 @@ namespace oc4::host
 		void setCombatFocus(bool bNewValue) override;
 		// The active player's unit that attacked last (it had the focus: quick combat too), once.
 		std::optional<IDInfo> takeFocusAttacker() { return std::exchange(m_focusAttacker, std::nullopt); }
-		bool isScoresVisible() override { return false; }
 		// The tech splash (the scripts' CvTechSplashScreen, with the tech's quote): only with the
 		// game's screens up (Screens::start); without them the game core plays the short sound instead.
 		bool techSplash = false;
-		bool noTechSplash() override { return !techSplash; }
+		bool noTechSplash() override { return !techSplash || noTechSplashOption; }
+		// CivilizationIV.ini's NoTechSplash and NoEventMessages (the options' OpenCiv4 tab): no tech
+		// splash; the messages not shown on the screen (still in the turn log, their sound played).
+		bool noTechSplashOption = false, noEventMessages = false;
 		bool isInAdvancedStart() const override { return false; }
-		CvPlot* getLookAtPlot() override { return nullptr; }
+		CvPlot* getLookAtPlot() override;
 		CvPlot* getGotoPlot() override { return m_gotoPlot; }
 		// Where the right button held would send the selection (the game core's plot help then gives the odds of an attack there).
-		void setGotoPlot(CvPlot* plot) { m_gotoPlot = plot; }
+		// (the action buttons again: the main interface's recommend what to do there, CvUnit::isActionRecommended)
+		void setGotoPlot(CvPlot* plot)
+		{
+			if (std::exchange(m_gotoPlot, plot) != plot)
+				m_dirty[SelectionButtons_DIRTY_BIT] = true;
+		}
 
 		// The end of the player's turn as CvGame::updateTestEndTurn works it out with the
 		// interface: when no unit waits for orders, it raises the "press Enter" message or, after
@@ -340,27 +363,29 @@ namespace oc4::host
 		void showMessage(CvTalkingHeadMessage& msg) override;
 		void clearEventMessages() override;
 		// The messages on the screen now (the active player's, as the original shows them at the
-		// top for their length in seconds), oldest first, each with how much of it is left to
-		// fade (1 shown, towards 0 going). Any thread.
+		// top for their length in seconds, the newest six), newest first, each in its colour (the
+		// message's flash colour; white if it has none). Any thread.
 		struct ShownMessage
 		{
 			std::wstring text;
-			float alpha = 1;
+			NiColorA color{ 1, 1, 1, 1 };
 		};
 		std::vector<ShownMessage> shownMessages() const;
 		std::vector<uint32_t> minimapTerrainColors;
 
 	private:
-		void show(const std::wstring& text, int seconds);
+		void show(const std::wstring& text, int seconds, ColorTypes color = NO_COLOR);
 		bool m_exiting = false;
 		struct Shown
 		{
 			std::wstring text;
+			NiColorA color{ 1, 1, 1, 1 };
 			std::chrono::steady_clock::time_point until;
 			int count = 1; // (the same message again while it is up: one line, "(x3)")
 		};
 		mutable std::mutex m_shownMutex;
 		std::deque<Shown> m_shown;
+		static constexpr size_t kShownLines = 6; // (the original's box holds six)
 		mutable std::vector<unsigned char> m_minimapBase;
 		bool selected(const CvUnit* pUnit) const;
 
@@ -482,6 +507,8 @@ namespace oc4::host
 		// While one is on the game is updated once a battle slice, as its animation goes:
 		// true while it is not yet time for the next update (false: go, counted).
 		static bool battleWait();
+		// OpenCiv4's option Quick enemy moves (the main loop's): the others' walks in half the time.
+		static void setQuickShownMoves(bool on);
 
 	private:
 		const Interface& m_selection;

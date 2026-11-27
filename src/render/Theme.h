@@ -61,8 +61,9 @@ namespace oc4::render
 			Middle middle = Middle::Stretch;
 			bool sides = true;     // the edges are drawn
 			bool section[4]{ true, true, true, true }; // its left, top, right, bottom columns / rows drawn
-			Color fill{};          // Middle::Fill
+			Color fill{};          // Middle::Fill, or the sides with sidesFill
 			float fillAlpha = 0;
+			bool sidesFill = false; // the ring inside its margin filled with its FactorColor (GFC_BITMAPSKIN_SIDES_FILL: a window's border round its glass)
 		};
 		using Skin = std::vector<Layer>;
 		struct Panel
@@ -99,6 +100,10 @@ namespace oc4::render
 		bool loaded() const;
 		// The folder whose Resource it came from.
 		std::filesystem::path file() const;
+		// The folders the game keeps its fonts in (it ships Sylfaen, which macOS lacks): each
+		// layer's Resource/Civ4 and Resource/Fonts and Assets/res/Fonts, then the Windows/Fonts of
+		// the Wine prefix the game is installed in, if it is. (Known once load has been called.)
+		std::vector<std::filesystem::path> fontFolders() const;
 		// Problems met while reading (unknown syntax, missing pictures), once each.
 		const std::vector<std::string>& problems() const;
 
@@ -120,16 +125,25 @@ namespace oc4::render
 		};
 		const Progress* progress(std::string_view style);
 
+		// A colour of the theme's by its full name ("SF_CtrlTheme_Civ4_Control_Color_EndTurnDot_Red");
+		// the fallback when it has none.
+		Color colour(std::string_view name, Color fallback);
 		// The bitmap with the colour added, less half (the AddSigned combine): how the end of turn
 		// button's glass takes its red or green.
 		Bitmap addSigned(const Bitmap& bitmap, Color colour);
 		// The bitmap multiplied by the colour (the Modulate combine): a bar's fill in its colour.
 		Bitmap modulate(const Bitmap& bitmap, Color colour, float alpha = 1);
+		// The bitmap's brightness as the alpha of the colour (a glow drawn in black and white,
+		// laid over what is under it in a colour: the multi list's pulse).
+		Bitmap glow(const Bitmap& bitmap, Color colour);
 		// Font size 1..4 (the markup's <font=n>); the theme's, else the nearest it has.
 		Font font(int size, bool bold = false, bool italic = false) const;
 
 		// Draws a skin over the rectangle (each layer at its indent).
 		static void draw(Overlay& overlay, const Skin& skin, float x0, float y0, float x1, float y1, float alpha = 1);
+		// Whether the skin drawn over the rectangle draws anything at (x, y): not in a frame's
+		// empty middle (GFC_BITMAPSKIN_CENTER_EMPTY), as the city screen's around the map.
+		static bool covers(const Skin& skin, float x0, float y0, float x1, float y1, float x, float y);
 		// A bitmap stretched over the rectangle.
 		static void draw(Overlay& overlay, const Bitmap& bitmap, float x0, float y0, float x1, float y1, float alpha = 1);
 
