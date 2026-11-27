@@ -1038,10 +1038,11 @@ if _walls:
 					entry.attr("update")(py::make_tuple(screen, dt));
 			if (ui.anyDirty())
 				entry.attr("forceScreenRedraw")(py::make_tuple(m_mainId));
-			// Diplomacy: the next talk waiting, when nothing is up (the game's script says what the
+			// Diplomacy: the next talk waiting, when no popup is up (the game's script says what the
 			// leader says and what the player can answer), and its screen again when it changed.
+			// (before the popups still queued, which wait for it, as the original's: seen in Wine)
 			Diplomacy& diplomacy = m_utility.diplomacy();
-			if (diplomacy.next(ui.isPopupUp() || ui.isPopupQueued()))
+			if (diplomacy.next(ui.isPopupUp()))
 			{
 				py::list args;
 				args.append(diplomacy.comment());

@@ -34,7 +34,7 @@
 // "[x,y]" left clicks it, "%u", "%d", "%l", "%r", "%e", "%t" and "%b" type an arrow, Return, Tab or Backspace into the window ("^%l" with Ctrl held, as a game hotkey), "<x,y>" clicks that pixel of the window (a figure there: its unit), "#n" picks the n-th button of the popup up (OK if it has none), a
 // popup nothing answers gets its first, 'text' goes into its next edit box, "{Name}" or
 // "{Name/part}" clicks the interface's widget so named, "^{Name}" with Ctrl held, "?{Name}" rests
-// the mouse on it); with
+// the mouse on it); a '|' before one types it at once, while the others move too; with
 // --screenshot and --view-seconds that game is played offscreen. OC4_PLAY_LOG=1 prints the
 // popups as they come, the actions the keys run and the widgets clicked; OC4_UI_DUMP=<file>
 // writes the interface's widgets there when they change.
@@ -1207,10 +1207,13 @@ namespace
 			// (a scripted game answers what it does not expect with the popup's first button)
 			if (!script.empty() && script.front() != '#' && script.front() != '\'' && script.front() != '%' && ui.shownPopup() && Clock::now() - typed > std::chrono::milliseconds(1500))
 				script.insert(0, "#0");
-			if (const auto now = Clock::now(); player.isTurnActive() && !script.empty() && now - typed > std::chrono::milliseconds(400) &&
-				(script.front() == '#' || script.front() == '\'' || script.front() == '%' || !ui.shownPopup())) // (the rest waits for the popup's answer)
+			if (const auto now = Clock::now(); (player.isTurnActive() || (script.starts_with('|') && script.size() > 1)) && !script.empty() &&
+				now - typed > std::chrono::milliseconds(400) &&
+				(script.front() == '#' || script.front() == '\'' || script.front() == '%' || script.front() == '|' || !ui.shownPopup())) // (the rest waits for the popup's answer)
 			{
 				typed = now;
+				if (script.front() == '|')
+					script.erase(0, 1); // (typed at once, the others moving or not)
 				render::MapWindow::PlotClick click;
 				int button = -1;
 				if (script.front() == '%' && script.size() > 1)
@@ -1379,6 +1382,14 @@ namespace
 					std::fprintf(stderr, "[oc4core] world builder: %s\n", e.what());
 				}
 			}
+			// (while the others move, the map takes no clicks, as the original's: no city screen, no
+			// selection and no orders then, seen in Wine)
+			if (!player.isTurnActive() && !ui.worldBuilder() && !clicks.empty())
+			{
+				if (log)
+					std::printf("  %zu map click(s) while the others move: dropped\n", clicks.size());
+				clicks.clear();
+			}
 			for (auto click : clicks)
 			{
 				CvPlot* plot = GC.getMap().plot(click.x, click.y);
@@ -1467,6 +1478,14 @@ namespace
 				// others move)
 				else if (key.key == render::key::Escape)
 					screens.escape();
+				// (and the advisors' and the Civilopedia's keys still open them, as the original's: F1
+				// while the others move, seen in Wine; the map's and the units' keys do nothing)
+				else if (const int a = hotkeyAction(key, gameKey(key.key), true); a >= 0)
+				{
+					if (log)
+						std::printf("  key %u: screen action %d while the others move\n", key.key, a);
+					act(a, key.shift, key.ctrl, key.alt);
+				}
 				changed = true;
 			}
 			if (const auto a = window.takeActionClick(); a && size_t(*a) < actionIds.size())
